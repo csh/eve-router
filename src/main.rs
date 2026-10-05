@@ -5,6 +5,7 @@ mod route;
 mod sde;
 mod sde_update;
 mod ships;
+mod sources;
 mod tui;
 mod universe;
 mod wormhole;

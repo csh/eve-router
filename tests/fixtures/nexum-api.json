@@ -1,0 +1,39 @@
+{
+  "id": "00000000-0000-4000-8000-000000000001",
+  "name": "Test Map",
+  "isCorpMap": false,
+  "isAllianceMap": true,
+  "locked": false,
+  "lazyRemoveWormholes": true,
+  "collapseGraceHours": 0.25,
+  "createdAt": "2026-10-01T00:00:00.000Z",
+  "updatedAt": "2026-10-05T11:55:00.000Z",
+  "routes": [],
+  "systems": [
+    { "id": "s-jita", "eveSystemId": 30000142, "name": "Jita", "alias": null, "systemClass": "HS", "x": 0, "y": 0 },
+    { "id": "s-perimeter", "eveSystemId": 30000144, "name": "Perimeter", "alias": null, "systemClass": "HS", "x": 0, "y": 0 },
+    { "id": "s-amarr", "eveSystemId": 30002187, "name": "Amarr", "alias": null, "systemClass": "HS", "x": 0, "y": 0 },
+    { "id": "s-rens", "eveSystemId": 30002510, "name": "Rens", "alias": null, "systemClass": "HS", "x": 0, "y": 0 },
+    { "id": "s-dodixie", "eveSystemId": 30002659, "name": "Dodixie", "alias": null, "systemClass": "HS", "x": 0, "y": 0 },
+    { "id": "s-hek", "eveSystemId": 30002053, "name": "Hek", "alias": null, "systemClass": "HS", "x": 0, "y": 0 },
+    { "id": "s-thera", "eveSystemId": 31000005, "name": "Thera", "alias": null, "systemClass": "Thera", "x": 0, "y": 0 },
+    { "id": "s-j134702", "eveSystemId": 31002230, "name": "J134702", "alias": "Home", "systemClass": "C5", "x": 0, "y": 0 },
+    { "id": "s-placeholder", "eveSystemId": null, "name": "Custom node", "alias": null, "systemClass": null, "x": 0, "y": 0 },
+    { "id": "s-unknown", "eveSystemId": 39999999, "name": "Not in the SDE", "alias": null, "systemClass": null, "x": 0, "y": 0 }
+  ],
+  "connections": [
+    { "id": "c-typed", "sourceId": "s-jita", "targetId": "s-j134702", "connectionType": "standard", "size": "medium", "type": "B274", "massStatus": "stable", "massUsed": 0, "timeStatus": "lessThan24h", "lifetimeExpiresAt": null, "eolAt": null, "createdAt": "2026-10-05T02:00:00.000Z", "broken": false, "sourceHandle": null, "targetHandle": null, "sourceSignatureId": null, "targetSignatureId": null, "flagIcon": null, "flagNote": null },
+    { "id": "c-k162", "sourceId": "s-j134702", "targetId": "s-amarr", "connectionType": "standard", "size": "medium", "type": "K162", "massStatus": "destabilized", "massUsed": 0, "timeStatus": "lessThan4h", "lifetimeExpiresAt": null, "eolAt": null, "createdAt": "2026-10-05T10:00:00.000Z", "broken": false, "sourceHandle": null, "targetHandle": null, "sourceSignatureId": "7a1c712c-e41a-405b-8bab-629f84d04aac", "targetSignatureId": null, "flagIcon": null, "flagNote": null },
+    { "id": "c-critical", "sourceId": "s-rens", "targetId": "s-j134702", "connectionType": "standard", "size": "small", "type": null, "massStatus": "critical", "massUsed": 0, "timeStatus": null, "lifetimeExpiresAt": "2026-10-05T20:30:00.000Z", "eolAt": null, "createdAt": "2026-10-05T08:00:00.000Z", "broken": false },
+    { "id": "c-eol", "sourceId": "s-dodixie", "targetId": "s-thera", "connectionType": "standard", "size": "xl", "type": null, "massStatus": null, "massUsed": 0, "timeStatus": null, "lifetimeExpiresAt": null, "eolAt": "2026-10-05T11:00:00.000Z", "createdAt": "2026-10-04T20:00:00.000Z", "broken": false },
+    { "id": "c-badtime", "sourceId": "s-perimeter", "targetId": "s-thera", "connectionType": "standard", "size": "large", "type": null, "massStatus": null, "massUsed": 0, "timeStatus": null, "lifetimeExpiresAt": "yesterday", "eolAt": null, "createdAt": "2026-10-05T09:00:00.000Z", "broken": false },
+    { "id": "c-broken", "sourceId": "s-hek", "targetId": "s-j134702", "connectionType": "standard", "size": "large", "type": null, "massStatus": null, "massUsed": 0, "timeStatus": null, "lifetimeExpiresAt": null, "eolAt": null, "createdAt": "2026-10-05T09:00:00.000Z", "broken": true },
+    { "id": "c-expired", "sourceId": "s-hek", "targetId": "s-thera", "connectionType": "standard", "size": "large", "type": null, "massStatus": null, "massUsed": 0, "timeStatus": "expired", "lifetimeExpiresAt": null, "eolAt": null, "createdAt": "2026-10-04T09:00:00.000Z", "broken": false },
+    { "id": "c-past", "sourceId": "s-jita", "targetId": "s-thera", "connectionType": "standard", "size": "large", "type": null, "massStatus": null, "massUsed": 0, "timeStatus": "lessThan1h", "lifetimeExpiresAt": "2026-10-05T11:59:00.000Z", "eolAt": null, "createdAt": "2026-10-04T12:00:00.000Z", "broken": false },
+    { "id": "c-placeholder", "sourceId": "s-jita", "targetId": "s-placeholder", "connectionType": "standard", "size": "large", "type": null, "massStatus": null, "massUsed": 0, "timeStatus": null, "lifetimeExpiresAt": null, "eolAt": null, "createdAt": "2026-10-05T09:00:00.000Z", "broken": false },
+    { "id": "c-unknown", "sourceId": "s-amarr", "targetId": "s-unknown", "connectionType": "standard", "size": "large", "type": null, "massStatus": null, "massUsed": 0, "timeStatus": null, "lifetimeExpiresAt": null, "eolAt": null, "createdAt": "2026-10-05T09:00:00.000Z", "broken": false },
+    { "id": "c-jumpgate", "sourceId": "s-perimeter", "targetId": "s-amarr", "connectionType": "jumpgate", "size": "large", "type": null, "massStatus": null, "massUsed": 0, "timeStatus": null, "lifetimeExpiresAt": null, "eolAt": null, "createdAt": "2026-09-27T10:30:20.938Z", "broken": false },
+    { "id": "c-gate", "sourceId": "s-jita", "targetId": "s-perimeter", "connectionType": "gate", "size": "large", "type": null, "massStatus": null, "massUsed": 0, "timeStatus": null, "lifetimeExpiresAt": null, "eolAt": null, "createdAt": "2026-09-27T10:30:20.938Z", "broken": false },
+    { "id": "c-cyno", "sourceId": "s-jita", "targetId": "s-hek", "connectionType": "cyno", "size": "large", "type": null, "massStatus": null, "massUsed": 0, "timeStatus": null, "lifetimeExpiresAt": null, "eolAt": null, "createdAt": "2026-09-27T10:30:20.938Z", "broken": false }
+  ]
+}
