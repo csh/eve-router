@@ -278,7 +278,7 @@ mod tests {
         let text = std::fs::read_to_string("tests/fixtures/nexum.json").unwrap();
         let map = nexum::parse_map(&text).unwrap();
         let types = wormhole_types::load(Path::new("sde")).unwrap();
-        let (data, _) = nexum::convert(&map, |id| uni.by_id.contains_key(&id), &types, FIXTURE_TIME);
+        let (data, _) = nexum::convert(&map, &Default::default(), |id| uni.by_id.contains_key(&id), &types, FIXTURE_TIME);
         uni.add_wormholes(&wormhole::merge(&[data], FIXTURE_TIME));
         uni
     }

@@ -11,6 +11,8 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::sync::Mutex;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
@@ -29,9 +31,12 @@ pub struct NexumSystem {
     pub id: String,
     /// `None` for a placeholder: a custom node with no EVE system.
     pub eve_system_id: Option<u32>,
+    /// The system name, for the `whLeadsTo` match of a signature.
+    #[serde(default)]
+    pub name: Option<String>,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct NexumConnection {
     pub source_id: String,
@@ -47,7 +52,30 @@ pub struct NexumConnection {
     pub created_at: Option<String>,
     #[serde(default)]
     pub broken: bool,
+    /// The row ID of the signature in the source system, when a scout linked it.
+    pub source_signature_id: Option<String>,
+    pub target_signature_id: Option<String>,
 }
+
+/// One signature of a system, from `GET /api/v1/maps/:mapId/systems/:systemId/signatures`.
+#[derive(Deserialize, Clone, Debug)]
+#[serde(rename_all = "camelCase")]
+pub struct NexumSig {
+    /// The row ID. A connection links a signature by this ID.
+    pub id: String,
+    /// For example "ABC-123".
+    pub sig_id: Option<String>,
+    /// For example "wormhole" or "data".
+    pub sig_type: Option<String>,
+    /// Free text from the scout: a system name, a class such as "NS", or "Drifter".
+    pub wh_leads_to: Option<String>,
+}
+
+/// The signatures of each system, by the map-local system ID.
+pub type SystemSigs = HashMap<String, Vec<NexumSig>>;
+
+/// The number of signature requests that run at the same time.
+const SIG_WORKERS: usize = 8;
 
 pub fn parse_map(text: &str) -> Result<NexumMap, String> {
     serde_json::from_str(text).map_err(|e| format!("Nexum map: {e}"))
@@ -82,6 +110,55 @@ pub fn fetch_map(cfg: &NexumConfig, timeout: Duration) -> Result<String, FetchEr
         return Err(FetchError::Offline("the Nexum settings are not complete".into()));
     };
     sources::get(&url, Some(&key.0), timeout)
+}
+
+/// The map-local IDs of the systems at the ends of the wormhole connections, sorted.
+/// A placeholder has no EVE system, so it has no signatures to fetch.
+pub fn sig_systems(map: &NexumMap) -> Vec<String> {
+    let real: HashSet<&str> = map.systems.iter().filter(|s| s.eve_system_id.is_some()).map(|s| s.id.as_str()).collect();
+    let mut ids: Vec<String> = map
+        .connections
+        .iter()
+        .filter(|c| c.connection_type == "standard" && !c.broken)
+        .flat_map(|c| [c.source_id.as_str(), c.target_id.as_str()])
+        .filter(|id| real.contains(id))
+        .map(str::to_string)
+        .collect();
+    ids.sort();
+    ids.dedup();
+    ids
+}
+
+/// GET the signatures of each system in `ids`, with `SIG_WORKERS` requests at a time.
+/// Return the signatures, and the number of systems with a failed request.
+pub fn fetch_sigs(cfg: &NexumConfig, ids: &[String], timeout: Duration) -> (SystemSigs, usize) {
+    let (Some(map), Some(key)) = (map_url(cfg), cfg.key.as_ref()) else {
+        return (SystemSigs::new(), ids.len());
+    };
+    let next = AtomicUsize::new(0);
+    let results = Mutex::new(Vec::with_capacity(ids.len()));
+    std::thread::scope(|scope| {
+        for _ in 0..SIG_WORKERS.min(ids.len()) {
+            scope.spawn(|| {
+                while let Some(id) = ids.get(next.fetch_add(1, Ordering::Relaxed)) {
+                    let url = format!("{map}/systems/{id}/signatures");
+                    let sigs = sources::get(&url, Some(&key.0), timeout).ok().and_then(|t| serde_json::from_str::<Vec<NexumSig>>(&t).ok());
+                    results.lock().unwrap().push((id.clone(), sigs));
+                }
+            });
+        }
+    });
+    let mut out = SystemSigs::new();
+    let mut failed = 0;
+    for (id, sigs) in results.into_inner().unwrap() {
+        match sigs {
+            Some(sigs) => {
+                out.insert(id, sigs);
+            }
+            None => failed += 1,
+        }
+    }
+    (out, failed)
 }
 
 /// GET the map list, for the settings page. It needs the URL and the key, but no map ID.
@@ -174,10 +251,35 @@ fn expiry(c: &NexumConnection, types: &WormholeTypes, fetched_at: u64, report: &
     earlier(base, status)
 }
 
+/// The signature of a connection in the system `from`. A linked signature row comes first.
+/// Else, the one wormhole signature in `from` whose `whLeadsTo` is the name of `to`.
+/// `single` is false when more connections join the same two systems: one name match
+/// cannot then tell which connection the signature belongs to.
+fn end_sig(link: Option<&str>, from: &str, to: Option<&str>, sigs: &SystemSigs, single: bool) -> Option<String> {
+    let list = sigs.get(from)?;
+    if let Some(sig) = link.and_then(|link| list.iter().find(|s| s.id == link)) {
+        return sig.sig_id.clone();
+    }
+    let to = to.filter(|_| single)?.trim();
+    let mut found = list.iter().filter(|s| {
+        s.sig_type.as_deref() == Some("wormhole") && s.wh_leads_to.as_deref().is_some_and(|w| w.trim().eq_ignore_ascii_case(to))
+    });
+    let first = found.next()?;
+    if found.next().is_some() { None } else { first.sig_id.clone() }
+}
+
 /// Convert a Nexum map. `known` says if an EVE system ID is in the SDE.
+/// `sigs` gives the signatures of each system. A map file has none.
 /// The converter never reads or changes the graph.
-pub fn convert(map: &NexumMap, known: impl Fn(u32) -> bool, types: &WormholeTypes, fetched_at: u64) -> (SourceData, NexumReport) {
+pub fn convert(map: &NexumMap, sigs: &SystemSigs, known: impl Fn(u32) -> bool, types: &WormholeTypes, fetched_at: u64) -> (SourceData, NexumReport) {
     let mut report = NexumReport::default();
+    let names: HashMap<&str, &str> = map.systems.iter().filter_map(|s| Some((s.id.as_str(), s.name.as_deref()?))).collect();
+    // The number of wormhole connections between each two systems.
+    let mut pair_count: HashMap<(&str, &str), usize> = HashMap::new();
+    for c in map.connections.iter().filter(|c| c.connection_type == "standard" && !c.broken) {
+        let (x, y) = (c.source_id.as_str(), c.target_id.as_str());
+        *pair_count.entry((x.min(y), x.max(y))).or_default() += 1;
+    }
     let mut placeholders: HashSet<&str> = HashSet::new();
     let mut ids: HashMap<&str, u32> = HashMap::new();
     for s in &map.systems {
@@ -220,6 +322,11 @@ pub fn convert(map: &NexumMap, known: impl Fn(u32) -> bool, types: &WormholeType
             Some(t) => (Some(Size::from_jump_kg(t.max_jump_kg)), Some(t.max_jump_kg)),
             None => (c.size.as_deref().and_then(parse_size), None),
         };
+        let (x, y) = (c.source_id.as_str(), c.target_id.as_str());
+        let single = pair_count.get(&(x.min(y), x.max(y))) == Some(&1);
+        let source_sig = end_sig(c.source_signature_id.as_deref(), x, names.get(y).copied(), sigs, single);
+        let target_sig = end_sig(c.target_signature_id.as_deref(), y, names.get(x).copied(), sigs, single);
+        let (sig_a, sig_b) = if a <= b { (source_sig, target_sig) } else { (target_sig, source_sig) };
         holes.push(Wormhole {
             a: a.min(b),
             b: a.max(b),
@@ -228,8 +335,8 @@ pub fn convert(map: &NexumMap, known: impl Fn(u32) -> bool, types: &WormholeType
             mass: c.mass_status.as_deref().and_then(parse_mass),
             expiry,
             wh_type: c.wh_type.clone(),
-            sig_a: None,
-            sig_b: None,
+            sig_a,
+            sig_b,
             sources: vec![SourceId::Nexum],
         });
     }
@@ -255,7 +362,7 @@ pub fn load_file(path: &Path, known: impl Fn(u32) -> bool, types: &WormholeTypes
         .ok()
         .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
         .map_or_else(now, |d| d.as_secs());
-    let (data, report) = convert(&map, known, types, fetched_at);
+    let (data, report) = convert(&map, &SystemSigs::new(), known, types, fetched_at);
     Ok(Load { data: Some(data), report, warning: None })
 }
 
@@ -268,7 +375,23 @@ pub enum Pending {
     /// A cache that is less than 5 minutes old. The router sends no request.
     Cache(SourceData),
     /// A fetch on a thread. The cache is the fallback for a failure.
-    Fetch { thread: JoinHandle<Result<String, FetchError>>, started: u64, origin: Option<String>, cache: Option<SourceData>, cache_path: PathBuf },
+    Fetch { thread: JoinHandle<Result<Fetched, FetchError>>, started: u64, origin: Option<String>, cache: Option<SourceData>, cache_path: PathBuf },
+}
+
+/// The result of the fetch thread: the map, and the signatures of its wormhole ends.
+pub struct Fetched {
+    map: NexumMap,
+    sigs: SystemSigs,
+    /// The number of systems with a failed signature request.
+    sig_failures: usize,
+}
+
+/// GET the map, then the signatures of its wormhole ends. A failed signature request
+/// drops only the signatures of that system.
+fn fetch_all(cfg: &NexumConfig) -> Result<Fetched, FetchError> {
+    let map = parse_map(&fetch_map(cfg, sources::TIMEOUT)?).map_err(FetchError::Offline)?;
+    let (sigs, sig_failures) = fetch_sigs(cfg, &sig_systems(&map), sources::TIMEOUT);
+    Ok(Fetched { map, sigs, sig_failures })
 }
 
 /// Start the Nexum load: a map file first, then a fresh cache, then a fetch on a thread.
@@ -286,7 +409,7 @@ pub fn start(file: Option<PathBuf>, cfg: &NexumConfig, cache_path: PathBuf, now:
         return Pending::Cache(data.clone());
     }
     let cfg = cfg.clone();
-    let thread = std::thread::spawn(move || fetch_map(&cfg, sources::TIMEOUT));
+    let thread = std::thread::spawn(move || fetch_all(&cfg));
     Pending::Fetch { thread, started: now, origin, cache, cache_path }
 }
 
@@ -300,15 +423,22 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
         Pending::Fetch { thread, started, origin, cache, cache_path } => {
             let fetched = thread.join().unwrap_or_else(|_| Err(FetchError::Offline("the fetch thread failed".into())));
             let mut report = NexumReport::default();
-            let converted = fetched.and_then(|text| {
-                let map = parse_map(&text).map_err(FetchError::Offline)?;
-                let (mut data, r) = convert(&map, &known, types, started);
+            let mut sig_failures = 0;
+            let converted = fetched.map(|f| {
+                let (mut data, r) = convert(&f.map, &f.sigs, &known, types, started);
                 data.origin = origin;
                 report = r;
-                Ok(data)
+                sig_failures = f.sig_failures;
+                data
             });
             let chosen = sources::choose(SourceId::Nexum, converted, cache, &cache_path);
-            Ok(Load { data: chosen.data, report, warning: chosen.warning })
+            let sig_warning = match sig_failures {
+                0 => None,
+                1 => Some("Nexum signatures: 1 system not loaded".to_string()),
+                n => Some(format!("Nexum signatures: {n} systems not loaded")),
+            };
+            let warnings: Vec<String> = chosen.warning.into_iter().chain(sig_warning).collect();
+            Ok(Load { data: chosen.data, report, warning: (!warnings.is_empty()).then(|| warnings.join(" · ")) })
         }
     }
 }
@@ -333,10 +463,58 @@ mod tests {
     }
 
     fn fixture() -> (SourceData, NexumReport) {
+        fixture_with(&SystemSigs::new())
+    }
+
+    fn fixture_with(sigs: &SystemSigs) -> (SourceData, NexumReport) {
         let text = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
         let map = parse_map(&text).unwrap();
         // 39999999 is not a known system.
-        convert(&map, |id| id != 39_999_999, &types(), FETCHED)
+        convert(&map, sigs, |id| id != 39_999_999, &types(), FETCHED)
+    }
+
+    fn fixture_sigs() -> SystemSigs {
+        serde_json::from_str(&std::fs::read_to_string("tests/fixtures/nexum-sigs.json").unwrap()).unwrap()
+    }
+
+    fn sig_pair(w: &Wormhole) -> (Option<&str>, Option<&str>) {
+        (w.sig_a.as_deref(), w.sig_b.as_deref())
+    }
+
+    #[test]
+    fn signatures_by_link_and_by_leads_to() {
+        let (data, _) = fixture_with(&fixture_sigs());
+        // Jita to J134702: each end has one signature that leads to the other end.
+        // The name match ignores case and spaces.
+        assert_eq!(sig_pair(find(&data, 30000142, 31002230)), (Some("BTA-111"), Some("JIT-202")));
+        // J134702 to Amarr: the connection links the J134702 signature by its row ID.
+        assert_eq!(sig_pair(find(&data, 30002187, 31002230)), (None, Some("KXA-101")));
+        // Rens to J134702: two signatures lead to Rens, so the converter does not guess.
+        assert_eq!(sig_pair(find(&data, 30002510, 31002230)), (None, None));
+        // Perimeter to Thera: the data site that "leads to" Thera is not a wormhole.
+        // The Thera signature leads to "Drifter", so it does not match.
+        assert_eq!(sig_pair(find(&data, 30000144, 31000005)), (Some("THE-222"), None));
+    }
+
+    #[test]
+    fn two_connections_on_one_pair_get_no_name_match() {
+        let text = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let mut map = parse_map(&text).unwrap();
+        // A second Perimeter to Thera connection. One "Thera" signature cannot belong to both.
+        let i = map.connections.iter().position(|c| (c.source_id.as_str(), c.target_id.as_str()) == ("s-perimeter", "s-thera")).unwrap();
+        map.connections.push(map.connections[i].clone());
+        let (data, _) = convert(&map, &fixture_sigs(), |_| true, &types(), FETCHED);
+        let pairs: Vec<_> = data.holes.iter().filter(|h| (h.a, h.b) == (30000144, 31000005)).map(sig_pair).collect();
+        assert_eq!(pairs, [(None, None), (None, None)]);
+    }
+
+    #[test]
+    fn signature_systems_are_the_wormhole_ends() {
+        let text = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let ids = sig_systems(&parse_map(&text).unwrap());
+        // No placeholder, no broken connection, and no gate, jumpgate or cyno connection.
+        let expected = ["s-amarr", "s-dodixie", "s-hek", "s-j134702", "s-jita", "s-perimeter", "s-rens", "s-thera", "s-unknown"];
+        assert_eq!(ids, expected);
     }
 
     fn find(data: &SourceData, a: u32, b: u32) -> &Wormhole {
@@ -421,7 +599,7 @@ mod tests {
     fn old_export_still_parses() {
         // The first fixture has fewer fields. Each missing field is `None`.
         let text = std::fs::read_to_string("tests/fixtures/nexum.json").unwrap();
-        let (data, report) = convert(&parse_map(&text).unwrap(), |_| true, &types(), FETCHED);
+        let (data, report) = convert(&parse_map(&text).unwrap(), &SystemSigs::new(), |_| true, &types(), FETCHED);
         assert_eq!(data.holes.len(), 1);
         assert_eq!(report.broken, 1);
         assert_eq!(report.expired, 1);
@@ -429,6 +607,7 @@ mod tests {
 
     use crate::config::{ApiKey, NexumConfig};
     use crate::sources::test_server::serve;
+    use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::Duration;
 
@@ -548,6 +727,42 @@ mod tests {
         let load = finish(pending, |_| true, &types()).unwrap();
         assert!(request.recv().unwrap().starts_with("GET /api/v1/maps/m1"));
         assert_eq!(load.data, None);
+    }
+
+    /// The map, the fixture signatures, and an empty list for each other system except Dodixie.
+    /// The Dodixie request gets a 500.
+    fn sig_routes() -> HashMap<String, String> {
+        let map = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let mut routes = HashMap::from([("/api/v1/maps/m1".to_string(), map)]);
+        let text = std::fs::read_to_string("tests/fixtures/nexum-sigs.json").unwrap();
+        let sigs: HashMap<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
+        for id in ["s-amarr", "s-hek", "s-j134702", "s-jita", "s-perimeter", "s-rens", "s-thera", "s-unknown"] {
+            let body = sigs.get(id).map_or("[]".to_string(), |v| v.to_string());
+            routes.insert(format!("/api/v1/maps/m1/systems/{id}/signatures"), body);
+        }
+        routes
+    }
+
+    #[test]
+    fn fetch_gets_the_signatures() {
+        let (url, requests) = crate::sources::test_routes::serve_routes(sig_routes());
+        let path = temp("eve-router-test-sigs");
+        let load = finish(start(None, &cfg(&url), path.clone(), FETCHED), |id| id != 39_999_999, &types()).unwrap();
+        // One map request, and one signature request for each of the 9 wormhole ends.
+        // All are GET requests with the key.
+        let requests: Vec<String> = requests.try_iter().collect();
+        assert_eq!(requests.len(), 10);
+        for r in &requests {
+            assert!(r.starts_with("GET /api/v1/maps/m1"), "{r}");
+            assert!(r.to_lowercase().contains("authorization: bearer nxm_test"), "{r}");
+        }
+        let data = load.data.unwrap();
+        assert_eq!(sig_pair(find(&data, 30000142, 31002230)), (Some("BTA-111"), Some("JIT-202")));
+        // The Dodixie request failed. The Dodixie wormhole stays, with no signature, and the status says so.
+        assert_eq!(sig_pair(find(&data, 30002659, 31000005)), (None, None));
+        assert_eq!(load.warning.as_deref(), Some("Nexum signatures: 1 system not loaded"));
+        // The cache holds the signatures.
+        assert_eq!(crate::sources::read_cache(&path), Some(data));
     }
 
     #[test]

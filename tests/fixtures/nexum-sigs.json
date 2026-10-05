@@ -1,0 +1,18 @@
+{
+  "s-j134702": [
+    { "id": "7a1c712c-e41a-405b-8bab-629f84d04aac", "sigId": "KXA-101", "sigType": "wormhole", "whType": "K162", "whLeadsTo": "" },
+    { "id": "sig-j-jita", "sigId": "JIT-202", "sigType": "wormhole", "whType": null, "whLeadsTo": "Jita" },
+    { "id": "sig-j-rens-1", "sigId": "REN-303", "sigType": "wormhole", "whType": null, "whLeadsTo": "Rens" },
+    { "id": "sig-j-rens-2", "sigId": "REN-304", "sigType": "wormhole", "whType": null, "whLeadsTo": "rens" }
+  ],
+  "s-jita": [
+    { "id": "sig-jita-j", "sigId": "BTA-111", "sigType": "wormhole", "whType": "B274", "whLeadsTo": " j134702 " }
+  ],
+  "s-perimeter": [
+    { "id": "sig-perimeter-thera", "sigId": "THE-222", "sigType": "wormhole", "whType": null, "whLeadsTo": "Thera" },
+    { "id": "sig-perimeter-data", "sigId": "DAT-333", "sigType": "data", "whType": null, "whLeadsTo": "Thera" }
+  ],
+  "s-thera": [
+    { "id": "sig-thera-1", "sigId": "PER-444", "sigType": "wormhole", "whType": null, "whLeadsTo": "Drifter" }
+  ]
+}

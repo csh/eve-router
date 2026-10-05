@@ -151,6 +151,41 @@ pub mod test_server {
 }
 
 #[cfg(test)]
+pub mod test_routes {
+    use std::collections::HashMap;
+    use std::io::{Read, Write};
+    use std::net::TcpListener;
+    use std::sync::mpsc::{self, Receiver};
+
+    /// Serve canned 200 responses on 127.0.0.1, one for each path, until the test ends.
+    /// A path that is not in `routes` gets a 500. The channel gives each request text.
+    pub fn serve_routes(routes: HashMap<String, String>) -> (String, Receiver<String>) {
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let url = format!("http://{}", listener.local_addr().unwrap());
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            for mut stream in listener.incoming().flatten() {
+                let mut buf = [0u8; 8192];
+                let n = stream.read(&mut buf).unwrap_or(0);
+                let request = String::from_utf8_lossy(&buf[..n]).into_owned();
+                let path = request.split(' ').nth(1).unwrap_or("").to_string();
+                let (status, body) = match routes.get(&path) {
+                    Some(body) => ("200 OK", body.as_str()),
+                    None => ("500 Internal Server Error", "{}"),
+                };
+                let response = format!(
+                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = tx.send(request);
+                let _ = stream.write_all(response.as_bytes());
+            }
+        });
+        (url, rx)
+    }
+}
+
+#[cfg(test)]
 mod tests {
     use super::test_server::serve;
     use super::*;
