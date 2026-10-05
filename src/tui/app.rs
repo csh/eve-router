@@ -62,6 +62,8 @@ pub struct App<'a> {
     pub settings_page: Option<ListState>,
     /// The time of the last route search, with the sidebar search.
     pub route_time: Option<Duration>,
+    /// The time of the last route search, in Unix seconds. The labels use it.
+    pub now: u64,
     pub hub_origin: Option<String>,
     pub hubs: Vec<(NodeIndex, Option<u64>)>,
     pub status: String,
@@ -92,6 +94,7 @@ impl<'a> App<'a> {
             detail_page: 10,
             settings_page: None,
             route_time: None,
+            now: crate::wormhole::now(),
             hub_origin: None,
             hubs: Vec::new(),
             status: String::new(),
@@ -132,7 +135,8 @@ impl<'a> App<'a> {
             }
         };
         let started = Instant::now();
-        let router = self.settings.router(self.uni);
+        self.now = crate::wormhole::now();
+        let router = self.settings.router(self.uni, self.now);
         self.hub_origin = Some(self.uni.name(nodes[0]).to_string());
         // The sidebar search and the route search are independent, so they run at the same time.
         let (hubs, routes) = rayon::join(

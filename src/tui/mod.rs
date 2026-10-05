@@ -6,8 +6,11 @@ mod ui;
 use crate::Settings;
 use crate::ansiblex::BridgeRules;
 use crate::config::Config;
+use crate::overlay::OverlayReport;
 use crate::route::Route;
+use crate::sources::nexum;
 use crate::universe::{Link, Universe};
+use crate::wormhole::{MassStatus, Wormhole, expiry_text};
 use app::App;
 use petgraph::graph::EdgeIndex;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
@@ -45,16 +48,31 @@ pub struct Shortcuts {
     pub bridges: usize,
     /// Broken or expired wormholes that the router did not load.
     pub skipped: usize,
-    /// A problem with the overlay files, for the status line at startup.
+    /// The source and the fetch time of the wormhole data.
+    pub source: Option<(crate::wormhole::SourceId, u64)>,
+    /// A problem with the overlay data, for the status line at startup.
     pub warning: Option<String>,
 }
 
 impl Shortcuts {
-    pub fn new(uni: &Universe, report: &crate::overlay::OverlayReport) -> Self {
+    pub fn new(uni: &Universe, report: &OverlayReport, wh: &nexum::Load) -> Self {
         let (wormholes, bridges) = uni.shortcut_counts();
-        let warning = (!report.unknown.is_empty())
-            .then(|| format!("Overlay: unknown systems: {}", report.unknown.join(", ")));
-        Shortcuts { wormholes, bridges, skipped: report.skipped_broken + report.skipped_expired, warning }
+        let mut warnings = Vec::new();
+        if !report.unknown.is_empty() {
+            warnings.push(format!("Bridges: unknown systems: {}", report.unknown.join(", ")));
+        }
+        if !wh.report.unknown.is_empty() {
+            let ids: Vec<String> = wh.report.unknown.iter().map(u32::to_string).collect();
+            warnings.push(format!("Nexum: unknown system IDs: {}", ids.join(", ")));
+        }
+        warnings.extend(wh.warning.clone());
+        Shortcuts {
+            wormholes,
+            bridges,
+            skipped: wh.report.skipped(),
+            source: wh.data.as_ref().map(|d| (d.source, d.fetched_at)),
+            warning: (!warnings.is_empty()).then(|| warnings.join(" · ")),
+        }
     }
 }
 
@@ -81,17 +99,10 @@ pub fn route_extras(route: &Route) -> String {
 }
 
 /// How a route enters a system: a gate, a wormhole or a bridge.
-pub fn link_label(uni: &Universe, rules: &BridgeRules, edge: EdgeIndex) -> String {
+pub fn link_label(uni: &Universe, rules: &BridgeRules, edge: EdgeIndex, now: u64) -> String {
     match &uni.graph[edge] {
         Link::Stargate => "gate".into(),
-        Link::Wormhole { sig_type, size, time } => {
-            // A wormhole without a known type shows only "Wormhole".
-            let name = sig_type.as_deref().map_or("Wormhole".to_string(), |t| format!("Wormhole {t}"));
-            let mut parts = vec![name];
-            parts.extend(size.as_deref().map(wormhole_size));
-            parts.extend(time.as_deref().map(wormhole_time));
-            parts.join(" · ")
-        }
+        Link::Wormhole(w) => wormhole_label(w, now),
         Link::JumpBridge => {
             // "Ansiblex · Zone 1 → 2 · 36 TJ". The departure zone sets the cost.
             let (from, to) = uni.graph.edge_endpoints(edge).unwrap();
@@ -105,30 +116,14 @@ pub fn link_label(uni: &Universe, rules: &BridgeRules, edge: EdgeIndex) -> Strin
     }
 }
 
-/// The game name for a nexum wormhole size, for example "large" gives "Large".
-fn wormhole_size(size: &str) -> String {
-    match size {
-        "small" => "Small".into(),
-        "medium" => "Medium".into(),
-        "large" => "Large".into(),
-        "xlarge" => "XL".into(),
-        "capital" => "Capital".into(),
-        // An unknown size shows as it is, so no information is lost.
-        other => other.to_string(),
-    }
-}
-
-/// The game text for a nexum time status, for example "lessThan1h" gives "Less than 1 hour remaining".
-fn wormhole_time(time: &str) -> String {
-    match time {
-        "expired" => "Expired".into(),
-        "lessThan1h" => "Less than 1 hour remaining".into(),
-        other => match other.strip_prefix("lessThan").and_then(|t| t.strip_suffix('h')) {
-            Some(hours) => format!("Less than {hours} hours remaining"),
-            // An unknown status shows as it is, so no information is lost.
-            None => other.to_string(),
-        },
-    }
+/// For example "Wormhole K162 · Large · Less than 3h 10m remaining · Critical".
+/// A stable mass shows no text.
+pub fn wormhole_label(w: &Wormhole, now: u64) -> String {
+    let mut parts = vec![w.wh_type.as_deref().map_or("Wormhole".to_string(), |t| format!("Wormhole {t}"))];
+    parts.extend(w.size.map(|s| s.label().to_string()));
+    parts.extend(w.expiry.map(|e| expiry_text(e, now)));
+    parts.extend(w.mass.filter(|&m| m != MassStatus::Stable).map(|m| m.label().to_string()));
+    parts.join(" · ")
 }
 
 #[cfg(test)]
@@ -143,17 +138,21 @@ mod tests {
 
     #[test]
     fn wormhole_text() {
-        assert_eq!(wormhole_size("large"), "Large");
-        assert_eq!(wormhole_size("small"), "Small");
-        assert_eq!(wormhole_size("medium"), "Medium");
-        assert_eq!(wormhole_size("xlarge"), "XL");
-        assert_eq!(wormhole_size("capital"), "Capital");
-        assert_eq!(wormhole_size("somethingNew"), "somethingNew");
-        assert_eq!(wormhole_time("lessThan1h"), "Less than 1 hour remaining");
-        assert_eq!(wormhole_time("lessThan4h"), "Less than 4 hours remaining");
-        assert_eq!(wormhole_time("lessThan24h"), "Less than 24 hours remaining");
-        assert_eq!(wormhole_time("expired"), "Expired");
-        assert_eq!(wormhole_time("somethingNew"), "somethingNew");
+        use crate::wormhole::{Expiry, MassStatus, Size, Wormhole, tests::hole};
+        let now = 1_000_000;
+        let w = Wormhole {
+            wh_type: Some("K162".into()),
+            size: Some(Size::Large),
+            expiry: Some(Expiry { at: now + 3 * 3600 + 600, exact: false }),
+            mass: Some(MassStatus::Critical),
+            ..hole(1, 2)
+        };
+        assert_eq!(wormhole_label(&w, now), "Wormhole K162 · Large · Less than 3h 10m remaining · Critical");
+        // A stable mass shows no text. An unknown type shows only "Wormhole".
+        let stable = Wormhole { mass: Some(MassStatus::Stable), size: Some(Size::XLarge), ..hole(1, 2) };
+        assert_eq!(wormhole_label(&stable, now), "Wormhole · XL");
+        let destabilized = Wormhole { mass: Some(MassStatus::Destabilized), ..hole(1, 2) };
+        assert_eq!(wormhole_label(&destabilized, now), "Wormhole · Destabilized");
     }
 
     #[test]
@@ -168,7 +167,7 @@ mod tests {
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
         };
-        let mut app = App::new(&uni, settings, Config::default(), std::env::temp_dir().join("eve-router-test.json"), "Jita > UALX-3".into(), Shortcuts::new(&uni, &Default::default()));
+        let mut app = App::new(&uni, settings, Config::default(), std::env::temp_dir().join("eve-router-test.json"), "Jita > UALX-3".into(), Shortcuts::new(&uni, &Default::default(), &Default::default()));
         assert_eq!(app.routes.len(), 3, "{}", app.status);
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         let keys = [

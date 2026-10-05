@@ -17,6 +17,7 @@ use config::Config;
 use overlay::OverlayReport;
 use petgraph::graph::NodeIndex;
 use route::{Mode, Router};
+use sources::nexum;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -74,9 +75,10 @@ pub struct Settings {
 }
 
 impl Settings {
-    pub fn router<'a>(&self, uni: &'a Universe) -> Router<'a> {
+    /// A router for the settings. `now` (Unix seconds) sets which wormholes are expired.
+    pub fn router<'a>(&self, uni: &'a Universe, now: u64) -> Router<'a> {
         let bridges = self.bridges && self.rules.blocked_reason().is_none();
-        Router::new(uni, self.mode, self.wormholes, bridges, self.rules)
+        Router::new(uni, self.mode, self.wormholes, bridges, self.rules, now)
     }
 }
 
@@ -132,15 +134,15 @@ fn run() -> Result<(), String> {
     let bridges_path = config::overlay_path(cli.bridges, &cfg_path, config::BRIDGES_FILE);
     let nexum_path = config::overlay_path(cli.nexum, &cfg_path, config::NEXUM_FILE);
     let mut report = OverlayReport::default();
-    if let Some(path) = &nexum_path {
-        // The bridge list is authoritative. Use the nexum jump bridges only without it.
-        report = overlay::load_nexum(&mut uni, path, bridges_path.is_none())?;
-    }
     if let Some(path) = &bridges_path {
-        let r = overlay::load_bridges(&mut uni, path)?;
-        report.bridges += r.bridges;
-        report.unknown.extend(r.unknown);
+        report = overlay::load_bridges(&mut uni, path)?;
     }
+    let types = wormhole_types::load(&sde_dir)?;
+    let wh = match &nexum_path {
+        Some(path) => nexum::load_file(path, |id| uni.by_id.contains_key(&id), &types)?,
+        None => nexum::Load::default(),
+    };
+    let wormhole_count = uni.add_wormholes(&wormhole::merge(wh.data.as_slice(), wormhole::now()));
     let load_time = started.elapsed();
 
     let capital = match &cfg.capital {
@@ -163,14 +165,14 @@ fn run() -> Result<(), String> {
 
     if cli.print {
         eprintln!(
-            "Loaded {} systems in {} ms. Overlay: {}",
+            "Loaded {} systems in {} ms. Bridges: {}. Wormholes: {wormhole_count}",
             uni.graph.node_count(),
             load_time.as_millis(),
             report.summary()
         );
         print_routes(&uni, &settings, &systems)
     } else {
-        let shortcuts = tui::Shortcuts::new(&uni, &report);
+        let shortcuts = tui::Shortcuts::new(&uni, &report, &wh);
         tui::run(&uni, settings, cfg, cfg_path, systems.join(" > "), shortcuts)
     }
 }
@@ -204,7 +206,8 @@ fn favourite_names(cfg: &Config) -> Vec<String> {
 
 fn print_routes(uni: &Universe, settings: &Settings, names: &[String]) -> Result<(), String> {
     let nodes = resolve_all(uni, names)?;
-    let router = settings.router(uni);
+    let now = wormhole::now();
+    let router = settings.router(uni, now);
     if let Some(reason) = settings.rules.blocked_reason() {
         eprintln!("Jump bridges off: {reason}");
     }
@@ -226,7 +229,7 @@ fn print_routes(uni: &Universe, settings: &Settings, names: &[String]) -> Result
         for (step, &node) in route.path.nodes.iter().enumerate() {
             let sys = uni.system(node);
             let via = match step.checked_sub(1).map(|s| route.path.edges[s]) {
-                Some(e) => tui::link_label(uni, &settings.rules, e),
+                Some(e) => tui::link_label(uni, &settings.rules, e, now),
                 None => String::new(),
             };
             let stop = route.stop_at(step).map(|s| s.label()).unwrap_or_default();
@@ -241,10 +244,17 @@ mod tests {
     use super::*;
     use std::path::Path;
 
+    /// 2026-10-05T12:00:00Z.
+    const FIXTURE_TIME: u64 = 1_791_201_600;
+
     fn overlay_universe() -> Universe {
         let mut uni = Universe::from_sde(sde::load(Path::new("sde")).unwrap());
-        overlay::load_nexum(&mut uni, Path::new("tests/fixtures/nexum.json"), false).unwrap();
         overlay::load_bridges(&mut uni, Path::new("tests/fixtures/ansiblex.txt")).unwrap();
+        let text = std::fs::read_to_string("tests/fixtures/nexum.json").unwrap();
+        let map = nexum::parse_map(&text).unwrap();
+        let types = wormhole_types::load(Path::new("sde")).unwrap();
+        let (data, _) = nexum::convert(&map, |id| uni.by_id.contains_key(&id), &types, FIXTURE_TIME);
+        uni.add_wormholes(&wormhole::merge(&[data], FIXTURE_TIME));
         uni
     }
 
@@ -264,9 +274,9 @@ mod tests {
         let uni = overlay_universe();
         let nodes = resolve_all(&uni, &["Jita".into(), "J134702".into()]).unwrap();
         let mut s = settings(&uni, None);
-        assert!(s.router(&uni).routes(&nodes, 1).unwrap()[0].wormholes > 0);
+        assert!(s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).unwrap()[0].wormholes > 0);
         s.wormholes = false;
-        assert!(s.router(&uni).routes(&nodes, 1).is_err());
+        assert!(s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).is_err());
     }
 
     #[test]
@@ -274,7 +284,7 @@ mod tests {
         let uni = overlay_universe();
         // UALX-3 and IL-YTR have a bridge between them.
         let nodes = resolve_all(&uni, &["UALX-3".into(), "IL-YTR".into()]).unwrap();
-        let uses_bridge = |s: &Settings| s.router(&uni).routes(&nodes, 1).unwrap()[0].bridges > 0;
+        let uses_bridge = |s: &Settings| s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).unwrap()[0].bridges > 0;
         let mut s = settings(&uni, Some("black-ops"));
         assert!(uses_bridge(&s));
         s.rules.capital = None;

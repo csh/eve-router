@@ -229,7 +229,7 @@ fn draw_detail(frame: &mut Frame, app: &mut App, area: Rect) {
     let rows = route.path.nodes.iter().enumerate().map(|(step, &node)| {
         let sys = uni.system(node);
         let via = match step.checked_sub(1).map(|s| route.path.edges[s]) {
-            Some(e) => link_label(uni, &app.settings.rules, e),
+            Some(e) => link_label(uni, &app.settings.rules, e, app.now),
             None => String::new(),
         };
         let via_style = match via.as_str() {

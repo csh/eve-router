@@ -3,10 +3,13 @@
 //! The size and expiry rules copy Nexum (`server/src/routes/maps.ts` and
 //! `server/src/data/whLifetimes.ts`).
 
-use crate::wormhole::{Expiry, HOUR, MassStatus, Size, SourceData, SourceId, Wormhole, parse_utc};
+use crate::wormhole::{Expiry, HOUR, MassStatus, Size, SourceData, SourceId, Wormhole, now, parse_utc};
 use crate::wormhole_types::WormholeTypes;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
+use std::fs;
+use std::path::Path;
+use std::time::UNIX_EPOCH;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -185,6 +188,29 @@ pub fn convert(map: &NexumMap, known: impl Fn(u32) -> bool, types: &WormholeType
         });
     }
     (SourceData { source: SourceId::Nexum, fetched_at, holes }, report)
+}
+
+/// The wormhole data of the Nexum source, for the startup and the sidebar.
+#[derive(Default)]
+pub struct Load {
+    pub data: Option<SourceData>,
+    pub report: NexumReport,
+    /// A problem for the status line, for example "Nexum offline, map from 14:02".
+    pub warning: Option<String>,
+}
+
+/// Read a map file (`--nexum`, or an export next to the config file).
+/// The time of the file is the fetch time.
+pub fn load_file(path: &Path, known: impl Fn(u32) -> bool, types: &WormholeTypes) -> Result<Load, String> {
+    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+    let map = parse_map(&text).map_err(|e| format!("{}: {e}", path.display()))?;
+    let fetched_at = fs::metadata(path)
+        .and_then(|m| m.modified())
+        .ok()
+        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
+        .map_or_else(now, |d| d.as_secs());
+    let (data, report) = convert(&map, known, types, fetched_at);
+    Ok(Load { data: Some(data), report, warning: None })
 }
 
 #[cfg(test)]

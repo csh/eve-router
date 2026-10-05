@@ -1,6 +1,7 @@
 //! The solar system graph and the name index.
 
 use crate::sde::SdeData;
+use crate::wormhole::Wormhole;
 use petgraph::graph::{DiGraph, NodeIndex};
 use std::collections::HashMap;
 
@@ -19,11 +20,7 @@ pub struct System {
 #[derive(Clone, Debug, PartialEq)]
 pub enum Link {
     Stargate,
-    Wormhole {
-        sig_type: Option<String>,
-        size: Option<String>,
-        time: Option<String>,
-    },
+    Wormhole(Wormhole),
     JumpBridge,
 }
 
@@ -139,12 +136,27 @@ impl Universe {
         for e in self.graph.raw_edges() {
             let pair = (e.source().min(e.target()), e.source().max(e.target()));
             match e.weight {
-                Link::Wormhole { .. } => wormholes.insert(pair),
+                Link::Wormhole(_) => wormholes.insert(pair),
                 Link::JumpBridge => bridges.insert(pair),
                 Link::Stargate => false,
             };
         }
         (wormholes.len(), bridges.len())
+    }
+
+    /// Add wormhole edges in both directions. This is the only place that adds them.
+    /// Call it after the stargates and the bridge list. Return the count of wormholes added.
+    pub fn add_wormholes(&mut self, holes: &[Wormhole]) -> usize {
+        let mut added = 0;
+        for w in holes {
+            let (Some(&a), Some(&b)) = (self.by_id.get(&w.a), self.by_id.get(&w.b)) else {
+                continue;
+            };
+            self.graph.add_edge(a, b, Link::Wormhole(w.clone()));
+            self.graph.add_edge(b, a, Link::Wormhole(w.clone()));
+            added += 1;
+        }
+        added
     }
 
     /// Straight-line distance in light years.

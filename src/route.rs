@@ -126,7 +126,8 @@ impl Bans {
 impl<'a> Router<'a> {
     /// Calculate the node costs and the edge permissions one time, in parallel.
     /// Each search then reads them instead of calculating them again.
-    pub fn new(uni: &'a Universe, mode: Mode, wormholes: bool, bridges: bool, rules: BridgeRules) -> Self {
+    /// `now` (Unix seconds) sets which wormholes are expired.
+    pub fn new(uni: &'a Universe, mode: Mode, wormholes: bool, bridges: bool, rules: BridgeRules, now: u64) -> Self {
         let graph = &uni.graph;
         let node_cost = graph
             .raw_nodes()
@@ -141,12 +142,13 @@ impl<'a> Router<'a> {
                 if unwanted { 1 + PENALTY } else { 1 }
             })
             .collect();
+        let hull_kg = rules.hull.and_then(|h| h.mass_kg);
         let edge_ok = graph
             .raw_edges()
             .par_iter()
-            .map(|e| match e.weight {
+            .map(|e| match &e.weight {
                 Link::Stargate => true,
-                Link::Wormhole { .. } => wormholes,
+                Link::Wormhole(w) => wormholes && w.usable(now, hull_kg),
                 Link::JumpBridge => bridges && rules.allowed(uni, e.source()),
             })
             .collect();
@@ -175,7 +177,7 @@ impl<'a> Router<'a> {
             .min_by_key(|e| match e.weight() {
                 Link::Stargate => 0,
                 Link::JumpBridge => 1,
-                Link::Wormhole { .. } => 2,
+                Link::Wormhole(_) => 2,
             })
             .map(|e| e.id())
             .expect("astar returned a step with no usable edge")
@@ -294,7 +296,7 @@ impl<'a> Router<'a> {
         let mut tj = Some(0.0);
         for &e in &route.path.edges {
             match &self.uni.graph[e] {
-                Link::Wormhole { .. } => route.wormholes += 1,
+                Link::Wormhole(_) => route.wormholes += 1,
                 Link::JumpBridge => {
                     route.bridges += 1;
                     let (from, _) = self.uni.graph.edge_endpoints(e).unwrap();
@@ -323,7 +325,71 @@ mod tests {
     use crate::universe::tests::universe;
 
     fn router(mode: Mode) -> Router<'static> {
-        Router::new(universe(), mode, true, true, BridgeRules::default())
+        Router::new(universe(), mode, true, true, BridgeRules::default(), 0)
+    }
+
+    use crate::ansiblex::find_hull;
+    use crate::wormhole::{Expiry, MassStatus, Size, Wormhole, tests::hole};
+    use std::sync::OnceLock;
+
+    /// The expiry of the Hek-Perimeter wormhole.
+    const ENDS: u64 = 2_000_000_000;
+
+    /// The SDE, plus one test wormhole for each rule. Each pair is many gate jumps apart,
+    /// so a route of 1 jump uses the wormhole.
+    fn holes_universe() -> &'static Universe {
+        static UNI: OnceLock<Universe> = OnceLock::new();
+        UNI.get_or_init(|| {
+            let mut uni = Universe::from_sde(crate::sde::load(std::path::Path::new("sde")).unwrap());
+            let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
+            let holes = [
+                Wormhole { size: Some(Size::Medium), ..hole(id("Jita"), id("Amarr")) },
+                Wormhole { size: Some(Size::Small), ..hole(id("Dodixie"), id("Hek")) },
+                Wormhole { mass: Some(MassStatus::Critical), ..hole(id("Rens"), id("Amarr")) },
+                Wormhole { expiry: Some(Expiry { at: ENDS, exact: true }), ..hole(id("Hek"), id("Perimeter")) },
+            ];
+            assert_eq!(uni.add_wormholes(&holes), 4);
+            uni
+        })
+    }
+
+    fn jumps(hull: Option<&str>, from: &str, to: &str, now: u64) -> usize {
+        let uni = holes_universe();
+        let rules = BridgeRules { capital: None, hull: hull.map(|h| find_hull(h).unwrap()), max_cap: None };
+        let router = Router::new(uni, Mode::Shortest, true, false, rules, now);
+        let nodes = [uni.exact(from).unwrap(), uni.exact(to).unwrap()];
+        router.routes(&nodes, 1).unwrap()[0].jumps
+    }
+
+    #[test]
+    fn hull_mass_against_size() {
+        // Sin: 106,300,000 kg. A Medium wormhole allows 62,000,000 kg.
+        assert!(jumps(Some("Sin"), "Jita", "Amarr", 0) > 1);
+        assert_eq!(jumps(Some("Rifter"), "Jita", "Amarr", 0), 1);
+    }
+
+    #[test]
+    fn no_hull_skips_size_check() {
+        assert_eq!(jumps(None, "Dodixie", "Hek", 0), 1);
+    }
+
+    #[test]
+    fn critical_is_blocked() {
+        assert!(jumps(None, "Rens", "Amarr", 0) > 1);
+    }
+
+    #[test]
+    fn expired_is_blocked() {
+        assert_eq!(jumps(None, "Hek", "Perimeter", ENDS - 1), 1);
+        assert!(jumps(None, "Hek", "Perimeter", ENDS) > 1);
+    }
+
+    #[test]
+    fn wormholes_off() {
+        let uni = holes_universe();
+        let router = Router::new(uni, Mode::Shortest, false, false, BridgeRules::default(), 0);
+        let nodes = [uni.exact("Dodixie").unwrap(), uni.exact("Hek").unwrap()];
+        assert!(router.routes(&nodes, 1).unwrap()[0].jumps > 1);
     }
 
     fn node(name: &str) -> NodeIndex {
