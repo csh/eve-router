@@ -40,6 +40,9 @@ pub enum SettingsRow {
     NexumUrl,
     NexumKey,
     NexumMap,
+    /// The EVE-Scout hub switches.
+    Thera,
+    Turnur,
 }
 
 pub enum Popup {
@@ -333,7 +336,7 @@ impl<'a> App<'a> {
         let mut rows = vec![SettingsRow::Capital, SettingsRow::MaxCap];
         rows.extend((0..self.settings.favourites.len()).map(SettingsRow::Favourite));
         rows.push(SettingsRow::AddFavourite);
-        rows.extend([SettingsRow::NexumUrl, SettingsRow::NexumKey, SettingsRow::NexumMap]);
+        rows.extend([SettingsRow::NexumUrl, SettingsRow::NexumKey, SettingsRow::NexumMap, SettingsRow::Thera, SettingsRow::Turnur]);
         rows
     }
 
@@ -384,6 +387,16 @@ impl<'a> App<'a> {
                 // The prompt starts empty, so the key never shows on the screen.
                 self.popup = Some(Popup::Prompt { kind: PromptKind::NexumKey, text: String::new() });
                 return;
+            }
+            (KeyCode::Enter, SettingsRow::Thera) => {
+                self.settings.hubs.thera = !self.settings.hubs.thera;
+                self.save();
+                self.recompute();
+            }
+            (KeyCode::Enter, SettingsRow::Turnur) => {
+                self.settings.hubs.turnur = !self.settings.hubs.turnur;
+                self.save();
+                self.recompute();
             }
             (KeyCode::Enter, SettingsRow::NexumMap) => {
                 if self.cfg.nexum.url.is_none() || self.cfg.nexum.key.is_none() {
@@ -606,6 +619,7 @@ impl<'a> App<'a> {
         self.cfg.max_cap_tj = rules.max_cap;
         self.cfg.mode = Some(self.settings.mode);
         self.cfg.top = Some(self.settings.top);
+        self.cfg.eve_scout = self.settings.hubs;
         self.cfg.favourites = Some(self.settings.favourites.iter().map(|&n| self.uni.name(n).to_string()).collect());
         self.status = match self.cfg.save(&self.cfg_path) {
             Ok(()) => format!("Saved {}", self.cfg_path.display()),
@@ -648,7 +662,7 @@ mod tests {
             favourites: Vec::new(),
         };
         let path = std::env::temp_dir().join(format!("eve-router-test-{name}.json"));
-        let shortcuts = Shortcuts::new(universe(), &Default::default(), &Default::default());
+        let shortcuts = Shortcuts::new(universe(), &Default::default(), &Default::default(), &Default::default());
         App::new(universe(), settings, cfg, path, String::new(), shortcuts)
     }
 

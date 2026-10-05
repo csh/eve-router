@@ -144,6 +144,16 @@ impl Universe {
         (wormholes.len(), bridges.len())
     }
 
+    /// The number of systems with a wormhole to the system `id`, for example Thera.
+    /// Two wormholes between the same pair count one time, as in `shortcut_counts`.
+    pub fn hub_count(&self, id: u32) -> usize {
+        use petgraph::visit::EdgeRef;
+        let Some(&hub) = self.by_id.get(&id) else { return 0 };
+        let ends: std::collections::HashSet<NodeIndex> =
+            self.graph.edges(hub).filter(|e| matches!(e.weight(), Link::Wormhole(_))).map(|e| e.target()).collect();
+        ends.len()
+    }
+
     /// Add wormhole edges in both directions. This is the only place that adds them.
     /// Call it after the stargates and the bridge list. Return the count of wormholes added.
     pub fn add_wormholes(&mut self, holes: &[Wormhole]) -> usize {
@@ -202,5 +212,17 @@ pub mod tests {
         assert_eq!(uni.system(uni.resolve("jita").unwrap()).id, 30000142);
         assert_eq!(uni.system(uni.resolve("New Caldari").unwrap()).id, uni.system(uni.exact("new caldari").unwrap()).id);
         assert!(uni.resolve("J").is_err());
+    }
+
+    #[test]
+    fn hub_count_counts_wormhole_pairs() {
+        use crate::wormhole::{THERA, TURNUR, tests::hole};
+        let mut uni = Universe::from_sde(crate::sde::load(Path::new("sde")).unwrap());
+        // Two Thera wormholes to Jita count as one pair, as in `shortcut_counts`.
+        let holes = [hole(30000142, THERA), hole(30000142, THERA), hole(30002187, THERA)];
+        assert_eq!(uni.add_wormholes(&holes), 3);
+        assert_eq!(uni.hub_count(THERA), 2);
+        // The gates of Turnur do not count.
+        assert_eq!(uni.hub_count(TURNUR), 0);
     }
 }

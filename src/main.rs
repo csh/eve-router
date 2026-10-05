@@ -17,7 +17,7 @@ use config::Config;
 use overlay::OverlayReport;
 use petgraph::graph::NodeIndex;
 use route::{Mode, Router};
-use sources::nexum;
+use sources::{evescout, nexum};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -137,6 +137,10 @@ fn run() -> Result<(), String> {
     };
     let cache_path = sources::cache_path(wormhole::SourceId::Nexum, &cfg_path);
     let pending = nexum::start(nexum_file, &cfg.nexum, cache_path, wormhole::now());
+    // EVE-Scout is public, so the router always fetches it. The Thera and Turnur switches
+    // act at route time, so a switch works with no restart.
+    let scout_cache = sources::cache_path(wormhole::SourceId::EveScout, &cfg_path);
+    let scout_pending = evescout::start(evescout::URL, scout_cache, wormhole::now());
 
     let sde_dir = cli.sde.unwrap_or_else(config::default_sde_dir);
     update_sde(&sde_dir)?;
@@ -151,7 +155,9 @@ fn run() -> Result<(), String> {
     }
     let types = wormhole_types::load(&sde_dir)?;
     let wh = nexum::finish(pending, |id| uni.by_id.contains_key(&id), &types)?;
-    let wormhole_count = uni.add_wormholes(&wormhole::merge(wh.data.as_slice(), wormhole::now()));
+    let scout = evescout::finish(scout_pending, |id| uni.by_id.contains_key(&id), &types);
+    let all: Vec<wormhole::SourceData> = wh.data.iter().chain(&scout.data).cloned().collect();
+    let wormhole_count = uni.add_wormholes(&wormhole::merge(&all, wormhole::now()));
     let load_time = started.elapsed();
 
     let capital = match &cfg.capital {
@@ -180,16 +186,18 @@ fn run() -> Result<(), String> {
             load_time.as_millis(),
             report.summary()
         );
-        if let Some(data) = &wh.data {
-            let age = wormhole::age_text(data.fetched_at, wormhole::now());
-            eprintln!("Wormholes: {wormhole_count} from {} ({age})", data.source.label());
+        if !all.is_empty() {
+            let now = wormhole::now();
+            let from: Vec<String> =
+                all.iter().map(|d| format!("{} ({})", d.source.label(), wormhole::age_text(d.fetched_at, now))).collect();
+            eprintln!("Wormholes: {wormhole_count} from {}", from.join(", "));
         }
-        if let Some(warning) = &wh.warning {
+        for warning in wh.warning.iter().chain(&scout.warning) {
             eprintln!("{warning}");
         }
         print_routes(&uni, &settings, &systems)
     } else {
-        let shortcuts = tui::Shortcuts::new(&uni, &report, &wh);
+        let shortcuts = tui::Shortcuts::new(&uni, &report, &wh, &scout);
         tui::run(&uni, settings, cfg, cfg_path, systems.join(" > "), shortcuts)
     }
 }

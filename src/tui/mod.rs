@@ -8,9 +8,9 @@ use crate::ansiblex::BridgeRules;
 use crate::config::Config;
 use crate::overlay::OverlayReport;
 use crate::route::Route;
-use crate::sources::nexum;
+use crate::sources::{evescout, nexum};
 use crate::universe::{Link, Universe};
-use crate::wormhole::{MassStatus, Wormhole, expiry_text};
+use crate::wormhole::{MassStatus, SourceId, THERA, TURNUR, Wormhole, expiry_text};
 use app::App;
 use petgraph::graph::EdgeIndex;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
@@ -53,29 +53,37 @@ pub struct Shortcuts {
     pub bridges: usize,
     /// Broken or expired wormholes that the router did not load.
     pub skipped: usize,
-    /// The source and the fetch time of the wormhole data.
-    pub source: Option<(crate::wormhole::SourceId, u64)>,
+    /// The wormholes with an end in Thera, and in Turnur.
+    pub thera: usize,
+    pub turnur: usize,
+    /// The source and the fetch time of each set of wormhole data.
+    pub sources: Vec<(SourceId, u64)>,
     /// A problem with the overlay data, for the status line at startup.
     pub warning: Option<String>,
 }
 
 impl Shortcuts {
-    pub fn new(uni: &Universe, report: &OverlayReport, wh: &nexum::Load) -> Self {
+    pub fn new(uni: &Universe, report: &OverlayReport, wh: &nexum::Load, scout: &evescout::Load) -> Self {
         let (wormholes, bridges) = uni.shortcut_counts();
         let mut warnings = Vec::new();
         if !report.unknown.is_empty() {
             warnings.push(format!("Bridges: unknown systems: {}", report.unknown.join(", ")));
         }
-        if !wh.report.unknown.is_empty() {
-            let ids: Vec<String> = wh.report.unknown.iter().map(u32::to_string).collect();
-            warnings.push(format!("Nexum: unknown system IDs: {}", ids.join(", ")));
+        for (source, unknown) in [(SourceId::Nexum, &wh.report.unknown), (SourceId::EveScout, &scout.report.unknown)] {
+            if !unknown.is_empty() {
+                let ids: Vec<String> = unknown.iter().map(u32::to_string).collect();
+                warnings.push(format!("{}: unknown system IDs: {}", source.label(), ids.join(", ")));
+            }
         }
         warnings.extend(wh.warning.clone());
+        warnings.extend(scout.warning.clone());
         Shortcuts {
             wormholes,
             bridges,
-            skipped: wh.report.skipped(),
-            source: wh.data.as_ref().map(|d| (d.source, d.fetched_at)),
+            skipped: wh.report.skipped() + scout.report.skipped(),
+            thera: uni.hub_count(THERA),
+            turnur: uni.hub_count(TURNUR),
+            sources: wh.data.iter().chain(&scout.data).map(|d| (d.source, d.fetched_at)).collect(),
             warning: (!warnings.is_empty()).then(|| warnings.join(" · ")),
         }
     }
@@ -173,7 +181,7 @@ mod tests {
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
         };
-        let mut app = App::new(&uni, settings, Config::default(), std::env::temp_dir().join("eve-router-test.json"), "Jita > UALX-3".into(), Shortcuts::new(&uni, &Default::default(), &Default::default()));
+        let mut app = App::new(&uni, settings, Config::default(), std::env::temp_dir().join("eve-router-test.json"), "Jita > UALX-3".into(), Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default()));
         assert_eq!(app.routes.len(), 3, "{}", app.status);
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         let keys = [
@@ -247,5 +255,70 @@ mod tests {
         assert!(!format!("{:?}", terminal.backend().buffer()).contains("Shortcuts"));
         assert_eq!(app.settings.mode, Mode::PreferHighsec);
         assert_eq!(app.settings.rules.hull.unwrap().name, "Paladin");
+    }
+
+    /// The foreground color of the first cell of the screen row that starts with `text`.
+    fn row_color(buffer: &ratatui::buffer::Buffer, text: &str) -> Option<ratatui::style::Color> {
+        let area = buffer.area;
+        (area.top()..area.bottom()).find_map(|y| {
+            let row: String = (area.left()..area.right()).map(|x| buffer[(x, y)].symbol()).collect();
+            let x = row.find(text)?;
+            // The row holds only one-byte symbols before the match in the sidebar box.
+            Some(buffer[(area.left() + row[..x].chars().count() as u16, y)].fg)
+        })
+    }
+
+    #[test]
+    fn hub_counts_and_switches() {
+        use crate::wormhole::{THERA, TURNUR, tests::hole};
+        use ratatui::style::Color;
+        let mut uni = Universe::from_sde(crate::sde::load(Path::new("sde")).unwrap());
+        uni.add_wormholes(&[hole(30000142, THERA), hole(30002187, THERA), hole(TURNUR, 30002053)]);
+        let settings = Settings {
+            mode: Mode::Shortest,
+            top: 1,
+            wormholes: true,
+            hubs: Default::default(),
+            bridges: true,
+            rules: BridgeRules::default(),
+            favourites: Vec::new(),
+        };
+        let cfg_path = std::env::temp_dir().join("eve-router-test-hubs").join("eve-router.json");
+        let _ = std::fs::remove_dir_all(cfg_path.parent().unwrap());
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
+        assert_eq!((shortcuts.wormholes, shortcuts.thera, shortcuts.turnur), (3, 2, 1));
+        let mut app = App::new(&uni, settings, Config::default(), cfg_path.clone(), String::new(), shortcuts);
+        // The s and w keys work outside the input box.
+        app.focus = app::Focus::Routes;
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let thera_line = format!("{:<16}{:>5}", "  Thera:", 2);
+        let turnur_line = format!("{:<16}{:>5}", "  Turnur:", 1);
+        let screen = format!("{:?}", terminal.backend().buffer());
+        assert!(screen.contains(&thera_line) && screen.contains(&turnur_line), "{screen}");
+        assert_ne!(row_color(terminal.backend().buffer(), &thera_line), Some(Color::DarkGray));
+
+        // Enter on the Thera row of the settings page turns Thera off, and saves the config.
+        let rows = app.settings_rows();
+        let thera_row = rows.iter().position(|r| *r == app::SettingsRow::Thera).unwrap();
+        assert_eq!(rows[thera_row + 1], app::SettingsRow::Turnur);
+        app.on_key(KeyEvent::from(KeyCode::Char('s')));
+        app.settings_page.as_mut().unwrap().select(Some(thera_row));
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.settings.hubs, crate::wormhole::Hubs { thera: false, turnur: true });
+        assert_eq!(Config::load(&cfg_path).unwrap().eve_scout, app.settings.hubs);
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let screen = format!("{:?}", terminal.backend().buffer());
+        assert!(screen.contains("EVE-Scout") && screen.contains("Thera: off"), "{screen}");
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let buffer = terminal.backend().buffer();
+        assert_eq!(row_color(buffer, &thera_line), Some(Color::DarkGray));
+        assert_ne!(row_color(buffer, &turnur_line), Some(Color::DarkGray));
+        // With all wormholes off, the hub lines are gray too.
+        app.on_key(KeyEvent::from(KeyCode::Char('w')));
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        assert_eq!(row_color(terminal.backend().buffer(), &turnur_line), Some(Color::DarkGray));
+        std::fs::remove_dir_all(cfg_path.parent().unwrap()).unwrap();
     }
 }

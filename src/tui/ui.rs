@@ -47,9 +47,9 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_detail(frame, app, detail);
     // The "Shortcuts" box goes above the hubs, and only when an overlay loaded a connection.
     if app.shortcuts.wormholes + app.shortcuts.bridges > 0 {
-        let shortcut_lines = 2 + u16::from(app.shortcuts.skipped > 0) + u16::from(app.shortcuts.source.is_some());
-        let [shortcuts, hubs] = Layout::vertical([Constraint::Length(shortcut_lines + 2), Constraint::Min(5)]).areas(sidebar);
-        draw_shortcuts(frame, app, shortcuts);
+        let lines = shortcut_lines(app);
+        let [shortcuts, hubs] = Layout::vertical([Constraint::Length(lines.len() as u16 + 2), Constraint::Min(5)]).areas(sidebar);
+        frame.render_widget(Paragraph::new(lines).block(Block::bordered().title(" Shortcuts ")), shortcuts);
         draw_hubs(frame, app, hubs);
     } else {
         draw_hubs(frame, app, sidebar);
@@ -316,7 +316,8 @@ fn draw_hubs(frame: &mut Frame, app: &App, area: Rect) {
     frame.render_widget(Paragraph::new(lines).block(block), area);
 }
 
-fn draw_shortcuts(frame: &mut Frame, app: &App, area: Rect) {
+/// The lines of the "Shortcuts" box.
+fn shortcut_lines(app: &App) -> Vec<Line<'static>> {
     let s = &app.settings;
     let bridges_on = s.bridges && s.rules.blocked_reason().is_none();
     // A kind that is off for routing shows in gray.
@@ -326,15 +327,21 @@ fn draw_shortcuts(frame: &mut Frame, app: &App, area: Rect) {
     };
     let mut lines = vec![line("Wormholes:", app.shortcuts.wormholes, s.wormholes)];
     // The source and the data age, for example "Nexum, 2 min ago".
-    if let Some((source, fetched_at)) = app.shortcuts.source {
+    for &(source, fetched_at) in &app.shortcuts.sources {
         let age = crate::wormhole::age_text(fetched_at, app.now);
         lines.push(Line::from(format!("  {}, {age}", source.label())).dark_gray());
+    }
+    // The hub counts. A hub that is off, or all wormholes off, shows in gray.
+    for (label, count, on) in [("  Thera:", app.shortcuts.thera, s.hubs.thera), ("  Turnur:", app.shortcuts.turnur, s.hubs.turnur)] {
+        if count > 0 {
+            lines.push(line(label, count, s.wormholes && on));
+        }
     }
     lines.push(line("Jump bridges:", app.shortcuts.bridges, bridges_on));
     if app.shortcuts.skipped > 0 {
         lines.push(Line::from(format!("{:<16}{:>5}", "Skipped:", app.shortcuts.skipped)).dark_gray());
     }
-    frame.render_widget(Paragraph::new(lines).block(Block::bordered().title(" Shortcuts ")), area);
+    lines
 }
 
 fn draw_settings(frame: &mut Frame, app: &mut App) {
@@ -356,6 +363,9 @@ fn draw_settings(frame: &mut Frame, app: &mut App) {
                 SettingsRow::NexumUrl => ("Nexum URL", app.nexum_value(*row)),
                 SettingsRow::NexumKey => ("Nexum key", app.nexum_value(*row)),
                 SettingsRow::NexumMap => ("Nexum map", app.nexum_value(*row)),
+                // One "EVE-Scout" label for the two hub rows.
+                SettingsRow::Thera => ("EVE-Scout", format!("Thera: {}", on_off(app.settings.hubs.thera))),
+                SettingsRow::Turnur => ("", format!("Turnur: {}", on_off(app.settings.hubs.turnur))),
                 SettingsRow::AddFavourite => {
                     let label = if app.settings.favourites.is_empty() { "Favourites" } else { "" };
                     return ListItem::new(Line::from(vec![
