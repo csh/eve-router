@@ -168,6 +168,7 @@ mod tests {
             mode: Mode::Shortest,
             top: 3,
             wormholes: true,
+            hubs: Default::default(),
             bridges: true,
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],

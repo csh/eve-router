@@ -642,6 +642,7 @@ mod tests {
             mode: Mode::Shortest,
             top: 1,
             wormholes: true,
+            hubs: Default::default(),
             bridges: false,
             rules: BridgeRules::default(),
             favourites: Vec::new(),

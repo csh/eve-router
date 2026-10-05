@@ -144,6 +144,34 @@ impl Wormhole {
     }
 }
 
+/// Thera, the wormhole hub in J-space. It has no stargates.
+pub const THERA: u32 = 31000005;
+/// Turnur, the wormhole hub in lowsec. It has stargates.
+pub const TURNUR: u32 = 30002086;
+
+/// The switches of the wormhole hubs. Each hub has a different risk, so each has its own switch.
+/// A switch acts on each wormhole with an end in the hub, from all sources. Gates stay open.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Hubs {
+    pub thera: bool,
+    pub turnur: bool,
+}
+
+impl Default for Hubs {
+    fn default() -> Self {
+        Hubs { thera: true, turnur: true }
+    }
+}
+
+impl Hubs {
+    /// False if the wormhole has an end in a hub that is off.
+    pub fn allows(self, w: &Wormhole) -> bool {
+        let ends_in = |id| w.a == id || w.b == id;
+        (self.thera || !ends_in(THERA)) && (self.turnur || !ends_in(TURNUR))
+    }
+}
+
 /// The converted data of one source. The disk cache holds this record.
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct SourceData {
@@ -285,6 +313,20 @@ pub mod tests {
             sigs: None,
             sources: vec![SourceId::Nexum],
         }
+    }
+
+    #[test]
+    fn hubs_allow_by_end() {
+        let all = Hubs::default();
+        assert_eq!(all, Hubs { thera: true, turnur: true });
+        let no_thera = Hubs { thera: false, ..all };
+        let no_turnur = Hubs { turnur: false, ..all };
+        // Jita to Thera, Turnur to Thera, and Jita to Amarr.
+        let (to_thera, both, other) = (hole(30000142, THERA), hole(TURNUR, THERA), hole(30000142, 30002187));
+        assert!(all.allows(&to_thera) && all.allows(&both));
+        assert!(!no_thera.allows(&to_thera) && !no_thera.allows(&both));
+        assert!(no_turnur.allows(&to_thera) && !no_turnur.allows(&both));
+        assert!(no_thera.allows(&other) && no_turnur.allows(&other));
     }
 
     #[test]

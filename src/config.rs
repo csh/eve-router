@@ -1,6 +1,7 @@
 //! The `eve-router.json` file. CLI flags override its values.
 
 use crate::route::Mode;
+use crate::wormhole::Hubs;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
@@ -103,6 +104,8 @@ pub struct Config {
     pub mode: Option<Mode>,
     pub top: Option<usize>,
     pub nexum: NexumConfig,
+    /// The Thera and Turnur switches. Both are on in a file without them.
+    pub eve_scout: Hubs,
 }
 
 impl Config {
@@ -213,5 +216,13 @@ mod tests {
             assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         }
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn hub_switches_default_on() {
+        // An old file has no "eve_scout" object. A file can set one switch only.
+        assert_eq!(serde_json::from_str::<Config>("{}").unwrap().eve_scout, Hubs { thera: true, turnur: true });
+        let cfg: Config = serde_json::from_str(r#"{"eve_scout": {"thera": false}}"#).unwrap();
+        assert_eq!(cfg.eve_scout, Hubs { thera: false, turnur: true });
     }
 }

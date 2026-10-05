@@ -2,6 +2,7 @@
 
 use crate::ansiblex::BridgeRules;
 use crate::universe::{Band, Link, Universe, band};
+use crate::wormhole::Hubs;
 use petgraph::algo::{astar, dijkstra};
 use petgraph::graph::{EdgeIndex, EdgeReference, NodeIndex};
 use petgraph::visit::{EdgeFiltered, EdgeRef};
@@ -127,7 +128,8 @@ impl<'a> Router<'a> {
     /// Calculate the node costs and the edge permissions one time, in parallel.
     /// Each search then reads them instead of calculating them again.
     /// `now` (Unix seconds) sets which wormholes are expired.
-    pub fn new(uni: &'a Universe, mode: Mode, wormholes: bool, bridges: bool, rules: BridgeRules, now: u64) -> Self {
+    /// `hubs` switches the wormholes of each hub (Thera, Turnur) on and off.
+    pub fn new(uni: &'a Universe, mode: Mode, wormholes: bool, hubs: Hubs, bridges: bool, rules: BridgeRules, now: u64) -> Self {
         let graph = &uni.graph;
         let node_cost = graph
             .raw_nodes()
@@ -148,7 +150,7 @@ impl<'a> Router<'a> {
             .par_iter()
             .map(|e| match &e.weight {
                 Link::Stargate => true,
-                Link::Wormhole(w) => wormholes && w.usable(now, hull_kg),
+                Link::Wormhole(w) => wormholes && hubs.allows(w) && w.usable(now, hull_kg),
                 Link::JumpBridge => bridges && rules.allowed(uni, e.source()),
             })
             .collect();
@@ -325,11 +327,11 @@ mod tests {
     use crate::universe::tests::universe;
 
     fn router(mode: Mode) -> Router<'static> {
-        Router::new(universe(), mode, true, true, BridgeRules::default(), 0)
+        Router::new(universe(), mode, true, Hubs::default(), true, BridgeRules::default(), 0)
     }
 
     use crate::ansiblex::find_hull;
-    use crate::wormhole::{Expiry, MassStatus, Size, Wormhole, tests::hole};
+    use crate::wormhole::{Expiry, Hubs, MassStatus, Size, THERA, TURNUR, Wormhole, tests::hole};
     use std::sync::OnceLock;
 
     /// The expiry of the Hek-Perimeter wormhole.
@@ -347,16 +349,24 @@ mod tests {
                 Wormhole { size: Some(Size::Small), ..hole(id("Dodixie"), id("Hek")) },
                 Wormhole { mass: Some(MassStatus::Critical), ..hole(id("Rens"), id("Amarr")) },
                 Wormhole { expiry: Some(Expiry { at: ENDS, exact: true }), ..hole(id("Hek"), id("Perimeter")) },
+                // Ashab to Pator through Thera, and Turnur to Oursulaert.
+                hole(id("Ashab"), THERA),
+                hole(THERA, id("Pator")),
+                hole(TURNUR, id("Oursulaert")),
             ];
-            assert_eq!(uni.add_wormholes(&holes), 4);
+            assert_eq!(uni.add_wormholes(&holes), 7);
             uni
         })
     }
 
     fn jumps(hull: Option<&str>, from: &str, to: &str, now: u64) -> usize {
+        hub_jumps(Hubs::default(), hull, from, to, now)
+    }
+
+    fn hub_jumps(hubs: Hubs, hull: Option<&str>, from: &str, to: &str, now: u64) -> usize {
         let uni = holes_universe();
         let rules = BridgeRules { capital: None, hull: hull.map(|h| find_hull(h).unwrap()), max_cap: None };
-        let router = Router::new(uni, Mode::Shortest, true, false, rules, now);
+        let router = Router::new(uni, Mode::Shortest, true, hubs, false, rules, now);
         let nodes = [uni.exact(from).unwrap(), uni.exact(to).unwrap()];
         router.routes(&nodes, 1).unwrap()[0].jumps
     }
@@ -387,9 +397,26 @@ mod tests {
     #[test]
     fn wormholes_off() {
         let uni = holes_universe();
-        let router = Router::new(uni, Mode::Shortest, false, false, BridgeRules::default(), 0);
+        let router = Router::new(uni, Mode::Shortest, false, Hubs::default(), false, BridgeRules::default(), 0);
         let nodes = [uni.exact("Dodixie").unwrap(), uni.exact("Hek").unwrap()];
         assert!(router.routes(&nodes, 1).unwrap()[0].jumps > 1);
+    }
+
+    #[test]
+    fn thera_off_blocks_thera_wormholes() {
+        let on = Hubs::default();
+        assert_eq!(hub_jumps(on, None, "Ashab", "Pator", 0), 2);
+        assert!(hub_jumps(Hubs { thera: false, ..on }, None, "Ashab", "Pator", 0) > 2);
+        // The Turnur switch does not act on Thera.
+        assert_eq!(hub_jumps(Hubs { turnur: false, ..on }, None, "Ashab", "Pator", 0), 2);
+    }
+
+    #[test]
+    fn turnur_off_keeps_turnur_gates() {
+        let on = Hubs::default();
+        assert_eq!(hub_jumps(on, None, "Turnur", "Oursulaert", 0), 1);
+        // The wormhole is off, but the gates into Turnur stay, so a longer route exists.
+        assert!(hub_jumps(Hubs { turnur: false, ..on }, None, "Turnur", "Oursulaert", 0) > 1);
     }
 
     fn node(name: &str) -> NodeIndex {

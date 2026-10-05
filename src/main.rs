@@ -69,6 +69,8 @@ pub struct Settings {
     pub mode: Mode,
     pub top: usize,
     pub wormholes: bool,
+    /// The Thera and Turnur switches.
+    pub hubs: wormhole::Hubs,
     pub bridges: bool,
     pub rules: BridgeRules,
     /// The sidebar destinations.
@@ -79,7 +81,7 @@ impl Settings {
     /// A router for the settings. `now` (Unix seconds) sets which wormholes are expired.
     pub fn router<'a>(&self, uni: &'a Universe, now: u64) -> Router<'a> {
         let bridges = self.bridges && self.rules.blocked_reason().is_none();
-        Router::new(uni, self.mode, self.wormholes, bridges, self.rules, now)
+        Router::new(uni, self.mode, self.wormholes, self.hubs, bridges, self.rules, now)
     }
 }
 
@@ -164,6 +166,7 @@ fn run() -> Result<(), String> {
         mode: cfg.mode.unwrap_or(Mode::Shortest),
         top: cfg.top.unwrap_or(5).max(1),
         wormholes: true,
+        hubs: cfg.eve_scout,
         bridges: true,
         rules: BridgeRules { capital, hull, max_cap: cfg.max_cap_tj },
         favourites: resolve_all(&uni, &favourite_names(&cfg))?,
@@ -277,6 +280,7 @@ mod tests {
             mode: Mode::Shortest,
             top: 3,
             wormholes: true,
+            hubs: Default::default(),
             bridges: true,
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| find_hull(h).unwrap()), max_cap: None },
             favourites: Vec::new(),
