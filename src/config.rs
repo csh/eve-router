@@ -121,14 +121,19 @@ impl Config {
             fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
         let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))?;
-        // The file holds the Nexum key, so only the owner can read it.
+        // The file holds the Nexum key, so only the owner can read it. The file gets its
+        // mode before the router writes the key. No other user can read the key at any time.
         #[cfg(unix)]
         if self.nexum.key.is_some() {
-            use std::os::unix::fs::PermissionsExt;
-            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|e| format!("{}: {e}", path.display()))?;
+            use std::io::Write;
+            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
+            let err = |e: std::io::Error| format!("{}: {e}", path.display());
+            let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path).map_err(err)?;
+            // The mode above applies only to a new file. This call fixes an old file.
+            file.set_permissions(fs::Permissions::from_mode(0o600)).map_err(err)?;
+            return file.write_all((text + "\n").as_bytes()).map_err(err);
         }
-        Ok(())
+        fs::write(path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
     }
 }
 
