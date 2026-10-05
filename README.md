@@ -8,6 +8,7 @@ A terminal route planner for EVE Online.
 - Automatic updates of required SDE files.
 - Calculate the top-n routes through any number of midpoints with similar navigation options as ingame: shortest, prefer highsec and less secure.
 - Wormhole connections from a Nexum map, fetched at startup. The router uses the wormhole size, mass status and expiry.
+- The signature of each wormhole jump, for example `Wormhole V898 · ABC · XL`.
 - Thera and Turnur wormholes from the public [EVE-Scout](https://www.eve-scout.com/) feed, fetched at startup. Each hub has its own switch.
 
 ### Work in Progress
@@ -45,6 +46,10 @@ At startup, the router gets the Nexum map and keeps a copy in the platform cache
 `--nexum <file>` reads a map export and sends no request.
 
 The router also gets the EVE-Scout feed at each startup, with the same cache and fallback. The feed is public and needs no key. Each entry gives an exact expiry, both signatures and a ship size, but no mass status.
+
+#### Signatures
+
+A route step shows the first three letters of the signature in the system that the jump leaves. EVE-Scout gives both signatures. For Nexum, the router gets the signatures of each system at a wormhole end, with 8 requests at a time. A connection uses the signature that a scout linked to it. Else it uses the one wormhole signature whose "leads to" text is the name of the other system. When two connections join the same systems, or two signatures lead to the same name, the router shows no signature. `--nexum <file>` gives no signatures.
 
 The Thera and Turnur switches act on each wormhole with an end in that hub, from Nexum or EVE-Scout. The gates into Turnur stay open. In `eve-router.json`:
 
