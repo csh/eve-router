@@ -447,11 +447,20 @@ mod tests {
 
     #[test]
     fn file_wins_over_settings() {
-        let file = PathBuf::from("tests/fixtures/nexum-api.json");
-        let pending = start(Some(file.clone()), &cfg("http://127.0.0.1:9"), temp("eve-router-test-file"), FETCHED);
+        // The file time is the fetch time, so the copy gets the time FETCHED.
+        let cache = temp("eve-router-test-file");
+        let file = cache.with_file_name("map.json");
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::copy("tests/fixtures/nexum-api.json", &file).unwrap();
+        let handle = std::fs::File::options().write(true).open(&file).unwrap();
+        handle.set_modified(UNIX_EPOCH + Duration::from_secs(FETCHED)).unwrap();
+        drop(handle);
+        let pending = start(Some(file.clone()), &cfg("http://127.0.0.1:9"), cache, FETCHED);
         assert!(matches!(&pending, Pending::File(p) if *p == file));
         let load = finish(pending, |id| id != 39_999_999, &types()).unwrap();
-        assert_eq!(load.data.unwrap().holes.len(), 5);
+        let data = load.data.unwrap();
+        assert_eq!(data.holes.len(), 5);
+        assert_eq!(data.fetched_at, FETCHED);
     }
 
     #[test]
