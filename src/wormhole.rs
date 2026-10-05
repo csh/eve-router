@@ -150,6 +150,10 @@ pub struct SourceData {
     pub source: SourceId,
     /// Unix seconds.
     pub fetched_at: u64,
+    /// Where the data came from, for example the Nexum map URL. A cache is for one origin only.
+    /// An old cache file has no origin.
+    #[serde(default)]
+    pub origin: Option<String>,
     pub holes: Vec<Wormhole>,
 }
 
@@ -361,7 +365,7 @@ pub mod tests {
     }
 
     fn data(source: SourceId, holes: Vec<Wormhole>) -> SourceData {
-        SourceData { source, fetched_at: 0, holes }
+        SourceData { source, fetched_at: 0, origin: None, holes }
     }
 
     #[test]

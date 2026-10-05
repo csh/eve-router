@@ -49,7 +49,7 @@ The router does not use a wormhole when:
 - its expiry time is past,
 - the hull mass is more than the per-jump limit of the wormhole.
 
-The size check uses the hull mass from the SDE. Fitted modules, for example plates and propulsion modules, add mass. The check does not know about them. A wormhole of a known type uses the per-jump limit of that type. A K162 or a wormhole with no type uses the lowest limit of its size class.
+The size check uses the hull mass from the SDE. Fitted modules, for example plates and propulsion modules, add mass. The check does not know about them. A wormhole of a known type uses the per-jump limit of that type. A K162 or a wormhole with no type uses the lowest limit of its size class. If you set no hull, the router does no size check.
 
 ## Static data
 

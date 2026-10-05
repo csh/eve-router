@@ -232,7 +232,7 @@ pub fn convert(map: &NexumMap, known: impl Fn(u32) -> bool, types: &WormholeType
             sources: vec![SourceId::Nexum],
         });
     }
-    (SourceData { source: SourceId::Nexum, fetched_at, holes }, report)
+    (SourceData { source: SourceId::Nexum, fetched_at, origin: None, holes }, report)
 }
 
 /// The wormhole data of the Nexum source, for the startup and the sidebar.
@@ -267,7 +267,7 @@ pub enum Pending {
     /// A cache that is less than 5 minutes old. The router sends no request.
     Cache(SourceData),
     /// A fetch on a thread. The cache is the fallback for a failure.
-    Fetch { thread: JoinHandle<Result<String, FetchError>>, started: u64, cache: Option<SourceData>, cache_path: PathBuf },
+    Fetch { thread: JoinHandle<Result<String, FetchError>>, started: u64, origin: Option<String>, cache: Option<SourceData>, cache_path: PathBuf },
 }
 
 /// Start the Nexum load: a map file first, then a fresh cache, then a fetch on a thread.
@@ -278,13 +278,15 @@ pub fn start(file: Option<PathBuf>, cfg: &NexumConfig, cache_path: PathBuf, now:
     if cfg.complete().is_none() {
         return Pending::None;
     }
-    let cache = sources::read_cache(&cache_path);
+    // A cache is for one map. Another source, another map or no origin counts as no cache.
+    let origin = map_url(cfg);
+    let cache = sources::read_cache(&cache_path).filter(|d| d.source == SourceId::Nexum && d.origin == origin);
     if let Some(data) = cache.as_ref().filter(|d| sources::cache_is_fresh(d, now)) {
         return Pending::Cache(data.clone());
     }
     let cfg = cfg.clone();
     let thread = std::thread::spawn(move || fetch_map(&cfg, sources::TIMEOUT));
-    Pending::Fetch { thread, started: now, cache, cache_path }
+    Pending::Fetch { thread, started: now, origin, cache, cache_path }
 }
 
 /// Finish the Nexum load after the SDE loads. Only a bad map file gives an error.
@@ -294,12 +296,13 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
         Pending::None => Ok(Load::default()),
         Pending::File(path) => load_file(&path, known, types),
         Pending::Cache(data) => Ok(Load { data: Some(data), ..Load::default() }),
-        Pending::Fetch { thread, started, cache, cache_path } => {
+        Pending::Fetch { thread, started, origin, cache, cache_path } => {
             let fetched = thread.join().unwrap_or_else(|_| Err(FetchError::Offline("the fetch thread failed".into())));
             let mut report = NexumReport::default();
             let converted = fetched.and_then(|text| {
                 let map = parse_map(&text).map_err(FetchError::Offline)?;
-                let (data, r) = convert(&map, &known, types, started);
+                let (mut data, r) = convert(&map, &known, types, started);
+                data.origin = origin;
                 report = r;
                 Ok(data)
             });
@@ -432,6 +435,9 @@ mod tests {
         NexumConfig { url: Some(url.into()), key: Some(ApiKey("nxm_test".into())), map_id: Some("m1".into()) }
     }
 
+    /// The map URL of `cfg("http://127.0.0.1:9")`.
+    const MAP1: &str = "http://127.0.0.1:9/api/v1/maps/m1";
+
     fn temp(name: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(name);
         let _ = std::fs::remove_dir_all(&dir);
@@ -466,7 +472,7 @@ mod tests {
     #[test]
     fn fresh_cache_stops_the_fetch() {
         let path = temp("eve-router-test-fresh");
-        let cached = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 60, holes: Vec::new() };
+        let cached = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 60, origin: Some(MAP1.into()), holes: Vec::new() };
         crate::sources::write_cache(&path, &cached).unwrap();
         // Port 9 has no server, so a fetch would fail.
         let pending = start(None, &cfg("http://127.0.0.1:9"), path.clone(), FETCHED);
@@ -493,11 +499,54 @@ mod tests {
     fn failed_fetch_uses_an_old_cache() {
         let (url, _) = serve("401 Unauthorized", "{}", Duration::ZERO);
         let path = temp("eve-router-test-stale");
-        let old = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 3600, holes: Vec::new() };
+        let old = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 3600, origin: Some(format!("{url}/api/v1/maps/m1")), holes: Vec::new() };
         crate::sources::write_cache(&path, &old).unwrap();
         let load = finish(start(None, &cfg(&url), path, FETCHED), |_| true, &types()).unwrap();
         assert_eq!(load.data, Some(old));
         assert_eq!(load.warning.as_deref(), Some("Nexum key rejected"));
+    }
+
+    #[test]
+    fn cache_of_another_map_starts_a_fetch() {
+        let body = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let (url, request) = serve("200 OK", &body, Duration::ZERO);
+        let path = temp("eve-router-test-other-map");
+        // A fresh cache, but for map m2.
+        let other = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 60, origin: Some(format!("{url}/api/v1/maps/m2")), holes: Vec::new() };
+        crate::sources::write_cache(&path, &other).unwrap();
+        let pending = start(None, &cfg(&url), path, FETCHED);
+        assert!(matches!(pending, Pending::Fetch { .. }));
+        let load = finish(pending, |id| id != 39_999_999, &types()).unwrap();
+        assert!(request.recv().unwrap().starts_with("GET /api/v1/maps/m1 HTTP/1.1"));
+        let data = load.data.unwrap();
+        assert_eq!(data.holes.len(), 5);
+        assert_eq!(data.origin, Some(format!("{url}/api/v1/maps/m1")));
+    }
+
+    #[test]
+    fn failed_fetch_ignores_a_cache_of_another_map() {
+        let (url, _) = serve("404 Not Found", "{}", Duration::ZERO);
+        let path = temp("eve-router-test-other-map-fail");
+        let other = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 3600, origin: Some(format!("{url}/api/v1/maps/m2")), holes: Vec::new() };
+        crate::sources::write_cache(&path, &other).unwrap();
+        let load = finish(start(None, &cfg(&url), path, FETCHED), |_| true, &types()).unwrap();
+        assert_eq!(load.data, None);
+        assert_eq!(load.warning.as_deref(), Some("Nexum map not found"));
+    }
+
+    #[test]
+    fn cache_without_origin_is_not_used() {
+        let (url, request) = serve("404 Not Found", "{}", Duration::ZERO);
+        let path = temp("eve-router-test-no-origin");
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        let old = format!(r#"{{"source":"Nexum","fetched_at":{},"holes":[]}}"#, FETCHED - 60);
+        std::fs::write(&path, old).unwrap();
+        assert!(crate::sources::read_cache(&path).is_some());
+        let pending = start(None, &cfg(&url), path, FETCHED);
+        assert!(matches!(pending, Pending::Fetch { cache: None, .. }));
+        let load = finish(pending, |_| true, &types()).unwrap();
+        assert!(request.recv().unwrap().starts_with("GET /api/v1/maps/m1"));
+        assert_eq!(load.data, None);
     }
 
     #[test]

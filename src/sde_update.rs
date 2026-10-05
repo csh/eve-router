@@ -53,7 +53,7 @@ pub fn ensure(dir: &Path) -> Result<Outcome, String> {
     }
     let source = HttpSource { agent, url: format!("{BASE_URL}/eve-online-static-data-{latest}-jsonl.zip") };
     let bytes = download(&source, dir)?;
-    // The local build can exist without ships.json, from a version before the ship table.
+    // The local build can exist without ships.json or wormholes.json, from a version before these derived tables.
     Ok(Outcome::Updated { from: crate::sde::build_number(dir), to: latest, bytes })
 }
 

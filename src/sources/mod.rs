@@ -214,7 +214,7 @@ mod tests {
     }
 
     fn sample(fetched_at: u64) -> SourceData {
-        SourceData { source: SourceId::Nexum, fetched_at, holes: vec![hole(30000142, 31002230)] }
+        SourceData { source: SourceId::Nexum, fetched_at, origin: None, holes: vec![hole(30000142, 31002230)] }
     }
 
     #[test]

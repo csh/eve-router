@@ -637,7 +637,7 @@ mod tests {
     use crate::sources::test_server::serve;
     use crate::universe::tests::universe;
 
-    fn app(cfg: Config) -> App<'static> {
+    fn app(name: &str, cfg: Config) -> App<'static> {
         let settings = Settings {
             mode: Mode::Shortest,
             top: 1,
@@ -646,7 +646,7 @@ mod tests {
             rules: BridgeRules::default(),
             favourites: Vec::new(),
         };
-        let path = std::env::temp_dir().join("eve-router-test-nexum-settings.json");
+        let path = std::env::temp_dir().join(format!("eve-router-test-{name}.json"));
         let shortcuts = Shortcuts::new(universe(), &Default::default(), &Default::default());
         App::new(universe(), settings, cfg, path, String::new(), shortcuts)
     }
@@ -665,7 +665,7 @@ mod tests {
 
     #[test]
     fn edit_nexum_url_and_key() {
-        let mut app = app(Config::default());
+        let mut app = app("edit-url-key", Config::default());
         open_row(&mut app, SettingsRow::NexumUrl);
         app.on_key(KeyEvent::from(KeyCode::Enter));
         type_text(&mut app, "ftp://x");
@@ -692,7 +692,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.nexum.url = Some(url);
         cfg.nexum.key = Some(ApiKey("nxm_test_key".into()));
-        let mut app = app(cfg);
+        let mut app = app("pick-map", cfg);
         open_row(&mut app, SettingsRow::NexumMap);
         app.on_key(KeyEvent::from(KeyCode::Enter));
         // The run loop draws "Loading maps…", then calls load_maps.
@@ -713,7 +713,7 @@ mod tests {
         let mut cfg = Config::default();
         cfg.nexum.url = Some(url);
         cfg.nexum.key = Some(ApiKey("nxm_bad_key".into()));
-        let mut app = app(cfg);
+        let mut app = app("map-error", cfg);
         open_row(&mut app, SettingsRow::NexumMap);
         app.on_key(KeyEvent::from(KeyCode::Enter));
         app.load_maps();
@@ -724,7 +724,7 @@ mod tests {
 
     #[test]
     fn map_row_needs_url_and_key() {
-        let mut app = app(Config::default());
+        let mut app = app("map-needs-key", Config::default());
         open_row(&mut app, SettingsRow::NexumMap);
         app.on_key(KeyEvent::from(KeyCode::Enter));
         assert!(!app.load_maps_pending);
