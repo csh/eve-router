@@ -1,21 +1,19 @@
 //! The Nexum source: the map from `GET /api/v1/maps/:mapId`, converted to wormhole records.
-//! A manual map export has the same shape, so `--nexum <file>` uses the same converter.
+//! The router reads Nexum data only from the API.
 //! The size and expiry rules copy Nexum (`server/src/routes/maps.ts` and
 //! `server/src/data/whLifetimes.ts`).
 
 use crate::config::NexumConfig;
 use crate::sources::{self, FetchError};
-use crate::wormhole::{Expiry, HOUR, MassStatus, Size, SourceData, SourceId, Wormhole, now, parse_utc};
+use crate::wormhole::{Expiry, HOUR, MassStatus, Size, SourceData, SourceId, Wormhole, parse_utc};
 use crate::wormhole_types::WormholeTypes;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
-use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 use std::sync::Mutex;
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::thread::JoinHandle;
 use std::time::Duration;
-use std::time::UNIX_EPOCH;
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
@@ -317,8 +315,10 @@ pub fn convert(map: &NexumMap, sigs: &SystemSigs, known: impl Fn(u32) -> bool, t
             report.expired += 1;
             continue;
         }
+        // An empty type text counts as no type.
+        let wh_type = c.wh_type.as_deref().map(str::trim).filter(|t| !t.is_empty());
         // Nexum takes the size from a known type. A K162 or a hole with no type keeps the stored size.
-        let (size, max_jump_kg) = match c.wh_type.as_deref().and_then(|t| types.get(t)) {
+        let (size, max_jump_kg) = match wh_type.and_then(|t| types.get(t)) {
             Some(t) => (Some(Size::from_jump_kg(t.max_jump_kg)), Some(t.max_jump_kg)),
             None => (c.size.as_deref().and_then(parse_size), None),
         };
@@ -334,7 +334,7 @@ pub fn convert(map: &NexumMap, sigs: &SystemSigs, known: impl Fn(u32) -> bool, t
             max_jump_kg,
             mass: c.mass_status.as_deref().and_then(parse_mass),
             expiry,
-            wh_type: c.wh_type.clone(),
+            wh_type: wh_type.map(str::to_string),
             sig_a,
             sig_b,
             sources: vec![SourceId::Nexum],
@@ -352,26 +352,10 @@ pub struct Load {
     pub warning: Option<String>,
 }
 
-/// Read a map file (`--nexum`, or an export next to the config file).
-/// The time of the file is the fetch time.
-pub fn load_file(path: &Path, known: impl Fn(u32) -> bool, types: &WormholeTypes) -> Result<Load, String> {
-    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    let map = parse_map(&text).map_err(|e| format!("{}: {e}", path.display()))?;
-    let fetched_at = fs::metadata(path)
-        .and_then(|m| m.modified())
-        .ok()
-        .and_then(|t| t.duration_since(UNIX_EPOCH).ok())
-        .map_or_else(now, |d| d.as_secs());
-    let (data, report) = convert(&map, &SystemSigs::new(), known, types, fetched_at);
-    Ok(Load { data: Some(data), report, warning: None })
-}
-
 /// The Nexum load, between the start and the end of the SDE load.
 pub enum Pending {
-    /// No map file and no complete Nexum settings.
+    /// No complete Nexum settings.
     None,
-    /// A map file. The router sends no request.
-    File(PathBuf),
     /// A cache that is less than 5 minutes old. The router sends no request.
     Cache(SourceData),
     /// A fetch on a thread. The cache is the fallback for a failure.
@@ -394,11 +378,8 @@ fn fetch_all(cfg: &NexumConfig) -> Result<Fetched, FetchError> {
     Ok(Fetched { map, sigs, sig_failures })
 }
 
-/// Start the Nexum load: a map file first, then a fresh cache, then a fetch on a thread.
-pub fn start(file: Option<PathBuf>, cfg: &NexumConfig, cache_path: PathBuf, now: u64) -> Pending {
-    if let Some(path) = file {
-        return Pending::File(path);
-    }
+/// Start the Nexum load: a fresh cache, else a fetch on a thread.
+pub fn start(cfg: &NexumConfig, cache_path: PathBuf, now: u64) -> Pending {
     if cfg.complete().is_none() {
         return Pending::None;
     }
@@ -413,13 +394,11 @@ pub fn start(file: Option<PathBuf>, cfg: &NexumConfig, cache_path: PathBuf, now:
     Pending::Fetch { thread, started: now, origin, cache, cache_path }
 }
 
-/// Finish the Nexum load after the SDE loads. Only a bad map file gives an error.
-/// A fetch problem gives the cache and a warning.
-pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTypes) -> Result<Load, String> {
+/// Finish the Nexum load after the SDE loads. A fetch problem gives the cache and a warning.
+pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTypes) -> Load {
     match pending {
-        Pending::None => Ok(Load::default()),
-        Pending::File(path) => load_file(&path, known, types),
-        Pending::Cache(data) => Ok(Load { data: Some(data), ..Load::default() }),
+        Pending::None => Load::default(),
+        Pending::Cache(data) => Load { data: Some(data), ..Load::default() },
         Pending::Fetch { thread, started, origin, cache, cache_path } => {
             let fetched = thread.join().unwrap_or_else(|_| Err(FetchError::Offline("the fetch thread failed".into())));
             let mut report = NexumReport::default();
@@ -438,7 +417,7 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
                 n => Some(format!("Nexum signatures: {n} systems not loaded")),
             };
             let warnings: Vec<String> = chosen.warning.into_iter().chain(sig_warning).collect();
-            Ok(Load { data: chosen.data, report, warning: (!warnings.is_empty()).then(|| warnings.join(" · ")) })
+            Load { data: chosen.data, report, warning: (!warnings.is_empty()).then(|| warnings.join(" · ")) }
         }
     }
 }
@@ -506,6 +485,20 @@ mod tests {
         let (data, _) = convert(&map, &fixture_sigs(), |_| true, &types(), FETCHED);
         let pairs: Vec<_> = data.holes.iter().filter(|h| (h.a, h.b) == (30000144, 31000005)).map(sig_pair).collect();
         assert_eq!(pairs, [(None, None), (None, None)]);
+    }
+
+    #[test]
+    fn empty_type_is_no_type() {
+        // The API gives an empty text for a type that a scout did not set.
+        let text = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let mut map = parse_map(&text).unwrap();
+        let i = map.connections.iter().position(|c| c.wh_type.as_deref() == Some("B274")).unwrap();
+        map.connections[i].wh_type = Some(" ".into());
+        let (data, _) = convert(&map, &SystemSigs::new(), |_| true, &types(), FETCHED);
+        let hole = find(&data, 30000142, 31002230);
+        assert_eq!(hole.wh_type, None);
+        // With no type, the stored size gives the class.
+        assert_eq!((hole.size, hole.max_jump_kg), (Some(Size::Medium), None));
     }
 
     #[test]
@@ -595,16 +588,6 @@ mod tests {
         assert_eq!(status_hours("expired"), None);
     }
 
-    #[test]
-    fn old_export_still_parses() {
-        // The first fixture has fewer fields. Each missing field is `None`.
-        let text = std::fs::read_to_string("tests/fixtures/nexum.json").unwrap();
-        let (data, report) = convert(&parse_map(&text).unwrap(), &SystemSigs::new(), |_| true, &types(), FETCHED);
-        assert_eq!(data.holes.len(), 1);
-        assert_eq!(report.broken, 1);
-        assert_eq!(report.expired, 1);
-    }
-
     use crate::config::{ApiKey, NexumConfig};
     use crate::sources::test_server::serve;
     use std::collections::HashMap;
@@ -628,25 +611,7 @@ mod tests {
     fn partial_settings_do_not_fetch() {
         let mut partial = cfg("http://127.0.0.1:9");
         partial.key = None;
-        assert!(matches!(start(None, &partial, temp("eve-router-test-partial"), FETCHED), Pending::None));
-    }
-
-    #[test]
-    fn file_wins_over_settings() {
-        // The file time is the fetch time, so the copy gets the time FETCHED.
-        let cache = temp("eve-router-test-file");
-        let file = cache.with_file_name("map.json");
-        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
-        std::fs::copy("tests/fixtures/nexum-api.json", &file).unwrap();
-        let handle = std::fs::File::options().write(true).open(&file).unwrap();
-        handle.set_modified(UNIX_EPOCH + Duration::from_secs(FETCHED)).unwrap();
-        drop(handle);
-        let pending = start(Some(file.clone()), &cfg("http://127.0.0.1:9"), cache, FETCHED);
-        assert!(matches!(&pending, Pending::File(p) if *p == file));
-        let load = finish(pending, |id| id != 39_999_999, &types()).unwrap();
-        let data = load.data.unwrap();
-        assert_eq!(data.holes.len(), 5);
-        assert_eq!(data.fetched_at, FETCHED);
+        assert!(matches!(start(&partial, temp("eve-router-test-partial"), FETCHED), Pending::None));
     }
 
     #[test]
@@ -655,8 +620,8 @@ mod tests {
         let cached = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 60, origin: Some(MAP1.into()), holes: Vec::new() };
         crate::sources::write_cache(&path, &cached).unwrap();
         // Port 9 has no server, so a fetch would fail.
-        let pending = start(None, &cfg("http://127.0.0.1:9"), path.clone(), FETCHED);
-        let load = finish(pending, |_| true, &types()).unwrap();
+        let pending = start(&cfg("http://127.0.0.1:9"), path.clone(), FETCHED);
+        let load = finish(pending, |_| true, &types());
         assert_eq!(load.data, Some(cached));
         assert_eq!(load.warning, None);
     }
@@ -666,7 +631,7 @@ mod tests {
         let body = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
         let (url, request) = serve("200 OK", &body, Duration::ZERO);
         let path = temp("eve-router-test-fetch");
-        let load = finish(start(None, &cfg(&url), path.clone(), FETCHED), |id| id != 39_999_999, &types()).unwrap();
+        let load = finish(start(&cfg(&url), path.clone(), FETCHED), |id| id != 39_999_999, &types());
         assert!(request.recv().unwrap().starts_with("GET /api/v1/maps/m1 HTTP/1.1"));
         let data = load.data.unwrap();
         assert_eq!(data.holes.len(), 5);
@@ -681,7 +646,7 @@ mod tests {
         let path = temp("eve-router-test-stale");
         let old = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 3600, origin: Some(format!("{url}/api/v1/maps/m1")), holes: Vec::new() };
         crate::sources::write_cache(&path, &old).unwrap();
-        let load = finish(start(None, &cfg(&url), path, FETCHED), |_| true, &types()).unwrap();
+        let load = finish(start(&cfg(&url), path, FETCHED), |_| true, &types());
         assert_eq!(load.data, Some(old));
         assert_eq!(load.warning.as_deref(), Some("Nexum key rejected"));
     }
@@ -694,9 +659,9 @@ mod tests {
         // A fresh cache, but for map m2.
         let other = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 60, origin: Some(format!("{url}/api/v1/maps/m2")), holes: Vec::new() };
         crate::sources::write_cache(&path, &other).unwrap();
-        let pending = start(None, &cfg(&url), path, FETCHED);
+        let pending = start(&cfg(&url), path, FETCHED);
         assert!(matches!(pending, Pending::Fetch { .. }));
-        let load = finish(pending, |id| id != 39_999_999, &types()).unwrap();
+        let load = finish(pending, |id| id != 39_999_999, &types());
         assert!(request.recv().unwrap().starts_with("GET /api/v1/maps/m1 HTTP/1.1"));
         let data = load.data.unwrap();
         assert_eq!(data.holes.len(), 5);
@@ -709,7 +674,7 @@ mod tests {
         let path = temp("eve-router-test-other-map-fail");
         let other = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 3600, origin: Some(format!("{url}/api/v1/maps/m2")), holes: Vec::new() };
         crate::sources::write_cache(&path, &other).unwrap();
-        let load = finish(start(None, &cfg(&url), path, FETCHED), |_| true, &types()).unwrap();
+        let load = finish(start(&cfg(&url), path, FETCHED), |_| true, &types());
         assert_eq!(load.data, None);
         assert_eq!(load.warning.as_deref(), Some("Nexum map not found"));
     }
@@ -722,9 +687,9 @@ mod tests {
         let old = format!(r#"{{"source":"Nexum","fetched_at":{},"holes":[]}}"#, FETCHED - 60);
         std::fs::write(&path, old).unwrap();
         assert!(crate::sources::read_cache(&path).is_some());
-        let pending = start(None, &cfg(&url), path, FETCHED);
+        let pending = start(&cfg(&url), path, FETCHED);
         assert!(matches!(pending, Pending::Fetch { cache: None, .. }));
-        let load = finish(pending, |_| true, &types()).unwrap();
+        let load = finish(pending, |_| true, &types());
         assert!(request.recv().unwrap().starts_with("GET /api/v1/maps/m1"));
         assert_eq!(load.data, None);
     }
@@ -747,7 +712,7 @@ mod tests {
     fn fetch_gets_the_signatures() {
         let (url, requests) = crate::sources::test_routes::serve_routes(sig_routes());
         let path = temp("eve-router-test-sigs");
-        let load = finish(start(None, &cfg(&url), path.clone(), FETCHED), |id| id != 39_999_999, &types()).unwrap();
+        let load = finish(start(&cfg(&url), path.clone(), FETCHED), |id| id != 39_999_999, &types());
         // One map request, and one signature request for each of the 9 wormhole ends.
         // All are GET requests with the key.
         let requests: Vec<String> = requests.try_iter().collect();
@@ -768,7 +733,7 @@ mod tests {
     #[test]
     fn bad_json_counts_as_offline() {
         let (url, _) = serve("200 OK", "<html>", Duration::ZERO);
-        let load = finish(start(None, &cfg(&url), temp("eve-router-test-badjson"), FETCHED), |_| true, &types()).unwrap();
+        let load = finish(start(&cfg(&url), temp("eve-router-test-badjson"), FETCHED), |_| true, &types());
         assert_eq!(load.data, None);
         assert_eq!(load.warning.as_deref(), Some("Nexum offline"));
     }

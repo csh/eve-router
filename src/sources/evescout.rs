@@ -83,8 +83,10 @@ pub fn convert(sigs: &[Signature], known: impl Fn(u32) -> bool, types: &Wormhole
             report.expired += 1;
             continue;
         }
-        // A known type gives the exact limit. Else the scout's ship size gives the class.
-        let (size, max_jump_kg) = match s.wh_type.as_deref().and_then(|t| types.get(t)) {
+        // An empty type text counts as no type. A known type gives the exact limit.
+        // Else the scout's ship size gives the class.
+        let wh_type = s.wh_type.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        let (size, max_jump_kg) = match wh_type.and_then(|t| types.get(t)) {
             Some(t) => (Some(Size::from_jump_kg(t.max_jump_kg)), Some(t.max_jump_kg)),
             None => (s.max_ship_size.as_deref().and_then(parse_size), None),
         };
@@ -97,7 +99,7 @@ pub fn convert(sigs: &[Signature], known: impl Fn(u32) -> bool, types: &Wormhole
             max_jump_kg,
             mass: None,
             expiry,
-            wh_type: s.wh_type.clone(),
+            wh_type: wh_type.map(str::to_string),
             sig_a,
             sig_b,
             sources: vec![SourceId::EveScout],

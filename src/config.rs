@@ -33,8 +33,6 @@ pub fn default_sde_dir() -> PathBuf {
 
 /// The default jump bridge list (SMT format), next to the config file.
 pub const BRIDGES_FILE: &str = "ansiblex.txt";
-/// The default nexum map export, next to the config file.
-pub const NEXUM_FILE: &str = "nexum.json";
 
 /// The overlay file to load: the CLI flag if given, else the default file next to the
 /// config file. A missing default file is not an error. The router then loads no overlay.

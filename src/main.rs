@@ -34,10 +34,6 @@ struct Cli {
     /// Set EVE_ROUTER_SKIP_SDE_CHECK=1 to skip the update check.
     #[arg(long)]
     sde: Option<PathBuf>,
-    /// The config file. The default is eve-router.json in the platform config
-    /// directory, for example %APPDATA%\com.smrkn.eve-router on Windows.
-    #[arg(long)]
-    config: Option<PathBuf>,
     #[arg(long, value_enum)]
     mode: Option<Mode>,
     /// The number of routes.
@@ -55,10 +51,6 @@ struct Cli {
     /// A jump bridge list in SMT format. The default is ansiblex.txt in the config directory.
     #[arg(long)]
     bridges: Option<PathBuf>,
-    /// A Nexum map export. With it, the router reads the file and does not fetch the map.
-    /// Without it, the router uses the Nexum settings, else nexum.json in the config directory.
-    #[arg(long)]
-    nexum: Option<PathBuf>,
     /// Print the routes and exit. Do not start the TUI.
     #[arg(long)]
     print: bool,
@@ -119,7 +111,7 @@ fn main() -> ExitCode {
 
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
-    let cfg_path = cli.config.unwrap_or_else(config::default_path);
+    let cfg_path = config::default_path();
     let mut cfg = Config::load(&cfg_path)?;
     // The CLI flags override the config file.
     cfg.capital = cli.capital.or(cfg.capital);
@@ -129,14 +121,9 @@ fn run() -> Result<(), String> {
     cfg.top = cli.top.or(cfg.top);
 
     // Start the Nexum load before the SDE update, so the fetch runs at the same time.
-    // The order: the --nexum file, then the Nexum settings, then nexum.json next to the config file.
-    let nexum_file = match cli.nexum {
-        Some(path) => Some(path),
-        None if cfg.nexum.complete().is_some() => None,
-        None => config::overlay_path(None, &cfg_path, config::NEXUM_FILE),
-    };
+    // Nexum data comes only from the API.
     let cache_path = sources::cache_path(wormhole::SourceId::Nexum, &cfg_path);
-    let pending = nexum::start(nexum_file, &cfg.nexum, cache_path, wormhole::now());
+    let pending = nexum::start(&cfg.nexum, cache_path, wormhole::now());
     // EVE-Scout is public, so the router always fetches it. The Thera and Turnur switches
     // act at route time, so a switch works with no restart.
     let scout_cache = sources::cache_path(wormhole::SourceId::EveScout, &cfg_path);
@@ -154,7 +141,7 @@ fn run() -> Result<(), String> {
         report = overlay::load_bridges(&mut uni, path)?;
     }
     let types = wormhole_types::load(&sde_dir)?;
-    let wh = nexum::finish(pending, |id| uni.by_id.contains_key(&id), &types)?;
+    let wh = nexum::finish(pending, |id| uni.by_id.contains_key(&id), &types);
     let scout = evescout::finish(scout_pending, |id| uni.by_id.contains_key(&id), &types);
     let all: Vec<wormhole::SourceData> = wh.data.iter().chain(&scout.data).cloned().collect();
     let wormhole_count = uni.add_wormholes(&wormhole::merge(&all, wormhole::now()));
@@ -275,7 +262,7 @@ mod tests {
     fn overlay_universe() -> Universe {
         let mut uni = Universe::from_sde(sde::load(Path::new("sde")).unwrap());
         overlay::load_bridges(&mut uni, Path::new("tests/fixtures/ansiblex.txt")).unwrap();
-        let text = std::fs::read_to_string("tests/fixtures/nexum.json").unwrap();
+        let text = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
         let map = nexum::parse_map(&text).unwrap();
         let types = wormhole_types::load(Path::new("sde")).unwrap();
         let (data, _) = nexum::convert(&map, &Default::default(), |id| uni.by_id.contains_key(&id), &types, FIXTURE_TIME);
