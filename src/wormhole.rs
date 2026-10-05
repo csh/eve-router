@@ -122,12 +122,29 @@ pub struct Wormhole {
     pub expiry: Option<Expiry>,
     /// For example "K162".
     pub wh_type: Option<String>,
-    /// The signature at `a` and the signature at `b`.
-    pub sigs: Option<(String, String)>,
+    /// The signature in system `a`, for example "ABC-123". A scout can give only "ABC".
+    #[serde(default)]
+    pub sig_a: Option<String>,
+    /// The signature in system `b`.
+    #[serde(default)]
+    pub sig_b: Option<String>,
     pub sources: Vec<SourceId>,
 }
 
+/// The three letters of a signature, in capitals: "abc-123" gives "ABC". Empty text gives `None`.
+pub fn sig_letters(sig: &str) -> Option<String> {
+    let letters: String = sig.trim().chars().take_while(|c| c.is_ascii_alphabetic()).take(3).collect();
+    (!letters.is_empty()).then(|| letters.to_ascii_uppercase())
+}
+
 impl Wormhole {
+    /// The three letters of the signature in the system `id`, if `id` is an end and a scout
+    /// gave the signature. A route uses the signature in the system that the jump leaves.
+    pub fn sig_at(&self, id: u32) -> Option<String> {
+        let sig = if id == self.a { &self.sig_a } else if id == self.b { &self.sig_b } else { &None };
+        sig.as_deref().and_then(sig_letters)
+    }
+
     /// The per-jump limit: the exact type value, else the lowest value of the size class.
     pub fn jump_limit_kg(&self) -> Option<f64> {
         self.max_jump_kg.or(self.size.map(Size::max_jump_kg))
@@ -190,8 +207,8 @@ pub struct SourceData {
 /// - A record with an expiry at or before `now` is dropped.
 /// - The records of one source never merge with each other. One source can list two
 ///   wormholes between the same systems.
-/// - Records from two sources merge when they have the same pair, and the same signatures
-///   if both have signatures. A record merges at most one time with each later source.
+/// - Records from two sources merge when they have the same pair, and no end has two known
+///   signatures with different letters. A record merges at most one time with each later source.
 pub fn merge(sources: &[SourceData], now: u64) -> Vec<Wormhole> {
     let mut out: Vec<Wormhole> = Vec::new();
     for data in sources {
@@ -215,11 +232,12 @@ pub fn merge(sources: &[SourceData], now: u64) -> Vec<Wormhole> {
 }
 
 fn same_hole(a: &Wormhole, b: &Wormhole) -> bool {
-    let sigs_match = match (&a.sigs, &b.sigs) {
+    // An end with a known signature in both records must have the same three letters.
+    let agree = |x: &Option<String>, y: &Option<String>| match (x.as_deref().and_then(sig_letters), y.as_deref().and_then(sig_letters)) {
         (Some(x), Some(y)) => x == y,
         _ => true,
     };
-    (a.a, a.b) == (b.a, b.b) && sigs_match
+    (a.a, a.b) == (b.a, b.b) && agree(&a.sig_a, &b.sig_a) && agree(&a.sig_b, &b.sig_b)
 }
 
 /// Merge `h` into `o`: the smaller size and limit, the worse mass status, the earlier expiry,
@@ -241,8 +259,11 @@ fn combine(o: &mut Wormhole, h: &Wormhole) {
     if o.wh_type.is_none() {
         o.wh_type = h.wh_type.clone();
     }
-    if o.sigs.is_none() {
-        o.sigs = h.sigs.clone();
+    if o.sig_a.is_none() {
+        o.sig_a = h.sig_a.clone();
+    }
+    if o.sig_b.is_none() {
+        o.sig_b = h.sig_b.clone();
     }
     for s in &h.sources {
         if !o.sources.contains(s) {
@@ -310,7 +331,8 @@ pub mod tests {
             mass: None,
             expiry: None,
             wh_type: None,
-            sigs: None,
+            sig_a: None,
+            sig_b: None,
             sources: vec![SourceId::Nexum],
         }
     }
@@ -440,7 +462,8 @@ pub mod tests {
             mass: Some(MassStatus::Stable),
             expiry: Some(Expiry { at: 400, exact: true }),
             wh_type: Some("K162".into()),
-            sigs: Some(("ABC-123".into(), "DEF-456".into())),
+            sig_a: Some("ABC-123".into()),
+            sig_b: Some("DEF-456".into()),
             sources: vec![SourceId::EveScout],
             ..hole(1, 2)
         };
@@ -452,16 +475,39 @@ pub mod tests {
         assert_eq!(m.mass, Some(MassStatus::Destabilized));
         assert_eq!(m.expiry, Some(Expiry { at: 400, exact: true }));
         assert_eq!(m.wh_type.as_deref(), Some("K162"));
-        assert_eq!(m.sigs, Some(("ABC-123".into(), "DEF-456".into())));
+        assert_eq!((m.sig_a.as_deref(), m.sig_b.as_deref()), (Some("ABC-123"), Some("DEF-456")));
         assert_eq!(m.sources, vec![SourceId::Nexum, SourceId::EveScout]);
     }
 
     #[test]
     fn merge_keeps_holes_with_other_signatures() {
-        let first = Wormhole { sigs: Some(("ABC-123".into(), "DEF-456".into())), ..hole(1, 2) };
-        let second = Wormhole { sigs: Some(("XYZ-789".into(), "DEF-456".into())), sources: vec![SourceId::EveScout], ..hole(1, 2) };
+        let first = Wormhole { sig_a: Some("ABC-123".into()), sig_b: Some("DEF-456".into()), ..hole(1, 2) };
+        let second = Wormhole { sig_a: Some("XYZ-789".into()), sig_b: Some("DEF-456".into()), sources: vec![SourceId::EveScout], ..hole(1, 2) };
         let merged = merge(&[data(SourceId::Nexum, vec![first]), data(SourceId::EveScout, vec![second])], 0);
         assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn merge_compares_the_three_letters_of_known_ends() {
+        // Nexum knows only the signature at a, as "abc". EVE-Scout knows both ends.
+        let nexum = Wormhole { sig_a: Some("abc".into()), ..hole(1, 2) };
+        let scout = Wormhole { sig_a: Some("ABC-123".into()), sig_b: Some("DEF-456".into()), sources: vec![SourceId::EveScout], ..hole(1, 2) };
+        let merged = merge(&[data(SourceId::Nexum, vec![nexum]), data(SourceId::EveScout, vec![scout.clone()])], 0);
+        assert_eq!(merged.len(), 1);
+        // The first source keeps its value. The second source fills the unknown end.
+        assert_eq!((merged[0].sig_a.as_deref(), merged[0].sig_b.as_deref()), (Some("abc"), Some("DEF-456")));
+        // A signature at b that disagrees stops the merge.
+        let other = Wormhole { sig_b: Some("XYZ-789".into()), ..hole(1, 2) };
+        assert_eq!(merge(&[data(SourceId::Nexum, vec![other]), data(SourceId::EveScout, vec![scout])], 0).len(), 2);
+    }
+
+    #[test]
+    fn signature_at_an_end() {
+        let w = Wormhole { sig_a: Some("ABC-123".into()), sig_b: Some("de".into()), ..hole(10, 20) };
+        assert_eq!(w.sig_at(10).as_deref(), Some("ABC"));
+        assert_eq!(w.sig_at(20).as_deref(), Some("DE"));
+        assert_eq!(w.sig_at(30), None);
+        assert_eq!(Wormhole { sig_a: Some("  ".into()), ..hole(10, 20) }.sig_at(10), None);
     }
 
     #[test]

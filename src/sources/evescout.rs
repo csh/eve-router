@@ -88,9 +88,8 @@ pub fn convert(sigs: &[Signature], known: impl Fn(u32) -> bool, types: &Wormhole
             Some(t) => (Some(Size::from_jump_kg(t.max_jump_kg)), Some(t.max_jump_kg)),
             None => (s.max_ship_size.as_deref().and_then(parse_size), None),
         };
-        let out_sig = s.out_signature.clone().unwrap_or_default();
-        let in_sig = s.in_signature.clone().unwrap_or_default();
-        let sigs = if s.out_system_id <= in_id { (out_sig, in_sig) } else { (in_sig, out_sig) };
+        let (out_sig, in_sig) = (s.out_signature.clone(), s.in_signature.clone());
+        let (sig_a, sig_b) = if s.out_system_id <= in_id { (out_sig, in_sig) } else { (in_sig, out_sig) };
         holes.push(Wormhole {
             a: s.out_system_id.min(in_id),
             b: s.out_system_id.max(in_id),
@@ -99,7 +98,8 @@ pub fn convert(sigs: &[Signature], known: impl Fn(u32) -> bool, types: &Wormhole
             mass: None,
             expiry,
             wh_type: s.wh_type.clone(),
-            sigs: Some(sigs),
+            sig_a,
+            sig_b,
             sources: vec![SourceId::EveScout],
         });
     }
@@ -200,10 +200,10 @@ mod tests {
         assert_eq!(j377.mass, None);
         assert_eq!(j377.sources, vec![SourceId::EveScout]);
         // Turnur has the lower ID, so its signature comes first.
-        assert_eq!(j377.sigs, Some(("IHS-280".into(), "YUR-252".into())));
+        assert_eq!((j377.sig_a.as_deref(), j377.sig_b.as_deref()), (Some("IHS-280"), Some("YUR-252")));
         // Thera to Hulmate: Thera has the higher ID, so its signature comes second.
         let v898 = find(&data, THERA, 30003805);
-        assert_eq!(v898.sigs, Some(("SOB-950".into(), "NTM-070".into())));
+        assert_eq!((v898.sig_a.as_deref(), v898.sig_b.as_deref()), (Some("SOB-950"), Some("NTM-070")));
         // An unknown type uses the ship size, with no exact limit.
         assert_eq!((v898.size, v898.max_jump_kg), (Some(Size::XLarge), None));
         assert_eq!(find(&data, TURNUR, 30045348).size, Some(Size::Capital));

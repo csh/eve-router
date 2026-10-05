@@ -228,7 +228,8 @@ pub fn convert(map: &NexumMap, known: impl Fn(u32) -> bool, types: &WormholeType
             mass: c.mass_status.as_deref().and_then(parse_mass),
             expiry,
             wh_type: c.wh_type.clone(),
-            sigs: None,
+            sig_a: None,
+            sig_b: None,
             sources: vec![SourceId::Nexum],
         });
     }
@@ -372,7 +373,7 @@ mod tests {
         // createdAt 02:00 + 24 h is before the time status limit (12:00 + 24 h).
         assert_eq!(typed.expiry, Some(Expiry { at: FETCHED - 10 * HOUR + 24 * HOUR, exact: false }));
         assert_eq!(typed.sources, vec![SourceId::Nexum]);
-        assert_eq!(typed.sigs, None);
+        assert_eq!((typed.sig_a.as_deref(), typed.sig_b.as_deref()), (None, None));
     }
 
     #[test]
