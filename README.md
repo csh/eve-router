@@ -77,7 +77,7 @@ At startup, the app compares its local build with [the latest SDE build](https:/
 | `mapRegions.jsonl`      | Region names                                                                                                                             |
 | `_sde.jsonl`            | Last known build number                                                                                                                  |
 | `ships.json`            | Distilled from `types.jsonl`, `typeDogma.jsonl` and `groups.jsonl` to maintain a list of Ansiblex jump cost & provide searchable ship UI |
-| `wormholes.json`        | Distilled from `types.jsonl` and `typeDogma.jsonl`: the per-jump mass and the maximum life of each wormhole type                          |
+| `wormholes.json`        | Distilled from `types.jsonl` and `typeDogma.jsonl`: the per-jump mass and the maximum life of each wormhole type                         |
 
 Zones are not in the SDE, so they come from the [capacitor update](https://www.eveonline.com/news/view/force-projection-ansiblex-capacitor-update) page.
 
