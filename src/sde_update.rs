@@ -59,7 +59,8 @@ pub fn ensure(dir: &Path) -> Result<Outcome, String> {
 
 /// The build number of the local SDE, if all files are present.
 fn local_build(dir: &Path) -> Option<u32> {
-    let present = FILES.iter().chain([&crate::ships::FILE]).all(|f| dir.join(f).is_file());
+    let derived = [&crate::ships::FILE, &crate::wormhole_types::FILE];
+    let present = FILES.iter().chain(derived).all(|f| dir.join(f).is_file());
     if present { crate::sde::build_number(dir) } else { None }
 }
 
@@ -228,10 +229,14 @@ pub fn download(src: &dyn RangeSource, dir: &Path) -> Result<u64, String> {
 
     let build = files.get("_sde.jsonl").and_then(|d| build_from(d));
     let source = |name| files.get(name).map(Vec::as_slice).unwrap_or_default();
-    let ship_data = ships::derive(build, source("types.jsonl"), source("typeDogma.jsonl"), source("groups.jsonl"))?;
+    let sources = ships::parse(source("types.jsonl"), source("typeDogma.jsonl"), source("groups.jsonl"))?;
+    let ship_data = ships::derive(build, &sources)?;
+    let wormhole_data = crate::wormhole_types::derive(build, &sources);
+    drop(sources);
 
     fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
     ships::save(dir, &ship_data)?;
+    crate::wormhole_types::save(dir, &wormhole_data)?;
     // FILES ends with _sde.jsonl, so the build number changes last.
     for name in FILES {
         let data = files.remove(name).unwrap_or_default();
@@ -277,7 +282,12 @@ mod tests {
         let mut names: Vec<String> =
             fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         names.sort();
-        assert_eq!(names, ["_sde.jsonl", "mapRegions.jsonl", "mapSolarSystems.jsonl", "mapStargates.jsonl", "ships.json"]);
+        assert_eq!(
+            names,
+            ["_sde.jsonl", "mapRegions.jsonl", "mapSolarSystems.jsonl", "mapStargates.jsonl", "ships.json", "wormholes.json"]
+        );
+        // The fixture has no wormhole types, so the table is empty.
+        assert!(crate::wormhole_types::load(&dir).unwrap().types.is_empty());
         let ships = ships::load(&dir).unwrap();
         assert_eq!(ships.build, Some(123));
         assert_eq!(ships.ansiblex.capacitor_gj, 1_250_000.0);
@@ -289,6 +299,18 @@ mod tests {
         assert_eq!(crate::sde::build_number(&dir), Some(123));
         assert_eq!(local_build(&dir), Some(123));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    /// Make `ships.json` and `wormholes.json` in the repository `sde/` directory again, from the
+    /// SDE build in `sde/_sde.jsonl`. It needs the network, so it runs only on request:
+    /// `cargo test regenerate_repo_sde -- --ignored`
+    #[test]
+    #[ignore]
+    fn regenerate_repo_sde() {
+        let dir = Path::new("sde");
+        let build = crate::sde::build_number(dir).unwrap();
+        let source = HttpSource { agent: agent(), url: format!("{BASE_URL}/eve-online-static-data-{build}-jsonl.zip") };
+        download(&source, dir).unwrap();
     }
 
     #[test]

@@ -8,6 +8,7 @@ mod ships;
 mod tui;
 mod universe;
 mod wormhole;
+mod wormhole_types;
 
 use ansiblex::{BridgeRules, find_hull};
 use clap::Parser;
@@ -179,7 +180,7 @@ fn update_sde(dir: &std::path::Path) -> Result<(), String> {
         Outcome::Updated { from, to, bytes } => {
             let mb = bytes as f64 / 1e6;
             match from {
-                // Same build: only a file was missing, for example ships.json from an older version.
+                // Same build: only a file was missing, for example wormholes.json from an older version.
                 Some(b) if b == to => eprintln!("Completed SDE build {to} ({mb:.1} MB) in {}", dir.display()),
                 Some(b) => eprintln!("Updated the SDE from build {b} to build {to} ({mb:.1} MB) in {}", dir.display()),
                 None => eprintln!("Downloaded SDE build {to} ({mb:.1} MB) to {}", dir.display()),

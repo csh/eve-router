@@ -1,7 +1,8 @@
 //! The ship table: the Ansiblex cost of each ship, from the SDE dogma data.
 //!
-//! The SDE update extracts this table from `types.jsonl` (153 MB), `typeDogma.jsonl`
-//! (28 MB) and `groups.jsonl`, and keeps only the result in `ships.json`.
+//! The SDE update parses `types.jsonl` (153 MB), `typeDogma.jsonl` (28 MB) and
+//! `groups.jsonl` one time. It keeps only the results: this table in `ships.json`, and
+//! the wormhole type table in `wormholes.json` (see `wormhole_types`).
 
 use rayon::prelude::*;
 use serde::de::DeserializeOwned;
@@ -100,25 +101,47 @@ fn parse_lines<T: DeserializeOwned + Send>(name: &str, data: &[u8]) -> Result<Ve
         .collect()
 }
 
-/// Make the ship table from the 3 SDE source files, in the order of `SOURCES`.
-pub fn derive(build: Option<u32>, types: &[u8], dogma: &[u8], groups: &[u8]) -> Result<ShipData, String> {
+/// The 3 SDE source files, parsed. The ship table and the wormhole table both read it.
+pub struct Sources {
+    types: Vec<SdeType>,
+    attrs: HashMap<u32, HashMap<u32, f64>>,
+    groups: Vec<SdeGroup>,
+}
+
+impl Sources {
+    /// A dogma attribute value of a type.
+    pub fn attr(&self, type_id: u32, attr_id: u32) -> Option<f64> {
+        self.attrs.get(&type_id).and_then(|a| a.get(&attr_id)).copied()
+    }
+
+    /// The type ID and the English name of each type that has a name.
+    pub fn names(&self) -> impl Iterator<Item = (u32, &str)> {
+        self.types.iter().filter_map(|t| Some((t.id, t.name.as_ref()?.en.as_deref()?)))
+    }
+}
+
+/// Parse the 3 SDE source files, in the order of `SOURCES`.
+pub fn parse(types: &[u8], dogma: &[u8], groups: &[u8]) -> Result<Sources, String> {
     let (types, (dogma, groups)) = rayon::join(
         || parse_lines::<SdeType>("types.jsonl", types),
         || rayon::join(|| parse_lines::<SdeTypeDogma>("typeDogma.jsonl", dogma), || parse_lines::<SdeGroup>("groups.jsonl", groups)),
     );
     let (types, dogma, groups) = (types?, dogma?, groups?);
+    let attrs = dogma.into_iter().map(|d| (d.id, d.attributes.into_iter().map(|a| (a.id, a.value)).collect())).collect();
+    Ok(Sources { types, attrs, groups })
+}
 
-    let ship_groups: HashMap<u32, String> = groups
-        .into_iter()
+/// Make the ship table from the parsed SDE files.
+pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, String> {
+    let ship_groups: HashMap<u32, &str> = src
+        .groups
+        .iter()
         .filter(|g| g.category_id == SHIP_CATEGORY)
-        .map(|g| (g.id, g.name.and_then(|n| n.en).unwrap_or_default()))
+        .map(|g| (g.id, g.name.as_ref().and_then(|n| n.en.as_deref()).unwrap_or_default()))
         .collect();
-    let attrs: HashMap<u32, HashMap<u32, f64>> =
-        dogma.into_iter().map(|d| (d.id, d.attributes.into_iter().map(|a| (a.id, a.value)).collect())).collect();
-    let attr = |type_id: u32, attr_id: u32| attrs.get(&type_id).and_then(|a| a.get(&attr_id)).copied();
 
     let need = |attr_id: u32, what: &str| {
-        attr(ANSIBLEX_TYPE, attr_id).ok_or(format!("typeDogma.jsonl: the Ansiblex ({ANSIBLEX_TYPE}) has no {what}"))
+        src.attr(ANSIBLEX_TYPE, attr_id).ok_or(format!("typeDogma.jsonl: the Ansiblex ({ANSIBLEX_TYPE}) has no {what}"))
     };
     let ansiblex = AnsiblexData {
         capacitor_gj: need(ATTR_CAPACITOR, "capacitorCapacity")?,
@@ -126,18 +149,19 @@ pub fn derive(build: Option<u32>, types: &[u8], dogma: &[u8], groups: &[u8]) -> 
         max_jump_mass_kg: need(ATTR_MAX_JUMP_MASS, "gateMaxJumpMass")?,
     };
 
-    let mut ships: Vec<ShipRow> = types
-        .into_iter()
+    let mut ships: Vec<ShipRow> = src
+        .types
+        .iter()
         .filter(|t| t.published)
         .filter_map(|t| {
-            let group = ship_groups.get(&t.group_id)?.clone();
+            let group = ship_groups.get(&t.group_id)?.to_string();
             Some(ShipRow {
                 type_id: t.id,
-                name: t.name.and_then(|n| n.en)?,
+                name: t.name.as_ref()?.en.clone()?,
                 group_id: t.group_id,
                 group,
                 mass_kg: t.mass,
-                bridge_cost_gj: attr(t.id, ATTR_BRIDGE_COST),
+                bridge_cost_gj: src.attr(t.id, ATTR_BRIDGE_COST),
             })
         })
         .collect();
