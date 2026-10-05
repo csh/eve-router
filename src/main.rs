@@ -7,6 +7,7 @@ mod sde_update;
 mod ships;
 mod tui;
 mod universe;
+mod wormhole;
 
 use ansiblex::{BridgeRules, find_hull};
 use clap::Parser;
