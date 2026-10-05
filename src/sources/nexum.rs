@@ -81,7 +81,7 @@ pub fn fetch_map(cfg: &NexumConfig, timeout: Duration) -> Result<String, FetchEr
     let (Some(url), Some(key)) = (url, key) else {
         return Err(FetchError::Offline("the Nexum settings are not complete".into()));
     };
-    sources::get(&url, &key.0, timeout)
+    sources::get(&url, Some(&key.0), timeout)
 }
 
 /// GET the map list, for the settings page. It needs the URL and the key, but no map ID.
@@ -89,7 +89,7 @@ pub fn fetch_maps(cfg: &NexumConfig, timeout: Duration) -> Result<Vec<MapInfo>, 
     let (Some(base), Some(key)) = (api_base(cfg), cfg.key.as_ref()) else {
         return Err(FetchError::Offline("set the Nexum URL and key first".into()));
     };
-    let text = sources::get(&format!("{base}/maps"), &key.0, timeout)?;
+    let text = sources::get(&format!("{base}/maps"), Some(&key.0), timeout)?;
     let list: MapList = serde_json::from_str(&text).map_err(|e| FetchError::Offline(format!("Nexum map list: {e}")))?;
     Ok(list.maps)
 }

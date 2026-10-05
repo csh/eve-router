@@ -1,6 +1,7 @@
 //! Wormhole sources. Each source has one file, and converts its data to `Wormhole` records.
 //! This file holds the HTTP GET, the fetch errors and the disk cache.
 
+pub mod evescout;
 pub mod nexum;
 
 use crate::wormhole::{SourceData, SourceId, local_time};
@@ -29,24 +30,34 @@ impl FetchError {
     /// The status line text. `cached_at` is the fetch time of the cache in use.
     pub fn status(&self, source: SourceId, cached_at: Option<u64>) -> String {
         let name = source.label();
+        // Nexum gives a map. EVE-Scout gives a public feed, with no key.
+        let data = match source {
+            SourceId::Nexum => "map",
+            SourceId::EveScout => "feed",
+        };
         match (self, cached_at) {
+            (FetchError::Auth, _) if source == SourceId::EveScout => format!("{name} refused the request"),
             (FetchError::Auth, _) => format!("{name} key rejected"),
-            (FetchError::NotFound, _) => format!("{name} map not found"),
-            (FetchError::Offline(_), Some(t)) => format!("{name} offline, map from {}", local_time(t)),
+            (FetchError::NotFound, _) => format!("{name} {data} not found"),
+            (FetchError::Offline(_), Some(t)) => format!("{name} offline, {data} from {}", local_time(t)),
             (FetchError::Offline(_), None) => format!("{name} offline"),
         }
     }
 }
 
-/// Send one GET request with a bearer key, and return the body.
+/// Send one GET request, with a bearer key if `key` is set, and return the body.
 /// The router never sends any other method to a source.
-pub fn get(url: &str, key: &str, timeout: Duration) -> Result<String, FetchError> {
+pub fn get(url: &str, key: Option<&str>, timeout: Duration) -> Result<String, FetchError> {
     let agent = ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .user_agent(concat!("eve-router/", env!("CARGO_PKG_VERSION")))
         .build()
         .new_agent();
-    match agent.get(url).header("Authorization", &format!("Bearer {key}")).call() {
+    let mut request = agent.get(url);
+    if let Some(key) = key {
+        request = request.header("Authorization", &format!("Bearer {key}"));
+    }
+    match request.call() {
         Ok(mut resp) => resp
             .body_mut()
             .with_config()
@@ -156,7 +167,7 @@ mod tests {
     #[test]
     fn get_sends_one_get_with_the_key() {
         let (url, request) = serve("200 OK", "{}", Duration::ZERO);
-        assert_eq!(get(&format!("{url}/x"), "nxm_test", TIMEOUT), Ok("{}".into()));
+        assert_eq!(get(&format!("{url}/x"), Some("nxm_test"), TIMEOUT), Ok("{}".into()));
         let request = request.recv().unwrap();
         assert!(request.starts_with("GET /x HTTP/1.1\r\n"), "{request}");
         assert!(request.to_lowercase().contains("authorization: bearer nxm_test"), "{request}");
@@ -170,16 +181,16 @@ mod tests {
             ("404 Not Found", FetchError::NotFound),
         ] {
             let (url, _) = serve(status, "{}", Duration::ZERO);
-            assert_eq!(get(&url, "k", TIMEOUT), Err(expected), "{status}");
+            assert_eq!(get(&url, Some("k"), TIMEOUT), Err(expected), "{status}");
         }
         let (url, _) = serve("500 Internal Server Error", "{}", Duration::ZERO);
-        assert!(matches!(get(&url, "k", TIMEOUT), Err(FetchError::Offline(_))));
+        assert!(matches!(get(&url, Some("k"), TIMEOUT), Err(FetchError::Offline(_))));
     }
 
     #[test]
     fn slow_server_times_out() {
         let (url, _) = serve("200 OK", "{}", Duration::from_secs(2));
-        assert!(matches!(get(&url, "k", Duration::from_millis(300)), Err(FetchError::Offline(_))));
+        assert!(matches!(get(&url, Some("k"), Duration::from_millis(300)), Err(FetchError::Offline(_))));
     }
 
     #[test]
@@ -211,6 +222,8 @@ mod tests {
         let offline = FetchError::Offline("x".into()).status(SourceId::Nexum, Some(t));
         assert_eq!(offline, format!("Nexum offline, map from {}", crate::wormhole::local_time(t)));
         assert_eq!(FetchError::Offline("x".into()).status(SourceId::Nexum, None), "Nexum offline");
+        assert_eq!(FetchError::Auth.status(SourceId::EveScout, None), "EVE-Scout refused the request");
+        assert_eq!(FetchError::NotFound.status(SourceId::EveScout, None), "EVE-Scout feed not found");
     }
 
     fn sample(fetched_at: u64) -> SourceData {
