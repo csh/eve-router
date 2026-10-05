@@ -10,7 +10,8 @@ use crate::wormhole_types::WormholeTypes;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use std::thread::JoinHandle;
 use std::time::Duration;
 use std::time::UNIX_EPOCH;
 
@@ -257,6 +258,57 @@ pub fn load_file(path: &Path, known: impl Fn(u32) -> bool, types: &WormholeTypes
     Ok(Load { data: Some(data), report, warning: None })
 }
 
+/// The Nexum load, between the start and the end of the SDE load.
+pub enum Pending {
+    /// No map file and no complete Nexum settings.
+    None,
+    /// A map file. The router sends no request.
+    File(PathBuf),
+    /// A cache that is less than 5 minutes old. The router sends no request.
+    Cache(SourceData),
+    /// A fetch on a thread. The cache is the fallback for a failure.
+    Fetch { thread: JoinHandle<Result<String, FetchError>>, started: u64, cache: Option<SourceData>, cache_path: PathBuf },
+}
+
+/// Start the Nexum load: a map file first, then a fresh cache, then a fetch on a thread.
+pub fn start(file: Option<PathBuf>, cfg: &NexumConfig, cache_path: PathBuf, now: u64) -> Pending {
+    if let Some(path) = file {
+        return Pending::File(path);
+    }
+    if cfg.complete().is_none() {
+        return Pending::None;
+    }
+    let cache = sources::read_cache(&cache_path);
+    if let Some(data) = cache.as_ref().filter(|d| sources::cache_is_fresh(d, now)) {
+        return Pending::Cache(data.clone());
+    }
+    let cfg = cfg.clone();
+    let thread = std::thread::spawn(move || fetch_map(&cfg, sources::TIMEOUT));
+    Pending::Fetch { thread, started: now, cache, cache_path }
+}
+
+/// Finish the Nexum load after the SDE loads. Only a bad map file gives an error.
+/// A fetch problem gives the cache and a warning.
+pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTypes) -> Result<Load, String> {
+    match pending {
+        Pending::None => Ok(Load::default()),
+        Pending::File(path) => load_file(&path, known, types),
+        Pending::Cache(data) => Ok(Load { data: Some(data), ..Load::default() }),
+        Pending::Fetch { thread, started, cache, cache_path } => {
+            let fetched = thread.join().unwrap_or_else(|_| Err(FetchError::Offline("the fetch thread failed".into())));
+            let mut report = NexumReport::default();
+            let converted = fetched.and_then(|text| {
+                let map = parse_map(&text).map_err(FetchError::Offline)?;
+                let (data, r) = convert(&map, &known, types, started);
+                report = r;
+                Ok(data)
+            });
+            let chosen = sources::choose(SourceId::Nexum, converted, cache, &cache_path);
+            Ok(Load { data: chosen.data, report, warning: chosen.warning })
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -369,5 +421,81 @@ mod tests {
         assert_eq!(data.holes.len(), 1);
         assert_eq!(report.broken, 1);
         assert_eq!(report.expired, 1);
+    }
+
+    use crate::config::{ApiKey, NexumConfig};
+    use crate::sources::test_server::serve;
+    use std::path::PathBuf;
+    use std::time::Duration;
+
+    fn cfg(url: &str) -> NexumConfig {
+        NexumConfig { url: Some(url.into()), key: Some(ApiKey("nxm_test".into())), map_id: Some("m1".into()) }
+    }
+
+    fn temp(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(name);
+        let _ = std::fs::remove_dir_all(&dir);
+        dir.join("nexum.json")
+    }
+
+    #[test]
+    fn partial_settings_do_not_fetch() {
+        let mut partial = cfg("http://127.0.0.1:9");
+        partial.key = None;
+        assert!(matches!(start(None, &partial, temp("eve-router-test-partial"), FETCHED), Pending::None));
+    }
+
+    #[test]
+    fn file_wins_over_settings() {
+        let file = PathBuf::from("tests/fixtures/nexum-api.json");
+        let pending = start(Some(file.clone()), &cfg("http://127.0.0.1:9"), temp("eve-router-test-file"), FETCHED);
+        assert!(matches!(&pending, Pending::File(p) if *p == file));
+        let load = finish(pending, |id| id != 39_999_999, &types()).unwrap();
+        assert_eq!(load.data.unwrap().holes.len(), 5);
+    }
+
+    #[test]
+    fn fresh_cache_stops_the_fetch() {
+        let path = temp("eve-router-test-fresh");
+        let cached = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 60, holes: Vec::new() };
+        crate::sources::write_cache(&path, &cached).unwrap();
+        // Port 9 has no server, so a fetch would fail.
+        let pending = start(None, &cfg("http://127.0.0.1:9"), path.clone(), FETCHED);
+        let load = finish(pending, |_| true, &types()).unwrap();
+        assert_eq!(load.data, Some(cached));
+        assert_eq!(load.warning, None);
+    }
+
+    #[test]
+    fn fetch_converts_and_writes_the_cache() {
+        let body = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let (url, request) = serve("200 OK", &body, Duration::ZERO);
+        let path = temp("eve-router-test-fetch");
+        let load = finish(start(None, &cfg(&url), path.clone(), FETCHED), |id| id != 39_999_999, &types()).unwrap();
+        assert!(request.recv().unwrap().starts_with("GET /api/v1/maps/m1 HTTP/1.1"));
+        let data = load.data.unwrap();
+        assert_eq!(data.holes.len(), 5);
+        assert_eq!(data.fetched_at, FETCHED);
+        assert_eq!(load.report.placeholders, 1);
+        assert_eq!(crate::sources::read_cache(&path), Some(data));
+    }
+
+    #[test]
+    fn failed_fetch_uses_an_old_cache() {
+        let (url, _) = serve("401 Unauthorized", "{}", Duration::ZERO);
+        let path = temp("eve-router-test-stale");
+        let old = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 3600, holes: Vec::new() };
+        crate::sources::write_cache(&path, &old).unwrap();
+        let load = finish(start(None, &cfg(&url), path, FETCHED), |_| true, &types()).unwrap();
+        assert_eq!(load.data, Some(old));
+        assert_eq!(load.warning.as_deref(), Some("Nexum key rejected"));
+    }
+
+    #[test]
+    fn bad_json_counts_as_offline() {
+        let (url, _) = serve("200 OK", "<html>", Duration::ZERO);
+        let load = finish(start(None, &cfg(&url), temp("eve-router-test-badjson"), FETCHED), |_| true, &types()).unwrap();
+        assert_eq!(load.data, None);
+        assert_eq!(load.warning.as_deref(), Some("Nexum offline"));
     }
 }

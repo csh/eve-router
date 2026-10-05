@@ -55,7 +55,8 @@ struct Cli {
     /// A jump bridge list in SMT format. The default is ansiblex.txt in the config directory.
     #[arg(long)]
     bridges: Option<PathBuf>,
-    /// A nexum map export with wormholes. The default is nexum.json in the config directory.
+    /// A Nexum map export. With it, the router reads the file and does not fetch the map.
+    /// Without it, the router uses the Nexum settings, else nexum.json in the config directory.
     #[arg(long)]
     nexum: Option<PathBuf>,
     /// Print the routes and exit. Do not start the TUI.
@@ -125,6 +126,16 @@ fn run() -> Result<(), String> {
     cfg.mode = cli.mode.or(cfg.mode);
     cfg.top = cli.top.or(cfg.top);
 
+    // Start the Nexum load before the SDE update, so the fetch runs at the same time.
+    // The order: the --nexum file, then the Nexum settings, then nexum.json next to the config file.
+    let nexum_file = match cli.nexum {
+        Some(path) => Some(path),
+        None if cfg.nexum.complete().is_some() => None,
+        None => config::overlay_path(None, &cfg_path, config::NEXUM_FILE),
+    };
+    let cache_path = sources::cache_path(wormhole::SourceId::Nexum, &cfg_path);
+    let pending = nexum::start(nexum_file, &cfg.nexum, cache_path, wormhole::now());
+
     let sde_dir = cli.sde.unwrap_or_else(config::default_sde_dir);
     update_sde(&sde_dir)?;
     ansiblex::init(&sde_dir)?;
@@ -132,16 +143,12 @@ fn run() -> Result<(), String> {
     let started = Instant::now();
     let mut uni = Universe::from_sde(sde::load(&sde_dir)?);
     let bridges_path = config::overlay_path(cli.bridges, &cfg_path, config::BRIDGES_FILE);
-    let nexum_path = config::overlay_path(cli.nexum, &cfg_path, config::NEXUM_FILE);
     let mut report = OverlayReport::default();
     if let Some(path) = &bridges_path {
         report = overlay::load_bridges(&mut uni, path)?;
     }
     let types = wormhole_types::load(&sde_dir)?;
-    let wh = match &nexum_path {
-        Some(path) => nexum::load_file(path, |id| uni.by_id.contains_key(&id), &types)?,
-        None => nexum::Load::default(),
-    };
+    let wh = nexum::finish(pending, |id| uni.by_id.contains_key(&id), &types)?;
     let wormhole_count = uni.add_wormholes(&wormhole::merge(wh.data.as_slice(), wormhole::now()));
     let load_time = started.elapsed();
 
@@ -165,11 +172,18 @@ fn run() -> Result<(), String> {
 
     if cli.print {
         eprintln!(
-            "Loaded {} systems in {} ms. Bridges: {}. Wormholes: {wormhole_count}",
+            "Loaded {} systems in {} ms. Bridges: {}",
             uni.graph.node_count(),
             load_time.as_millis(),
             report.summary()
         );
+        if let Some(data) = &wh.data {
+            let age = wormhole::age_text(data.fetched_at, wormhole::now());
+            eprintln!("Wormholes: {wormhole_count} from {} ({age})", data.source.label());
+        }
+        if let Some(warning) = &wh.warning {
+            eprintln!("{warning}");
+        }
         print_routes(&uni, &settings, &systems)
     } else {
         let shortcuts = tui::Shortcuts::new(&uni, &report, &wh);

@@ -47,7 +47,7 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
     draw_detail(frame, app, detail);
     // The "Shortcuts" box goes above the hubs, and only when an overlay loaded a connection.
     if app.shortcuts.wormholes + app.shortcuts.bridges > 0 {
-        let shortcut_lines = 2 + u16::from(app.shortcuts.skipped > 0);
+        let shortcut_lines = 2 + u16::from(app.shortcuts.skipped > 0) + u16::from(app.shortcuts.source.is_some());
         let [shortcuts, hubs] = Layout::vertical([Constraint::Length(shortcut_lines + 2), Constraint::Min(5)]).areas(sidebar);
         draw_shortcuts(frame, app, shortcuts);
         draw_hubs(frame, app, hubs);
@@ -299,10 +299,13 @@ fn draw_shortcuts(frame: &mut Frame, app: &App, area: Rect) {
         let line = Line::from(format!("{label:<16}{count:>5}"));
         if on { line } else { line.dark_gray() }
     };
-    let mut lines = vec![
-        line("Wormholes:", app.shortcuts.wormholes, s.wormholes),
-        line("Jump bridges:", app.shortcuts.bridges, bridges_on),
-    ];
+    let mut lines = vec![line("Wormholes:", app.shortcuts.wormholes, s.wormholes)];
+    // The source and the data age, for example "Nexum, 2 min ago".
+    if let Some((source, fetched_at)) = app.shortcuts.source {
+        let age = crate::wormhole::age_text(fetched_at, app.now);
+        lines.push(Line::from(format!("  {}, {age}", source.label())).dark_gray());
+    }
+    lines.push(line("Jump bridges:", app.shortcuts.bridges, bridges_on));
     if app.shortcuts.skipped > 0 {
         lines.push(Line::from(format!("{:<16}{:>5}", "Skipped:", app.shortcuts.skipped)).dark_gray());
     }
