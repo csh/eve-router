@@ -101,14 +101,39 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             frame.render_stateful_widget(list, list_area, state);
         }
         Some(Popup::Prompt { kind, text }) => {
-            let area = centered(frame.area(), 50, 3);
+            let area = centered(frame.area(), 60, 3);
             let title = match kind {
                 PromptKind::Capital => " Alliance capital (Tab completes, empty = none) ",
                 PromptKind::MaxCap => " Max TJ for one bridge jump (empty = no limit) ",
                 PromptKind::Favourite => " Add favourite (Tab completes) ",
+                PromptKind::NexumUrl => " Nexum URL, for example https://nexum.example (empty = none) ",
+                PromptKind::NexumKey => " Nexum API key, read scope (empty = none) ",
             };
+            // The prompt never shows the key.
+            let shown = if *kind == PromptKind::NexumKey { "•".repeat(text.chars().count()) } else { text.clone() };
             frame.render_widget(Clear, area);
-            frame.render_widget(Paragraph::new(format!("{text}▏")).block(Block::bordered().title(title)), area);
+            frame.render_widget(Paragraph::new(format!("{shown}▏")).block(Block::bordered().title(title)), area);
+        }
+        Some(Popup::Maps { maps, state }) => {
+            let area = centered(frame.area(), 60, maps.len().min(16) as u16 + 2);
+            let items: Vec<ListItem> = maps.iter().map(|m| ListItem::new(m.name.clone())).collect();
+            let list = List::new(items)
+                .block(Block::bordered().title(" Nexum map ").border_style(Style::new().cyan()))
+                .highlight_style(Style::new().reversed())
+                .highlight_symbol("> ");
+            frame.render_widget(Clear, area);
+            frame.render_stateful_widget(list, area, state);
+        }
+        Some(Popup::Loading) => {
+            let area = centered(frame.area(), 30, 3);
+            frame.render_widget(Clear, area);
+            frame.render_widget(Paragraph::new("Loading maps…").block(Block::bordered()), area);
+        }
+        Some(Popup::Message(text)) => {
+            let area = centered(frame.area(), 60, 4);
+            frame.render_widget(Clear, area);
+            let block = Block::bordered().title(" Nexum (any key closes) ");
+            frame.render_widget(Paragraph::new(text.as_str()).wrap(ratatui::widgets::Wrap { trim: true }).block(block), area);
         }
         None => {}
     }
@@ -328,6 +353,9 @@ fn draw_settings(frame: &mut Frame, app: &mut App) {
                 SettingsRow::Favourite(i) => {
                     (if i == 0 { "Favourites" } else { "" }, app.uni.name(app.settings.favourites[i]).to_string())
                 }
+                SettingsRow::NexumUrl => ("Nexum URL", app.nexum_value(*row)),
+                SettingsRow::NexumKey => ("Nexum key", app.nexum_value(*row)),
+                SettingsRow::NexumMap => ("Nexum map", app.nexum_value(*row)),
                 SettingsRow::AddFavourite => {
                     let label = if app.settings.favourites.is_empty() { "Favourites" } else { "" };
                     return ListItem::new(Line::from(vec![

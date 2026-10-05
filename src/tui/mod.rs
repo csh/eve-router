@@ -29,6 +29,11 @@ pub fn run(
     let result = (|| -> std::io::Result<()> {
         while !app.quit {
             terminal.draw(|frame| ui::draw(frame, &mut app))?;
+            // A blocking fetch runs after the draw, so the screen shows "Loading maps…" first.
+            if app.load_maps_pending {
+                app.load_maps();
+                continue;
+            }
             if let Event::Key(key) = event::read()? {
                 // Windows also sends key release events.
                 if key.kind == KeyEventKind::Press {

@@ -1,7 +1,8 @@
 //! The TUI state and the key handling.
 
 use crate::ansiblex::{HullClass, table};
-use crate::config::Config;
+use crate::config::{ApiKey, Config};
+use crate::sources::{self, nexum::{self, MapInfo}};
 use super::Shortcuts;
 use crate::route::{Mode, Route};
 use crate::universe::Universe;
@@ -25,6 +26,8 @@ pub enum PromptKind {
     Capital,
     MaxCap,
     Favourite,
+    NexumUrl,
+    NexumKey,
 }
 
 /// The rows of the settings page.
@@ -34,6 +37,9 @@ pub enum SettingsRow {
     MaxCap,
     Favourite(usize),
     AddFavourite,
+    NexumUrl,
+    NexumKey,
+    NexumMap,
 }
 
 pub enum Popup {
@@ -42,6 +48,12 @@ pub enum Popup {
     /// The rows are `hull_rows(filter)`.
     Hull { filter: String, state: ListState },
     Prompt { kind: PromptKind, text: String },
+    /// The Nexum map list. Row i is `maps[i]`.
+    Maps { maps: Vec<MapInfo>, state: ListState },
+    /// "Loading maps…", while the map list fetch runs.
+    Loading,
+    /// A message. Any key closes it.
+    Message(String),
 }
 
 pub struct App<'a> {
@@ -69,6 +81,10 @@ pub struct App<'a> {
     pub status: String,
     pub shortcuts: Shortcuts,
     pub quit: bool,
+    /// True after Enter on the map row. The run loop draws, then calls `load_maps`.
+    pub load_maps_pending: bool,
+    /// The last map list, for the map name on the settings page.
+    pub map_names: Vec<MapInfo>,
 }
 
 impl<'a> App<'a> {
@@ -100,6 +116,8 @@ impl<'a> App<'a> {
             status: String::new(),
             shortcuts,
             quit: false,
+            load_maps_pending: false,
+            map_names: Vec::new(),
         };
         app.recompute();
         if let Some(warning) = &app.shortcuts.warning {
@@ -315,6 +333,7 @@ impl<'a> App<'a> {
         let mut rows = vec![SettingsRow::Capital, SettingsRow::MaxCap];
         rows.extend((0..self.settings.favourites.len()).map(SettingsRow::Favourite));
         rows.push(SettingsRow::AddFavourite);
+        rows.extend([SettingsRow::NexumUrl, SettingsRow::NexumKey, SettingsRow::NexumMap]);
         rows
     }
 
@@ -354,6 +373,25 @@ impl<'a> App<'a> {
             (KeyCode::Enter, SettingsRow::MaxCap) => {
                 let text = self.settings.rules.max_cap.map(|m| m.to_string()).unwrap_or_default();
                 self.popup = Some(Popup::Prompt { kind: PromptKind::MaxCap, text });
+                return;
+            }
+            (KeyCode::Enter, SettingsRow::NexumUrl) => {
+                let text = self.cfg.nexum.url.clone().unwrap_or_default();
+                self.popup = Some(Popup::Prompt { kind: PromptKind::NexumUrl, text });
+                return;
+            }
+            (KeyCode::Enter, SettingsRow::NexumKey) => {
+                // The prompt starts empty, so the key never shows on the screen.
+                self.popup = Some(Popup::Prompt { kind: PromptKind::NexumKey, text: String::new() });
+                return;
+            }
+            (KeyCode::Enter, SettingsRow::NexumMap) => {
+                if self.cfg.nexum.url.is_none() || self.cfg.nexum.key.is_none() {
+                    self.status = "Set the Nexum URL and key first".into();
+                } else {
+                    self.popup = Some(Popup::Loading);
+                    self.load_maps_pending = true;
+                }
                 return;
             }
             (KeyCode::Enter | KeyCode::Char('a'), SettingsRow::AddFavourite) | (KeyCode::Char('a'), _) => {
@@ -414,6 +452,29 @@ impl<'a> App<'a> {
                 }
                 Some(Popup::Hull { filter, state })
             }
+            Popup::Maps { maps, mut state } => match key.code {
+                KeyCode::Esc => None,
+                KeyCode::Up => {
+                    state.select_previous();
+                    Some(Popup::Maps { maps, state })
+                }
+                KeyCode::Down => {
+                    if state.selected().is_some_and(|i| i + 1 < maps.len()) {
+                        state.select_next();
+                    }
+                    Some(Popup::Maps { maps, state })
+                }
+                KeyCode::Enter => {
+                    if let Some(map) = state.selected().and_then(|i| maps.get(i)) {
+                        self.cfg.nexum.map_id = Some(map.id.clone());
+                        self.nexum_saved();
+                    }
+                    None
+                }
+                _ => Some(Popup::Maps { maps, state }),
+            },
+            Popup::Loading => Some(Popup::Loading),
+            Popup::Message(_) => None,
             Popup::Prompt { kind, mut text } => match key.code {
                 KeyCode::Esc => None,
                 KeyCode::Enter => self.apply_prompt(kind, text),
@@ -421,7 +482,7 @@ impl<'a> App<'a> {
                     text.pop();
                     Some(Popup::Prompt { kind, text })
                 }
-                KeyCode::Tab if kind != PromptKind::MaxCap => {
+                KeyCode::Tab if matches!(kind, PromptKind::Capital | PromptKind::Favourite) => {
                     if let Some(name) = self.complete(&text) {
                         text = name;
                     }
@@ -466,6 +527,25 @@ impl<'a> App<'a> {
                     return Some(Popup::Prompt { kind, text });
                 }
             },
+            PromptKind::NexumUrl if value.is_empty() => {
+                self.cfg.nexum.url = None;
+                self.nexum_saved();
+                return None;
+            }
+            PromptKind::NexumUrl if value.starts_with("https://") || value.starts_with("http://") => {
+                self.cfg.nexum.url = Some(value.trim_end_matches('/').to_string());
+                self.nexum_saved();
+                return None;
+            }
+            PromptKind::NexumUrl => {
+                self.status = format!("\"{value}\" is not a URL. Give a URL that starts with https://.");
+                return Some(Popup::Prompt { kind, text });
+            }
+            PromptKind::NexumKey => {
+                self.cfg.nexum.key = (!value.is_empty()).then(|| ApiKey(value.to_string()));
+                self.nexum_saved();
+                return None;
+            }
             PromptKind::MaxCap if value.is_empty() => self.settings.rules.max_cap = None,
             PromptKind::MaxCap => match value.parse::<f32>() {
                 Ok(tj) if (0.0..=table().gate_capacitor_tj).contains(&tj) => self.settings.rules.max_cap = Some(tj),
@@ -478,6 +558,45 @@ impl<'a> App<'a> {
         }
         self.recompute();
         None
+    }
+
+    /// Save the config after a change to a Nexum row. A Nexum change applies at the next start.
+    fn nexum_saved(&mut self) {
+        self.save();
+        if !self.status.starts_with("Saved") {
+            return;
+        }
+        self.status = "Nexum settings saved. Restart to load the new map.".into();
+    }
+
+    /// Fetch the map list and open it. This blocks for up to 5 seconds, so the run loop draws
+    /// "Loading maps…" before it calls this function.
+    pub fn load_maps(&mut self) {
+        self.load_maps_pending = false;
+        self.popup = Some(match nexum::fetch_maps(&self.cfg.nexum, sources::TIMEOUT) {
+            Ok(maps) if maps.is_empty() => Popup::Message("The key has access to no maps".into()),
+            Ok(maps) => {
+                let current = maps.iter().position(|m| Some(&m.id) == self.cfg.nexum.map_id.as_ref());
+                self.map_names = maps.clone();
+                Popup::Maps { maps, state: ListState::default().with_selected(Some(current.unwrap_or(0))) }
+            }
+            Err(sources::FetchError::Offline(detail)) => Popup::Message(format!("Nexum offline: {detail}")),
+            Err(e) => Popup::Message(e.status(crate::wormhole::SourceId::Nexum, None)),
+        });
+    }
+
+    /// The value text of a Nexum row on the settings page.
+    pub fn nexum_value(&self, row: SettingsRow) -> String {
+        let n = &self.cfg.nexum;
+        match row {
+            SettingsRow::NexumUrl => n.url.clone().unwrap_or_else(|| "none".into()),
+            SettingsRow::NexumKey => n.key.as_ref().map_or("none".into(), ApiKey::masked),
+            SettingsRow::NexumMap => match &n.map_id {
+                None => "none".into(),
+                Some(id) => self.map_names.iter().find(|m| &m.id == id).map_or(id.clone(), |m| m.name.clone()),
+            },
+            _ => String::new(),
+        }
     }
 
     fn save(&mut self) {
@@ -507,4 +626,108 @@ pub fn hull_rows(filter: &str) -> Vec<Option<HullClass>> {
                 .map(Some),
         )
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ansiblex::BridgeRules;
+    use crate::config::ApiKey;
+    use crate::route::Mode;
+    use crate::sources::test_server::serve;
+    use crate::universe::tests::universe;
+
+    fn app(cfg: Config) -> App<'static> {
+        let settings = Settings {
+            mode: Mode::Shortest,
+            top: 1,
+            wormholes: true,
+            bridges: false,
+            rules: BridgeRules::default(),
+            favourites: Vec::new(),
+        };
+        let path = std::env::temp_dir().join("eve-router-test-nexum-settings.json");
+        let shortcuts = Shortcuts::new(universe(), &Default::default(), &Default::default());
+        App::new(universe(), settings, cfg, path, String::new(), shortcuts)
+    }
+
+    fn open_row(app: &mut App, row: SettingsRow) {
+        let index = app.settings_rows().iter().position(|&r| r == row).unwrap();
+        app.settings_page = Some(ListState::default().with_selected(Some(index)));
+    }
+
+    fn type_text(app: &mut App, text: &str) {
+        for c in text.chars() {
+            app.on_key(KeyEvent::from(KeyCode::Char(c)));
+        }
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+    }
+
+    #[test]
+    fn edit_nexum_url_and_key() {
+        let mut app = app(Config::default());
+        open_row(&mut app, SettingsRow::NexumUrl);
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        type_text(&mut app, "ftp://x");
+        // A URL without http:// or https:// keeps the prompt open.
+        assert!(matches!(app.popup, Some(Popup::Prompt { kind: PromptKind::NexumUrl, .. })));
+        app.popup = None;
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        type_text(&mut app, "https://nexum.example/");
+        assert_eq!(app.cfg.nexum.url.as_deref(), Some("https://nexum.example"));
+        assert!(app.status.contains("Restart to load the new map"), "{}", app.status);
+
+        open_row(&mut app, SettingsRow::NexumKey);
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        type_text(&mut app, "nxm_secret_key");
+        assert_eq!(app.cfg.nexum.key, Some(ApiKey("nxm_secret_key".into())));
+        assert_eq!(app.nexum_value(SettingsRow::NexumKey), "nxm_…key");
+        assert_eq!(app.nexum_value(SettingsRow::NexumMap), "none");
+    }
+
+    #[test]
+    fn pick_a_map_from_the_list() {
+        let body = r#"{"maps":[{"id":"m1","name":"Home"},{"id":"m2","name":"Scanning"}]}"#;
+        let (url, _) = serve("200 OK", body, std::time::Duration::ZERO);
+        let mut cfg = Config::default();
+        cfg.nexum.url = Some(url);
+        cfg.nexum.key = Some(ApiKey("nxm_test_key".into()));
+        let mut app = app(cfg);
+        open_row(&mut app, SettingsRow::NexumMap);
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        // The run loop draws "Loading maps…", then calls load_maps.
+        assert!(app.load_maps_pending);
+        assert!(matches!(app.popup, Some(Popup::Loading)));
+        app.load_maps();
+        assert!(!app.load_maps_pending);
+        app.on_key(KeyEvent::from(KeyCode::Down));
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.cfg.nexum.map_id.as_deref(), Some("m2"));
+        assert_eq!(app.nexum_value(SettingsRow::NexumMap), "Scanning");
+        assert!(app.status.contains("Restart to load the new map"), "{}", app.status);
+    }
+
+    #[test]
+    fn map_list_error_shows_in_a_popup() {
+        let (url, _) = serve("401 Unauthorized", "{}", std::time::Duration::ZERO);
+        let mut cfg = Config::default();
+        cfg.nexum.url = Some(url);
+        cfg.nexum.key = Some(ApiKey("nxm_bad_key".into()));
+        let mut app = app(cfg);
+        open_row(&mut app, SettingsRow::NexumMap);
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        app.load_maps();
+        assert!(matches!(&app.popup, Some(Popup::Message(m)) if m == "Nexum key rejected"));
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        assert!(app.popup.is_none());
+    }
+
+    #[test]
+    fn map_row_needs_url_and_key() {
+        let mut app = app(Config::default());
+        open_row(&mut app, SettingsRow::NexumMap);
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert!(!app.load_maps_pending);
+        assert_eq!(app.status, "Set the Nexum URL and key first");
+    }
 }
