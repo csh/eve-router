@@ -18,6 +18,8 @@ pub struct Hull {
     pub base_tj: Option<f32>,
     /// Why the hull cannot use a bridge.
     pub ban: Option<String>,
+    /// The mass in kg, for the wormhole size check. A group has the mass of its heaviest ship.
+    pub mass_kg: Option<f64>,
 }
 
 impl Hull {
@@ -66,14 +68,21 @@ impl HullTable {
                     (a, b) => a.or(b),
                 };
                 let result = check(s.bridge_cost_gj, s.mass_kg);
-                Hull { type_id: Some(s.type_id), name: s.name, group: s.group, base_tj: result.clone().ok(), ban: result.err() }
+                Hull {
+                    type_id: Some(s.type_id),
+                    name: s.name,
+                    group: s.group,
+                    base_tj: result.clone().ok(),
+                    ban: result.err(),
+                    mass_kg: s.mass_kg,
+                }
             })
             .collect();
         let groups = groups
             .into_iter()
             .map(|(name, (cost, mass))| {
                 let result = check(cost, mass);
-                Hull { type_id: None, group: name.clone(), name, base_tj: result.clone().ok(), ban: result.err() }
+                Hull { type_id: None, group: name.clone(), name, base_tj: result.clone().ok(), ban: result.err(), mass_kg: mass }
             })
             .collect();
         HullTable { ships, groups, gate_capacitor_tj: (data.ansiblex.capacitor_gj / GJ_PER_TJ) as f32 }
@@ -251,5 +260,16 @@ mod tests {
         // A ship name and a group key both work.
         assert_eq!(find_hull("sin").unwrap().base_tj, Some(18.0));
         assert_eq!(find_hull("heavy-assault-cruiser").unwrap().base_tj, Some(11.5));
+    }
+
+    #[test]
+    fn hull_mass() {
+        assert_eq!(find_hull("Sin").unwrap().mass_kg, Some(106_300_000.0));
+        assert_eq!(find_hull("Rifter").unwrap().mass_kg, Some(1_067_000.0));
+        // A group has the mass of its heaviest ship.
+        let group = find_hull("black-ops").unwrap().mass_kg.unwrap();
+        assert!(group >= 106_300_000.0);
+        let heaviest = table().ships.iter().filter(|h| h.group == "Black Ops").filter_map(|h| h.mass_kg).fold(0.0, f64::max);
+        assert_eq!(group, heaviest);
     }
 }
