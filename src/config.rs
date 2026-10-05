@@ -2,11 +2,12 @@
 
 use crate::route::Mode;
 use serde::{Deserialize, Serialize};
+use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
 
 /// The config directory name inside the platform config directory.
-const APP_DIR: &str = "com.smrkn.eve-router";
+pub const APP_DIR: &str = "com.smrkn.eve-router";
 const FILE_NAME: &str = "eve-router.json";
 
 /// The default config file:
@@ -46,6 +47,48 @@ pub fn overlay_path(flag: Option<PathBuf>, cfg_path: &Path, default_name: &str) 
 /// The main trade hubs.
 pub const DEFAULT_FAVOURITES: [&str; 5] = ["Jita", "Amarr", "Dodixie", "Hek", "Rens"];
 
+/// A Nexum API key. `Debug` shows only the first 4 and the last 3 characters.
+#[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
+#[serde(transparent)]
+pub struct ApiKey(pub String);
+
+impl ApiKey {
+    /// For example "nxm_…xyz". A key of 7 characters or fewer shows only "…".
+    pub fn masked(&self) -> String {
+        let chars: Vec<char> = self.0.chars().collect();
+        if chars.len() <= 7 {
+            return "…".into();
+        }
+        let head: String = chars[..4].iter().collect();
+        let tail: String = chars[chars.len() - 3..].iter().collect();
+        format!("{head}…{tail}")
+    }
+}
+
+impl fmt::Debug for ApiKey {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(&self.masked())
+    }
+}
+
+/// The Nexum settings. The router fetches the map only when all three values are set.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+#[serde(default)]
+pub struct NexumConfig {
+    /// For example "https://nexum.example".
+    pub url: Option<String>,
+    /// A key with the `read` scope is enough.
+    pub key: Option<ApiKey>,
+    pub map_id: Option<String>,
+}
+
+impl NexumConfig {
+    /// The URL, the key and the map ID, when all three are set.
+    pub fn complete(&self) -> Option<(&str, &str, &str)> {
+        Some((self.url.as_deref()?, self.key.as_ref()?.0.as_str(), self.map_id.as_deref()?))
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
@@ -59,6 +102,7 @@ pub struct Config {
     pub favourites: Option<Vec<String>>,
     pub mode: Option<Mode>,
     pub top: Option<usize>,
+    pub nexum: NexumConfig,
 }
 
 impl Config {
@@ -77,7 +121,14 @@ impl Config {
             fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
         }
         let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+        fs::write(path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))?;
+        // The file holds the Nexum key, so only the owner can read it.
+        #[cfg(unix)]
+        if self.nexum.key.is_some() {
+            use std::os::unix::fs::PermissionsExt;
+            fs::set_permissions(path, fs::Permissions::from_mode(0o600)).map_err(|e| format!("{}: {e}", path.display()))?;
+        }
+        Ok(())
     }
 }
 
@@ -116,6 +167,46 @@ mod tests {
         let path = dir.join(APP_DIR).join(FILE_NAME);
         Config::default().save(&path).unwrap();
         assert!(Config::load(&path).is_ok());
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn nexum_key_is_masked() {
+        let mut cfg = Config::default();
+        cfg.nexum = NexumConfig {
+            url: Some("https://nexum.example".into()),
+            key: Some(ApiKey("nxm_TESTKEY_0000000000000000xyz".into())),
+            map_id: Some("m1".into()),
+        };
+        let debug = format!("{cfg:?}");
+        assert!(!debug.contains("TESTKEY_0000"), "{debug}");
+        assert!(debug.contains("nxm_…xyz"), "{debug}");
+        assert_eq!(ApiKey("abc".into()).masked(), "…");
+        // A key with multi-byte characters does not split a character.
+        assert_eq!(ApiKey("ééééééééé".into()).masked(), "éééé…ééé");
+        assert_eq!(cfg.nexum.complete(), Some(("https://nexum.example", "nxm_TESTKEY_0000000000000000xyz", "m1")));
+        cfg.nexum.key = None;
+        assert_eq!(cfg.nexum.complete(), None);
+    }
+
+    #[test]
+    fn nexum_settings_round_trip() {
+        let dir = std::env::temp_dir().join("eve-router-test-nexum-cfg");
+        let _ = fs::remove_dir_all(&dir);
+        let path = dir.join(FILE_NAME);
+        let mut cfg = Config::default();
+        cfg.nexum.url = Some("https://nexum.example".into());
+        cfg.nexum.key = Some(ApiKey("nxm_secret".into()));
+        cfg.save(&path).unwrap();
+        let text = fs::read_to_string(&path).unwrap();
+        // The file holds the full key. Only Debug masks it.
+        assert!(text.contains("\"key\": \"nxm_secret\""), "{text}");
+        assert_eq!(Config::load(&path).unwrap().nexum, cfg.nexum);
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
+        }
         fs::remove_dir_all(&dir).unwrap();
     }
 }

@@ -3,12 +3,15 @@
 //! The size and expiry rules copy Nexum (`server/src/routes/maps.ts` and
 //! `server/src/data/whLifetimes.ts`).
 
+use crate::config::NexumConfig;
+use crate::sources::{self, FetchError};
 use crate::wormhole::{Expiry, HOUR, MassStatus, Size, SourceData, SourceId, Wormhole, now, parse_utc};
 use crate::wormhole_types::WormholeTypes;
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
+use std::time::Duration;
 use std::time::UNIX_EPOCH;
 
 #[derive(Deserialize)]
@@ -47,6 +50,47 @@ pub struct NexumConnection {
 
 pub fn parse_map(text: &str) -> Result<NexumMap, String> {
     serde_json::from_str(text).map_err(|e| format!("Nexum map: {e}"))
+}
+
+/// One map in `GET /api/v1/maps`.
+#[derive(Deserialize, Clone, Debug, PartialEq)]
+pub struct MapInfo {
+    pub id: String,
+    pub name: String,
+}
+
+#[derive(Deserialize)]
+struct MapList {
+    maps: Vec<MapInfo>,
+}
+
+/// The API base: the URL without a trailing slash, plus `/api/v1`.
+fn api_base(cfg: &NexumConfig) -> Option<String> {
+    Some(format!("{}/api/v1", cfg.url.as_deref()?.trim_end_matches('/')))
+}
+
+/// The URL of the configured map.
+pub fn map_url(cfg: &NexumConfig) -> Option<String> {
+    Some(format!("{}/maps/{}", api_base(cfg)?, cfg.map_id.as_deref()?))
+}
+
+/// GET the configured map, as text. The caller parses it after the SDE loads.
+pub fn fetch_map(cfg: &NexumConfig, timeout: Duration) -> Result<String, FetchError> {
+    let (url, key) = (map_url(cfg), cfg.key.as_ref());
+    let (Some(url), Some(key)) = (url, key) else {
+        return Err(FetchError::Offline("the Nexum settings are not complete".into()));
+    };
+    sources::get(&url, &key.0, timeout)
+}
+
+/// GET the map list, for the settings page. It needs the URL and the key, but no map ID.
+pub fn fetch_maps(cfg: &NexumConfig, timeout: Duration) -> Result<Vec<MapInfo>, FetchError> {
+    let (Some(base), Some(key)) = (api_base(cfg), cfg.key.as_ref()) else {
+        return Err(FetchError::Offline("set the Nexum URL and key first".into()));
+    };
+    let text = sources::get(&format!("{base}/maps"), &key.0, timeout)?;
+    let list: MapList = serde_json::from_str(&text).map_err(|e| FetchError::Offline(format!("Nexum map list: {e}")))?;
+    Ok(list.maps)
 }
 
 /// The connections that the converter did not use, by reason.
