@@ -132,11 +132,12 @@ pub fn link_label(uni: &Universe, rules: &BridgeRules, edge: EdgeIndex, now: u64
     }
 }
 
-/// For example "Wormhole K162 · ABC · Large · Less than 3h 10m remaining · Critical".
+/// For example "Wormhole · Sig. ABC · Large · Less than 3h 10m remaining · Critical".
 /// "ABC" is the signature in `from`, the system that the jump leaves. A stable mass shows no text.
+/// The label does not show the type. The hull check uses the type.
 pub fn wormhole_label(w: &Wormhole, from: u32, now: u64) -> String {
-    let mut parts = vec![w.wh_type.as_deref().map_or("Wormhole".to_string(), |t| format!("Wormhole {t}"))];
-    parts.extend(w.sig_at(from));
+    let mut parts = vec!["Wormhole".to_string()];
+    parts.extend(w.sig_at(from).map(|sig| format!("Sig. {sig}")));
     parts.extend(w.size.map(|s| s.label().to_string()));
     parts.extend(w.expiry.map(|e| expiry_text(e, now)));
     parts.extend(w.mass.filter(|&m| m != MassStatus::Stable).map(|m| m.label().to_string()));
@@ -164,12 +165,12 @@ mod tests {
             mass: Some(MassStatus::Critical),
             ..hole(1, 2)
         };
-        assert_eq!(wormhole_label(&w, 1, now), "Wormhole K162 · Large · Less than 3h 10m remaining · Critical");
+        assert_eq!(wormhole_label(&w, 1, now), "Wormhole · Large · Less than 3h 10m remaining · Critical");
         // The signature in the system that the jump leaves: "ABC" from system 1, "DEF" from system 2.
         let signed = Wormhole { sig_a: Some("ABC-123".into()), sig_b: Some("def".into()), ..w.clone() };
-        assert_eq!(wormhole_label(&signed, 1, now), "Wormhole K162 · ABC · Large · Less than 3h 10m remaining · Critical");
-        assert_eq!(wormhole_label(&signed, 2, now), "Wormhole K162 · DEF · Large · Less than 3h 10m remaining · Critical");
-        // A stable mass shows no text. An unknown type shows only "Wormhole".
+        assert_eq!(wormhole_label(&signed, 1, now), "Wormhole · Sig. ABC · Large · Less than 3h 10m remaining · Critical");
+        assert_eq!(wormhole_label(&signed, 2, now), "Wormhole · Sig. DEF · Large · Less than 3h 10m remaining · Critical");
+        // A stable mass shows no text. The label never shows the type: the hull check uses it.
         let stable = Wormhole { mass: Some(MassStatus::Stable), size: Some(Size::XLarge), ..hole(1, 2) };
         assert_eq!(wormhole_label(&stable, 1, now), "Wormhole · XL");
         let destabilized = Wormhole { mass: Some(MassStatus::Destabilized), ..hole(1, 2) };

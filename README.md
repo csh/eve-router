@@ -8,7 +8,7 @@ A terminal route planner for EVE Online.
 - Automatic updates of required SDE files.
 - Calculate the top-n routes through any number of midpoints with similar navigation options as ingame: shortest, prefer highsec and less secure.
 - Wormhole connections from a Nexum map, fetched at startup. The router uses the wormhole size, mass status and expiry.
-- The signature of each wormhole jump, for example `Wormhole V898 · ABC · XL`.
+- The signature of each wormhole jump, for example `Wormhole · Sig. ABC · XL`.
 - Thera and Turnur wormholes from the public [EVE-Scout](https://www.eve-scout.com/) feed, fetched at startup. Each hub has its own switch.
 
 ### Work in Progress
