@@ -8,10 +8,10 @@ A terminal route planner for EVE Online.
 - Automatic updates of required SDE files.
 - Calculate the top-n routes through any number of midpoints with similar navigation options as ingame: shortest, prefer highsec and less secure.
 - Wormhole connections from a Nexum map, fetched at startup. The router uses the wormhole size, mass status and expiry.
+- Thera and Turnur wormholes from the public [EVE-Scout](https://www.eve-scout.com/) feed, fetched at startup. Each hub has its own switch.
 
 ### Work in Progress
 
-- EVE-Scout wormholes (Thera and Turnur).
 - Import Ansiblex data in SMT format.
 
 Ansiblex support uses a best-effort attempt to solve for zones and maximum capacitor usage.
@@ -33,6 +33,7 @@ Use `--print` to echo all solved routes, omitting this launches the TUI.
 - Capacitor usage limit per jump bridge taken.
 - Favourite systems list.
 - Nexum URL, API key and map. The key needs only the `read` scope. The router sends GET requests only. A change applies at the next start.
+- EVE-Scout: a Thera switch and a Turnur switch. Both are on by default. A change applies at once.
 
 Config files are stored in `com.smrkn.eve-router` under the platform config directory, whilst SDE files are located in the platform data directory. 
 See the [`dirs`](https://crates.io/crates/dirs) crate for platform specific paths.
@@ -43,13 +44,24 @@ At startup, the router gets the Nexum map and keeps a copy in the platform cache
 
 `--nexum <file>` reads a map export and sends no request.
 
+The router also gets the EVE-Scout feed at each startup, with the same cache and fallback. The feed is public and needs no key. Each entry gives an exact expiry, both signatures and a ship size, but no mass status.
+
+The Thera and Turnur switches act on each wormhole with an end in that hub, from Nexum or EVE-Scout. The gates into Turnur stay open. In `eve-router.json`:
+
+```json
+"eve_scout": { "thera": true, "turnur": false }
+```
+
+The Shortcuts box shows the count of systems with a wormhole to each hub. A count shows in gray when its switch is off.
+
 The router does not use a wormhole when:
 
 - its mass status is critical,
 - its expiry time is past,
-- the hull mass is more than the per-jump limit of the wormhole.
+- the hull mass is more than the per-jump limit of the wormhole,
+- its end is in Thera or Turnur, and the switch of that hub is off.
 
-The size check uses the hull mass from the SDE. Fitted modules, for example plates and propulsion modules, add mass. The check does not know about them. A wormhole of a known type uses the per-jump limit of that type. A K162 or a wormhole with no type uses the lowest limit of its size class. If you set no hull, the router does no size check.
+The size check uses the hull mass from the SDE. Fitted modules, for example plates and propulsion modules, add mass. The check does not know about them. A wormhole of a known type uses the per-jump limit of that type. A K162 or a wormhole with no type uses the lowest limit of its size class. For EVE-Scout, the size class comes from the ship size of the entry. If you set no hull, the router does no size check.
 
 ## Static data
 
