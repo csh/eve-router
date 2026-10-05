@@ -1,0 +1,12 @@
+# A small jump bridge list in SMT format, for the tests.
+# Each bridge has one line for each direction.
+
+# Tenerifis
+0 UALX-3  -->  IL-YTR
+0 IL-YTR  -->  UALX-3
+
+0 KW-OAM  -->  TY2X-C
+0 TY2X-C  -->  KW-OAM
+
+0 QLU-P0  -->  Q5KZ-W
+0 Q5KZ-W  -->  QLU-P0

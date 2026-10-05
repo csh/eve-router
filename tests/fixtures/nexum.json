@@ -1,0 +1,66 @@
+{
+  "systems": [
+    {
+      "id": "s-perimeter",
+      "eveSystemId": 30000144,
+      "name": "Perimeter"
+    },
+    {
+      "id": "s-j134702",
+      "eveSystemId": 31002230,
+      "name": "J134702"
+    },
+    {
+      "id": "s-jita",
+      "eveSystemId": 30000142,
+      "name": "Jita"
+    },
+    {
+      "id": "s-amarr",
+      "eveSystemId": 30002187,
+      "name": "Amarr"
+    }
+  ],
+  "connections": [
+    {
+      "id": "c1",
+      "sourceId": "s-perimeter",
+      "targetId": "s-j134702",
+      "connectionType": "standard",
+      "size": "large",
+      "type": "N062",
+      "timeStatus": "lessThan4h",
+      "broken": false
+    },
+    {
+      "id": "c2",
+      "sourceId": "s-jita",
+      "targetId": "s-amarr",
+      "connectionType": "standard",
+      "size": "large",
+      "type": null,
+      "timeStatus": null,
+      "broken": true
+    },
+    {
+      "id": "c3",
+      "sourceId": "s-amarr",
+      "targetId": "s-j134702",
+      "connectionType": "standard",
+      "size": "large",
+      "type": null,
+      "timeStatus": "expired",
+      "broken": false
+    },
+    {
+      "id": "c4",
+      "sourceId": "s-jita",
+      "targetId": "s-perimeter",
+      "connectionType": "gate",
+      "size": "large",
+      "type": null,
+      "timeStatus": null,
+      "broken": false
+    }
+  ]
+}

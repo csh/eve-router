@@ -1,0 +1,7 @@
+/target
+/nexum
+/ansiblex.txt
+/eve-router.json
+# The router no longer reads these. types.jsonl is also over the GitHub 100 MB limit.
+/sde/types.jsonl
+/sde/groups.jsonl
