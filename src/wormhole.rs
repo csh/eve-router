@@ -144,6 +144,81 @@ impl Wormhole {
     }
 }
 
+/// The converted data of one source. The disk cache holds this record.
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct SourceData {
+    pub source: SourceId,
+    /// Unix seconds.
+    pub fetched_at: u64,
+    pub holes: Vec<Wormhole>,
+}
+
+/// Join the wormholes of all sources. This function does no I/O.
+///
+/// - A record with an expiry at or before `now` is dropped.
+/// - The records of one source never merge with each other. One source can list two
+///   wormholes between the same systems.
+/// - Records from two sources merge when they have the same pair, and the same signatures
+///   if both have signatures. A record merges at most one time with each later source.
+pub fn merge(sources: &[SourceData], now: u64) -> Vec<Wormhole> {
+    let mut out: Vec<Wormhole> = Vec::new();
+    for data in sources {
+        let earlier = out.len();
+        let mut taken = vec![false; earlier];
+        for hole in &data.holes {
+            if hole.expiry.is_some_and(|e| e.at <= now) {
+                continue;
+            }
+            let matched = (0..earlier).find(|&i| !taken[i] && same_hole(&out[i], hole));
+            match matched {
+                Some(i) => {
+                    taken[i] = true;
+                    combine(&mut out[i], hole);
+                }
+                None => out.push(hole.clone()),
+            }
+        }
+    }
+    out
+}
+
+fn same_hole(a: &Wormhole, b: &Wormhole) -> bool {
+    let sigs_match = match (&a.sigs, &b.sigs) {
+        (Some(x), Some(y)) => x == y,
+        _ => true,
+    };
+    (a.a, a.b) == (b.a, b.b) && sigs_match
+}
+
+/// Merge `h` into `o`: the smaller size and limit, the worse mass status, the earlier expiry,
+/// the first type and signatures, and all sources.
+fn combine(o: &mut Wormhole, h: &Wormhole) {
+    o.size = match (o.size, h.size) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (x, y) => x.or(y),
+    };
+    o.max_jump_kg = match (o.max_jump_kg, h.max_jump_kg) {
+        (Some(x), Some(y)) => Some(x.min(y)),
+        (x, y) => x.or(y),
+    };
+    o.mass = o.mass.max(h.mass);
+    o.expiry = match (o.expiry, h.expiry) {
+        (Some(x), Some(y)) => Some(if y.at < x.at { y } else { x }),
+        (x, y) => x.or(y),
+    };
+    if o.wh_type.is_none() {
+        o.wh_type = h.wh_type.clone();
+    }
+    if o.sigs.is_none() {
+        o.sigs = h.sigs.clone();
+    }
+    for s in &h.sources {
+        if !o.sources.contains(s) {
+            o.sources.push(*s);
+        }
+    }
+}
+
 /// Parse an RFC 3339 time, for example `2026-10-05T10:18:57.562Z`, to Unix seconds.
 /// A bad format, or a time before 1970, gives `None`.
 pub fn parse_utc(s: &str) -> Option<u64> {
@@ -283,5 +358,74 @@ pub mod tests {
         let ends = Wormhole { expiry: Some(Expiry { at: now, exact: true }), ..hole(1, 2) };
         assert!(!ends.usable(now, None));
         assert!(ends.usable(now - 1, None));
+    }
+
+    fn data(source: SourceId, holes: Vec<Wormhole>) -> SourceData {
+        SourceData { source, fetched_at: 0, holes }
+    }
+
+    #[test]
+    fn merge_drops_expired() {
+        let gone = Wormhole { expiry: Some(Expiry { at: 100, exact: true }), ..hole(1, 2) };
+        let open = Wormhole { expiry: Some(Expiry { at: 101, exact: true }), ..hole(3, 4) };
+        let merged = merge(&[data(SourceId::Nexum, vec![gone, open.clone()])], 100);
+        assert_eq!(merged, vec![open]);
+    }
+
+    #[test]
+    fn merge_keeps_two_holes_from_one_source() {
+        let merged = merge(&[data(SourceId::Nexum, vec![hole(1, 2), hole(1, 2)])], 0);
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn merge_joins_sources() {
+        let nexum = Wormhole {
+            size: Some(Size::Large),
+            max_jump_kg: Some(410_000_000.0),
+            mass: Some(MassStatus::Destabilized),
+            expiry: Some(Expiry { at: 500, exact: false }),
+            wh_type: None,
+            ..hole(1, 2)
+        };
+        let scout = Wormhole {
+            size: Some(Size::Medium),
+            max_jump_kg: None,
+            mass: Some(MassStatus::Stable),
+            expiry: Some(Expiry { at: 400, exact: true }),
+            wh_type: Some("K162".into()),
+            sigs: Some(("ABC-123".into(), "DEF-456".into())),
+            sources: vec![SourceId::EveScout],
+            ..hole(1, 2)
+        };
+        let merged = merge(&[data(SourceId::Nexum, vec![nexum]), data(SourceId::EveScout, vec![scout])], 0);
+        assert_eq!(merged.len(), 1);
+        let m = &merged[0];
+        assert_eq!(m.size, Some(Size::Medium));
+        assert_eq!(m.max_jump_kg, Some(410_000_000.0));
+        assert_eq!(m.mass, Some(MassStatus::Destabilized));
+        assert_eq!(m.expiry, Some(Expiry { at: 400, exact: true }));
+        assert_eq!(m.wh_type.as_deref(), Some("K162"));
+        assert_eq!(m.sigs, Some(("ABC-123".into(), "DEF-456".into())));
+        assert_eq!(m.sources, vec![SourceId::Nexum, SourceId::EveScout]);
+    }
+
+    #[test]
+    fn merge_keeps_holes_with_other_signatures() {
+        let first = Wormhole { sigs: Some(("ABC-123".into(), "DEF-456".into())), ..hole(1, 2) };
+        let second = Wormhole { sigs: Some(("XYZ-789".into(), "DEF-456".into())), sources: vec![SourceId::EveScout], ..hole(1, 2) };
+        let merged = merge(&[data(SourceId::Nexum, vec![first]), data(SourceId::EveScout, vec![second])], 0);
+        assert_eq!(merged.len(), 2);
+    }
+
+    #[test]
+    fn merge_uses_each_record_one_time_per_source() {
+        // Source 2 lists two holes for the pair. Only one of them merges with the source 1 hole.
+        let two = vec![
+            Wormhole { sources: vec![SourceId::EveScout], ..hole(1, 2) },
+            Wormhole { sources: vec![SourceId::EveScout], ..hole(1, 2) },
+        ];
+        let merged = merge(&[data(SourceId::Nexum, vec![hole(1, 2)]), data(SourceId::EveScout, two)], 0);
+        assert_eq!(merged.len(), 2);
     }
 }
