@@ -11,7 +11,7 @@ use super::sso::{Login, LoginError, Sso, Tokens};
 use super::store::Accounts;
 use super::tracker::{Command, Event, Intervals, Live, Tracker};
 use super::{Character, client_id};
-use crate::ansiblex::{HullClass, hull_rows, same_hull};
+use crate::ansiblex::{HullClass, hull_by_type, hull_rows, same_class, same_hull};
 use crate::route::Route;
 use crate::settings::{HullSource, Settings};
 use crate::universe::Universe;
@@ -544,13 +544,17 @@ pub struct StartPlan {
     pub online: Option<bool>,
     /// Why `from_here` is missing, when the search failed.
     pub error: Option<String>,
+    /// The hull of the pilot, when it does not suit the planned hull. The UI offers "Plan for" it.
+    pub flown: Option<HullClass>,
 }
 
 impl StartPlan {
     /// `number` is the route number in the list, from 1.
     pub fn new(uni: &Universe, settings: &Settings, route: &Route, number: usize, pilot: &PilotView, now: u64) -> StartPlan {
         let planned = ActiveRoute::new(uni, &settings.rules, route, number, pilot.id, &pilot.name, now);
-        let mut plan = StartPlan { planned, from_here: None, here: None, online: pilot.live.online, error: None };
+        let mut plan = StartPlan { planned, from_here: None, here: None, online: pilot.live.online, error: None, flown: None };
+        let flown = pilot.live.ship.as_ref().and_then(|s| hull_by_type(s.ship_type_id));
+        plan.flown = flown.filter(|&f| !settings.rules.hull.is_some_and(|planned| same_class(planned, f)));
         let Some(system) = pilot.live.system.filter(|s| !plan.planned.steps.iter().any(|step| step.system == *s)) else { return plan };
         plan.here = Some(system);
         let stops: Vec<u32> = plan.planned.stops.iter().skip(1).map(|&i| plan.planned.steps[i].system).collect();
@@ -820,6 +824,29 @@ mod tests {
         assert_eq!(from_here.steps[0].system, rens);
         assert_eq!(from_here.steps.last().map(|s| s.system), plan.planned.steps.last().map(|s| s.system));
         assert_eq!(plan.default_route(), from_here);
+    }
+
+    #[test]
+    fn start_plan_compares_the_flown_hull() {
+        use crate::ansiblex::find_hull;
+        use crate::test_support::{FIXTURE_TIME, overlay_universe, settings};
+        let uni = overlay_universe();
+        let s = settings(&uni, Some("black-ops"));
+        let nodes = [uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()];
+        let route = &s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).unwrap()[0];
+        let mut pilot = PilotView { id: 7, name: "Alice".into(), live: PilotState::default(), needs_reauth: false, active: false };
+        let flies = |pilot: &mut PilotView, name: &str| {
+            let type_id = find_hull(name).unwrap().type_id.unwrap();
+            pilot.live.ship = Some(Ship { ship_type_id: type_id, ship_item_id: 1, ship_name: String::new() });
+        };
+        // The ship is not known: no check.
+        assert!(StartPlan::new(&uni, &s, route, 1, &pilot, FIXTURE_TIME).flown.is_none());
+        // A Sin is in the planned group.
+        flies(&mut pilot, "Sin");
+        assert!(StartPlan::new(&uni, &s, route, 1, &pilot, FIXTURE_TIME).flown.is_none());
+        // A Rorqual is not.
+        flies(&mut pilot, "Rorqual");
+        assert_eq!(StartPlan::new(&uni, &s, route, 1, &pilot, FIXTURE_TIME).flown.unwrap().name, "Rorqual");
     }
 
     #[test]

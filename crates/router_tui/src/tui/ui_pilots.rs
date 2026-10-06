@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Clear, Gauge, List, ListItem, Paragraph, Row, Table, Wrap};
 use router_core::esi::active::Hop;
 use router_core::esi::pilots::PilotView;
-use router_core::labels::ship_text;
+use router_core::labels::{hull_label, ship_text};
 use router_core::universe::display_sec;
 
 /// At most this many pilots show in a row of the step table. More give "+n".
@@ -187,7 +187,10 @@ fn question(frame: &mut Frame, title: &str, lines: Vec<Line<'static>>, keys: &st
     let mut lines = lines;
     lines.push(Line::default());
     lines.push(Line::from(keys.to_string()).dark_gray());
-    let area = centered(frame.area(), 68, lines.len() as u16 + 2);
+    // A long line wraps, so count the rows inside the border, not the lines.
+    const WIDTH: u16 = 68;
+    let rows: usize = lines.iter().map(|l| l.width().div_ceil(usize::from(WIDTH - 2)).max(1)).sum();
+    let area = centered(frame.area(), WIDTH, rows as u16 + 2);
     frame.render_widget(Clear, area);
     let block = Block::bordered().title(format!(" {title} ")).border_style(Style::new().cyan());
     frame.render_widget(Paragraph::new(lines).wrap(Wrap { trim: true }).block(block), area);
@@ -293,11 +296,19 @@ pub fn draw_popup(frame: &mut Frame, app: &mut App) {
                 lines.push(Line::default());
                 lines.push(Line::from(format!("{name} appears offline. Waypoints need the game client running.")).yellow());
             }
-            let keys = match (&here, &confirm.from_here) {
+            if let Some(flown) = confirm.flown {
+                let planned = app.settings.rules.hull.map_or("no hull".into(), hull_label);
+                lines.push(Line::default());
+                lines.push(Line::from(format!("Planned for {planned}. {name} flies a {}.", flown.name)).yellow());
+            }
+            let mut keys = match (&here, &confirm.from_here) {
                 (Some(here), Some(_)) => format!("Enter Route from {here}   a Send as planned   Esc Cancel"),
                 _ if confirm.online == Some(false) => "Enter Send anyway   Esc Cancel".into(),
                 _ => "Enter Send   Esc Cancel".into(),
             };
+            if let Some(flown) = confirm.flown {
+                keys = keys.replace("   Esc Cancel", &format!("   p Plan for {}   Esc Cancel", flown.name));
+            }
             question(frame, &format!("Send route #{} to {name}?", confirm.planned.number), lines, &keys);
         }
         Some(Popup::RemovePilot(id)) => {

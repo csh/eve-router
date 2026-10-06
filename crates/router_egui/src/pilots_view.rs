@@ -11,8 +11,9 @@ use egui_extras::{Column, TableBuilder};
 use router_core::esi::active::{ActiveRoute, Hop};
 use router_core::esi::client::{IMAGES_URL, portrait};
 use router_core::esi::pilots::{HullSync, PilotView, StartPlan};
-use router_core::labels::ship_text;
+use router_core::labels::{hull_label, ship_text};
 use router_core::route::Stop;
+use router_core::settings::HullSource;
 use router_core::universe::display_sec;
 use std::collections::HashMap;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -396,6 +397,7 @@ impl PilotsUi {
         let Some(start) = &mut self.start else { return };
         let mut next = None;
         let mut close = false;
+        let mut plan_for = None;
         let response = Modal::new(Id::new("start")).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
             ui.set_width(480.0);
             match start {
@@ -440,6 +442,13 @@ impl PilotsUi {
                         let text = format!("{name} appears offline. Waypoints need the game client running.");
                         ui.label(RichText::new(text).color(theme::WARN));
                     }
+                    if let Some(flown) = plan.flown {
+                        let planned = s.settings.rules.hull.map_or("no hull".into(), hull_label);
+                        ui.label(RichText::new(format!("Planned for {planned}. {name} flies a {}.", flown.name)).color(theme::WARN));
+                        if ui.button(format!("Plan for {}", flown.name)).clicked() {
+                            plan_for = Some((plan.planned.character, flown.name.clone()));
+                        }
+                    }
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         let send = if plan.online == Some(false) { "Send anyway" } else { "Send" };
@@ -470,6 +479,15 @@ impl PilotsUi {
         });
         if close || response.should_close() {
             self.start = None;
+        }
+        // The route list changes, so the pilot starts the route again from the new list.
+        if let Some((id, kind)) = plan_for {
+            self.start = None;
+            s.settings.hull_source = HullSource::Pilot(id);
+            s.pilots.sync_hull(&mut s.settings);
+            s.recompute();
+            s.save_quietly();
+            s.status = format!("Routes planned for the {kind}. Start the route again.");
         }
         if let Some((route, id)) = next {
             self.confirm(s, route, id);

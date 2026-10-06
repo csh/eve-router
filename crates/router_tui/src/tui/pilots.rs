@@ -4,6 +4,7 @@ use super::app::{App, Popup, SettingsRow};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::widgets::ListState;
 use router_core::esi::pilots::{HullSync, StartPlan};
+use router_core::settings::HullSource;
 
 /// The status text for a key that could change the route.
 pub const LOCKED: &str = "Locked while route is active — press x to stop";
@@ -285,6 +286,16 @@ impl App<'_> {
                 KeyCode::Enter => {
                     let StartPlan { planned, from_here, .. } = *confirm;
                     self.pilots.start_route(from_here.unwrap_or(planned));
+                    None
+                }
+                // The route list changes, so the pilot starts the route again from the new list.
+                KeyCode::Char('p') if confirm.flown.is_some() => {
+                    self.settings.hull_source = HullSource::Pilot(confirm.planned.character);
+                    self.pilots.sync_hull(&mut self.settings);
+                    self.recompute();
+                    self.save_quietly();
+                    let kind = confirm.flown.map_or_else(String::new, |h| h.name.clone());
+                    self.status = format!("Routes planned for the {kind}. Start the route again.");
                     None
                 }
                 KeyCode::Char('a') if confirm.from_here.is_some() => {
