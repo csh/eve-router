@@ -24,6 +24,8 @@ pub const WAYPOINT_CAP: usize = 100;
 /// The off-route state needs this many polls in a row off the path. One odd poll (a pod kill,
 /// a cyno, a wormhole exit) does not give an alarm.
 pub const OFF_ROUTE_POLLS: u8 = 2;
+/// The most steps that the pilot can make between two location polls.
+const MAX_SKIP: usize = 2;
 const FILE_NAME: &str = "active-route.json";
 
 /// The active route file, next to the config file.
@@ -212,6 +214,9 @@ impl ActiveRoute {
         // back, and is not off the path.
         let ahead = (self.progress..self.steps.len()).find(|&i| self.steps[i].system == system);
         let behind = self.steps[..self.progress].iter().any(|s| s.system == system);
+        // A route can visit a system two times, for example a round trip. A system behind the
+        // progress and also far ahead is the visit behind: the pilot went back.
+        let ahead = ahead.filter(|&i| !behind || i <= self.progress + MAX_SKIP);
         let Some(step) = ahead else {
             if behind {
                 self.off_polls = 0;
@@ -332,6 +337,21 @@ mod tests {
         assert_eq!(r.progress, 2);
         assert_eq!(r.observe(&at(5)), Observation::Arrived);
         assert!(r.arrived());
+    }
+
+    #[test]
+    fn loop_route_does_not_skip_to_a_later_visit() {
+        // The route starts and ends in system 1, as a round trip does.
+        let mut r = route(&[1, 2, 3, 4, 5, 1], &[]);
+        assert_eq!(r.observe(&at(2)), Observation::Progress(1));
+        // Back to the start: that is a step behind, not the destination.
+        assert_eq!(r.observe(&at(1)), Observation::Same);
+        assert_eq!(r.progress, 1);
+        assert!(!r.is_off_route());
+        // A short skip ahead still moves the progress.
+        assert_eq!(r.observe(&at(4)), Observation::Progress(3));
+        assert_eq!(r.observe(&at(5)), Observation::Progress(4));
+        assert_eq!(r.observe(&at(1)), Observation::Arrived);
     }
 
     #[test]
