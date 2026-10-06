@@ -9,6 +9,9 @@ use router_core::settings::HullSource;
 /// The status text for a key that could change the route.
 pub const LOCKED: &str = "Locked while route is active — press x to stop";
 
+/// The status text after a ship change closes a route choice.
+pub const ROUTES_CHANGED: &str = "The ship changed, so the routes changed. Start the route again.";
+
 /// True for a key that changes the route search. These keys do nothing while a route is active,
 /// so the app and the in-game waypoints stay the same.
 pub fn route_locked(code: KeyCode) -> bool {
@@ -44,8 +47,12 @@ impl App<'_> {
                 self.save_quietly();
             }
             HullSync::Hull => {
+                let forgot = self.forget_route_choice();
                 self.recompute();
                 self.save_quietly();
+                if forgot {
+                    self.status = ROUTES_CHANGED.into();
+                }
             }
         }
         let notices = std::mem::take(&mut self.pilots.notices);
@@ -65,6 +72,16 @@ impl App<'_> {
             self.detail.select(progress);
             self.last_progress = progress;
         }
+    }
+
+    /// Forget a choice that holds a route index: the Pick popup and the start after the login.
+    /// After a recompute, the index can point to a different route. True if a choice went away.
+    fn forget_route_choice(&mut self) -> bool {
+        let pick = matches!(self.popup, Some(Popup::Pick { .. }));
+        if pick {
+            self.popup = None;
+        }
+        self.start_after_login.take().is_some() || pick
     }
 
     /// Ask "Resume?" when the last run left an active route.
@@ -109,8 +126,12 @@ impl App<'_> {
                 None
             }
             0 => {
-                self.start_after_login = Some(index);
-                self.begin_login()
+                // Start the route after the login only when a login starts.
+                let popup = self.begin_login();
+                if matches!(popup, Some(Popup::Login { .. })) {
+                    self.start_after_login = Some(index);
+                }
+                popup
             }
             1 => self.confirm(index, ids[0]),
             _ => {
@@ -122,7 +143,8 @@ impl App<'_> {
 
     fn confirm(&mut self, index: usize, id: u64) -> Option<Popup> {
         let pilot = self.pilots.characters().into_iter().find(|c| c.id == id)?;
-        let plan = StartPlan::new(self.uni, &self.settings, &self.routes[index], index + 1, &pilot, router_core::wormhole::now());
+        let route = self.routes.get(index)?;
+        let plan = StartPlan::new(self.uni, &self.settings, route, index + 1, &pilot, router_core::wormhole::now());
         if let Some(error) = &plan.error {
             self.status.clone_from(error);
         }
@@ -435,6 +457,39 @@ mod tests {
         press(&mut app, KeyCode::Char('g'));
         let Some(Popup::Message(text)) = &app.popup else { panic!("no message") };
         assert!(text.contains("EVE_ROUTER_CLIENT_ID"), "{text}");
+    }
+
+    #[test]
+    fn pick_with_a_stale_route_index_does_nothing() {
+        let mut app = app("stale-pick", Config::default());
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        app.pilots.add_test_pilot(7, "Alice", 30000142);
+        // Route 5 is not in the list: a recompute made the list shorter.
+        app.popup = Some(Popup::Pick { route: 5, ids: vec![7], state: ListState::default().with_selected(Some(0)) });
+        press(&mut app, KeyCode::Enter);
+        assert!(app.popup.is_none());
+    }
+
+    #[test]
+    fn a_failed_login_start_forgets_the_route() {
+        let mut app = app("failed-login-start", Config::default());
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        app.focus = crate::tui::app::Focus::Routes;
+        press(&mut app, KeyCode::Char('g'));
+        assert!(matches!(app.popup, Some(Popup::Message(_))));
+        assert!(app.start_after_login.is_none());
+    }
+
+    #[test]
+    fn a_route_change_forgets_the_pick() {
+        let mut app = app("forget-pick", Config::default());
+        app.popup = Some(Popup::Pick { route: 0, ids: vec![7], state: ListState::default() });
+        app.start_after_login = Some(0);
+        assert!(app.forget_route_choice());
+        assert!(app.popup.is_none() && app.start_after_login.is_none());
+        assert!(!app.forget_route_choice());
     }
 
     #[test]
