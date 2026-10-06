@@ -1,0 +1,18 @@
+[package]
+name = "router_egui"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "eve-router-egui"
+path = "src/main.rs"
+
+[dependencies]
+eframe = "0.36.2"
+egui = "0.36.2"
+mimalloc.workspace = true
+petgraph.workspace = true
+router_core.workspace = true
+
+[dev-dependencies]
+router_core = { workspace = true, features = ["test-support"] }

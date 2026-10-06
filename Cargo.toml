@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/router_core", "crates/router_tui"]
+members = ["crates/router_core", "crates/router_egui", "crates/router_tui"]
 # `cargo run` starts the TUI. `cargo test` also runs the core tests.
 default-members = ["crates/router_tui", "crates/router_core"]
 

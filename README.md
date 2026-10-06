@@ -28,6 +28,20 @@ cargo run --release -- --print --capital JK-Q77 --hull Sin UALX-3 Jita
 
 Use `--print` to echo all solved routes, omitting this launches the TUI.
 
+The egui window is in an early state. It loads the map and shows the route summaries:
+
+```sh
+cargo run --release -p router_egui
+```
+
+### Crates
+
+| Crate                 | Contents                                                                 |
+|-----------------------|--------------------------------------------------------------------------|
+| `crates/router_core`  | The SDE, the map graph, the overlays and the route search (library)      |
+| `crates/router_tui`   | The CLI, `--print` and the terminal UI (binary `eve-router`)             |
+| `crates/router_egui`  | The egui window (binary `eve-router-egui`)                               |
+
 ### Settings
 
 - Alliance capital for usage with Ansiblex network.
@@ -86,8 +100,11 @@ Set `EVE_ROUTER_SKIP_SDE_CHECK=1` to skip this check on startup.
 ## Development
 
 ```sh
-cargo test
+cargo test               # router_core and router_tui
+cargo test --workspace   # also router_egui
 ```
+
+Set `UPDATE_SNAPSHOTS=1` to write the snapshot files in `tests/snapshots/` of each crate again.
 
 The tests use the map files in `sde/` and the small fixtures in `crates/router_core/tests/fixtures/`. They do not need network access.
 
