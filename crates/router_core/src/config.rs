@@ -98,6 +98,8 @@ pub struct Config {
     pub capital: Option<String>,
     /// A ship name ("Sin") or a ship group ("Black Ops" or `black-ops`).
     pub hull: Option<String>,
+    /// The character whose ship sets the hull. `None`: the hull comes from `hull` only.
+    pub pilot: Option<u64>,
     /// The maximum capacitor (TJ) that one bridge jump can use.
     pub max_cap_tj: Option<f32>,
     /// The minimum time (minutes) that a wormhole must have left. `None` gives `DEFAULT_MIN_LIFE_MIN`.
@@ -173,6 +175,7 @@ mod tests {
         let cfg = Config {
             capital: Some("JK-Q77".into()),
             hull: Some("black-ops".into()),
+            pilot: Some(2112345678),
             max_cap_tj: Some(36.5),
             min_life_min: Some(30),
             favourites: Some(vec!["Jita".into()]),

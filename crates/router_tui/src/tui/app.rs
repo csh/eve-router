@@ -718,6 +718,7 @@ pub(crate) mod tests {
             hubs: Default::default(),
             bridges: false,
             rules: BridgeRules::default(),
+            hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
             favourites: Vec::new(),
         };

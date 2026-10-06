@@ -1,6 +1,7 @@
 {
   "capital": "JK-Q77",
   "hull": "black-ops",
+  "pilot": 2112345678,
   "max_cap_tj": 36.5,
   "min_life_min": 30,
   "favourites": [

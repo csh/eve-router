@@ -71,6 +71,10 @@ fn run() -> Result<(), String> {
     let mut cfg = Config::load(&cfg_path)?;
     // The CLI flags override the config file.
     cfg.capital = cli.capital.or(cfg.capital);
+    // A hull on the command line is a manual hull for this run.
+    if cli.hull.is_some() {
+        cfg.pilot = None;
+    }
     cfg.hull = cli.hull.or(cfg.hull);
     cfg.max_cap_tj = cli.max_cap.or(cfg.max_cap_tj);
     cfg.min_life_min = cli.min_life.or(cfg.min_life_min);

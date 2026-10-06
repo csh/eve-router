@@ -1,11 +1,20 @@
 //! The route settings, and the system names of the user input.
 
-use crate::ansiblex::{BridgeRules, find_hull, table};
+use crate::ansiblex::{BridgeRules, find_hull, hull_by_type, same_hull, table};
 use crate::config::{self, Config};
 use crate::route::{Mode, Router};
 use crate::universe::Universe;
 use crate::wormhole;
 use petgraph::graph::NodeIndex;
+
+/// Where the hull comes from.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HullSource {
+    /// The hull picker.
+    Manual,
+    /// The live ship of this character.
+    Pilot(u64),
+}
 
 /// The settings that a user interface can change.
 pub struct Settings {
@@ -18,6 +27,8 @@ pub struct Settings {
     pub hubs: wormhole::Hubs,
     pub bridges: bool,
     pub rules: BridgeRules,
+    /// With `Pilot`, `follow` sets `rules.hull`.
+    pub hull_source: HullSource,
     /// The minimum time (minutes) that a wormhole must have left. The router skips other wormholes.
     pub min_life: u64,
     /// The sidebar destinations.
@@ -43,6 +54,7 @@ impl Settings {
             hubs: cfg.eve_scout,
             bridges: true,
             rules: BridgeRules { capital, hull, max_cap: cfg.max_cap_tj },
+            hull_source: cfg.pilot.map_or(HullSource::Manual, HullSource::Pilot),
             min_life: cfg.min_life_min.unwrap_or(config::DEFAULT_MIN_LIFE_MIN),
             favourites: resolve_all(uni, &favourite_names(cfg))?,
         })
@@ -54,10 +66,25 @@ impl Settings {
         Router::new(uni, self.mode, self.wormholes, self.hubs, bridges, self.rules, now + self.min_life * 60)
     }
 
+    /// Set the hull from the ship of the followed pilot. `ship_type` is `None` while the ship is
+    /// not known, and then the hull stays. A type that is not in `ships.json` gives no hull.
+    /// True if the hull changed.
+    pub fn follow(&mut self, ship_type: Option<u32>) -> bool {
+        let (HullSource::Pilot(_), Some(type_id)) = (self.hull_source, ship_type) else { return false };
+        let hull = hull_by_type(type_id);
+        let changed = !same_hull(hull, self.rules.hull);
+        self.rules.hull = hull;
+        changed
+    }
+
     /// Copy the settings to `cfg`, for `Config::save`. The other fields of `cfg` stay.
     pub fn store(&self, uni: &Universe, cfg: &mut Config) {
         cfg.capital = self.rules.capital.map(|n| uni.name(n).to_string());
         cfg.hull = self.rules.hull.map(|h| h.name.clone());
+        cfg.pilot = match self.hull_source {
+            HullSource::Pilot(id) => Some(id),
+            HullSource::Manual => None,
+        };
         cfg.max_cap_tj = self.rules.max_cap;
         cfg.mode = Some(self.mode);
         cfg.optimize = self.optimize;
@@ -144,6 +171,45 @@ mod tests {
         s.rules.capital = None;
         assert!(!uses_bridge(&s));
         assert!(!uses_bridge(&settings(&uni, Some("titan"))));
+    }
+
+    #[test]
+    fn follow_sets_the_hull_from_the_ship() {
+        let uni = overlay_universe();
+        let sin = find_hull("Sin").unwrap();
+        let sin_type = sin.type_id;
+        let mut s = settings(&uni, Some("Rorqual"));
+        // The manual source ignores the ship.
+        assert!(!s.follow(sin_type));
+        assert_eq!(s.rules.hull.unwrap().name, "Rorqual");
+        s.hull_source = HullSource::Pilot(1);
+        // The ship is not known yet: the hull stays.
+        assert!(!s.follow(None));
+        assert_eq!(s.rules.hull.unwrap().name, "Rorqual");
+        assert!(s.follow(sin_type));
+        assert!(std::ptr::eq(s.rules.hull.unwrap(), sin));
+        // The same ship again is no change.
+        assert!(!s.follow(sin_type));
+        // A type that is not in ships.json gives no hull.
+        assert!(s.follow(Some(u32::MAX)));
+        assert!(s.rules.hull.is_none());
+    }
+
+    #[test]
+    fn hull_source_round_trip() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, Some("Sin"));
+        s.hull_source = HullSource::Pilot(42);
+        let mut cfg = Config::default();
+        s.store(&uni, &mut cfg);
+        assert_eq!(cfg.pilot, Some(42));
+        // The last known hull stays in the file for the next startup.
+        assert_eq!(cfg.hull.as_deref(), Some("Sin"));
+        let back = Settings::from_config(&cfg, &uni).unwrap();
+        assert_eq!(back.hull_source, HullSource::Pilot(42));
+        s.hull_source = HullSource::Manual;
+        s.store(&uni, &mut cfg);
+        assert_eq!(cfg.pilot, None);
     }
 
     #[test]

@@ -2,7 +2,7 @@
 
 use crate::ansiblex::{BridgeRules, find_hull};
 use crate::route::Mode;
-use crate::settings::Settings;
+use crate::settings::{HullSource, Settings};
 use crate::sources::nexum;
 use crate::universe::Universe;
 use crate::wormhole::{self, SourceId, Wormhole};
@@ -58,6 +58,7 @@ pub fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
         hubs: Default::default(),
         bridges: true,
         rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| find_hull(h).unwrap()), max_cap: None },
+        hull_source: HullSource::Manual,
         min_life: 0,
         favourites: Vec::new(),
     }

@@ -67,6 +67,7 @@ mod tests {
             hubs: Default::default(),
             bridges: true,
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
+            hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
         };
@@ -179,6 +180,7 @@ mod tests {
             hubs: Default::default(),
             bridges: true,
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
+            hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
         };
@@ -209,6 +211,7 @@ mod tests {
             hubs: Default::default(),
             bridges: true,
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
+            hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
             favourites: vec![uni.exact("Jita").unwrap()],
         };
@@ -252,6 +255,7 @@ mod tests {
             hubs: Default::default(),
             bridges: true,
             rules: BridgeRules::default(),
+            hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
             favourites: Vec::new(),
         };
@@ -305,6 +309,7 @@ mod tests {
             hubs: Default::default(),
             bridges: false,
             rules: BridgeRules::default(),
+            hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
             favourites: Vec::new(),
         };
