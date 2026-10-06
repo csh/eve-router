@@ -52,8 +52,10 @@ No UI code. Both front ends use it.
 
 SSO details:
 
-- The app is a native app. It uses PKCE and has no client secret. The client ID is a constant, and an env var can override it.
-- The callback is `http://localhost:8635/callback`. The port is fixed, because EVE SSO matches the registered callback exactly.
+- The app is a native app. It uses PKCE and has no client secret.
+- The client ID is not in the repository. The build reads `EVE_ROUTER_CLIENT_ID` with `option_env!`, and the same env var at run time overrides it. Without a client ID, `Add character` is disabled and shows `No EVE client ID in this build. Set EVE_ROUTER_CLIENT_ID.`
+- The callback is `http://localhost:21404/callback`. The port is fixed, because EVE SSO matches the registered callback exactly.
+- The listener binds `127.0.0.1` only, never `0.0.0.0`. It accepts one request with a matching `state`, then closes.
 - The login always shows the URL and a "Paste the redirected URL" field. This works over SSH and when the port is busy.
 - The login requests all four scopes. A character with a missing scope shows `Re-authorize`.
 
@@ -111,7 +113,7 @@ New dependencies: `keyring` (OS keyring), `sha2` and `base64` (PKCE), `jsonwebto
 
 ### Pilots column
 
-A new fixed-width "Pilots" column goes after "System". It shows the characters whose current system is on that row.
+A new fixed-width "Pilots" column goes after "System". It shows the characters whose current system is on that row. The column shows only when one or more characters are logged in, so a user without SSO sees the table as it is now.
 
 - Up to 3 avatars, 20 px, round corners, 4 px gaps.
 - The active pilot comes first, with a 1 px `ACCENT` ring. The others follow in alphabetical order.
@@ -119,9 +121,22 @@ A new fixed-width "Pilots" column goes after "System". It shows the characters w
 - Each avatar shows its name in a tooltip on hover.
 - Before the portrait loads, a placeholder shows the initials on `theme::HEADER`.
 - Overflow: `+1 other character` or `+4 other characters`. Small font (0.85 × body), `TEXT_DIM`, italic, on the avatar baseline. The tooltip lists the hidden names, one for each line, in `TEXT`.
-- Pilots not on the route show in the sidebar under "Elsewhere" (COULD).
+The column shows in the planner view and in the active view.
 
-The column also shows in the planner view, for the selected route. Portraits load on a thread and go into an egui texture cache keyed by character ID.
+Cost: each portrait downloads one time, at 64 px, and goes into an egui texture cache keyed by character ID. `body.rows` draws only the visible rows. A frame thus draws at most about 30 rows × 3 textured quads. The planner needs no extra ESI calls, because the tracker already polls every character.
+
+### Pilots panel
+
+A "Pilots" panel goes in the sidebar, below "Shortest route". It shows the characters that are online.
+
+- One row for each pilot: 20 px avatar, name, and the current system in its security color. The ship and the region go in the hover text, not in the row.
+- Order: the active pilot first, then by name.
+- The panel title shows the count, for example `Pilots (2)`.
+- Offline pilots fold into one `TEXT_DIM` line, for example `3 offline`. A click shows them.
+- With no characters, the panel does not show. The top-bar `Characters (n)` button is the one entry point.
+- A click on a pilot row sets that pilot's system as the route start (COULD). The hover text reads `Start the route from Jita`.
+
+The panel replaces the "Elsewhere" list from the first draft.
 
 ## TUI changes (`router_tui`)
 
@@ -155,6 +170,14 @@ x Stop route  ↑↓ Scroll  n/p Next/prev stop  c Characters  s Settings  q Qui
 
 The lock lives in one function, `App::route_locked(key) -> bool`, so a test can check every key.
 
+## Clutter rule
+
+Each new element must change a decision the user makes now. If it does not, it goes in hover text or does not show.
+
+- An element with no data does not show. No empty panel, no empty column.
+- One line for each pilot. Details go in the hover text.
+- The active view removes the planner and the route list. It adds only a header, a progress bar and a banner when needed.
+
 ## UX rulings, ranked
 
 The adversarial review gave these, most important first.
@@ -181,7 +204,7 @@ The adversarial review gave these, most important first.
 | 18 | SHOULD | Settings stay open in active mode, with routing rows locked |
 | 19 | SHOULD | Waypoint cap check |
 | 20 | COULD | Hull and ship warning |
-| 21 | COULD | "Elsewhere" list for pilots not on the route |
+| 21 | SHOULD | Pilots panel of online pilots below "Shortest route" |
 | 22 | COULD | TUI pilot initials column |
 
 ## Phases
@@ -192,13 +215,13 @@ The adversarial review gave these, most important first.
 | 2 | `esi::client` and `esi::tracker`: the four endpoints, refresh, error-limit back-off. Tests with fixture JSON | 1 day |
 | 3 | `esi::active`: segments, progress, off-route, persistence. Pure unit tests | 1 day |
 | 4 | TUI: Characters page, start flow, active view, key lock. A snapshot test of the active screen and a test for each locked key | 1.5 days |
-| 5 | GUI: Characters popover, start dialog, active view, Pilots column, portrait cache | 2 days |
+| 5 | GUI: Characters popover, start dialog, active view, Pilots column, Pilots panel, portrait cache | 2.5 days |
 | 6 | Measure the waypoint cap in game, register the SSO app, update the README | 0.5 day |
 
-Total: about 7 days. Phases 1 to 3 have no UI and can ship first.
+Total: about 7.5 days. Phases 1 to 3 have no UI and can ship first.
 
-## Open questions
+## Decisions
 
-1. Who registers the EVE developer app, and what is the client ID?
-2. Is port 8635 free to use, or is a different fixed port better?
-3. Must the Pilots column also show in the planner view, or only in the active view?
+1. The client ID stays out of the repository. See [SSO details](#new-module-routercoreesi).
+2. The callback port is 21404, on localhost only.
+3. The Pilots column shows in the planner view and in the active view.
