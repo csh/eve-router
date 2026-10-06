@@ -296,11 +296,16 @@ impl Pilots {
     }
 
     /// Set the hull from the live ship of the pilot in `settings.hull_source`.
-    /// Without a token store, the source stays: the keyring can come back at the next start.
+    /// Without a keyring (no token store, or "Session only"), the source stays: the keyring can
+    /// come back at the next start.
     pub fn sync_hull(&self, settings: &mut Settings) -> HullSync {
         let HullSource::Pilot(id) = settings.hull_source else { return HullSync::None };
         let Some(accounts) = &self.accounts else { return HullSync::None };
         if !accounts.characters.iter().any(|c| c.id == id) {
+            // A "Session only" store starts empty. The character comes back with the keyring.
+            if accounts.is_session_only() {
+                return HullSync::None;
+            }
             settings.hull_source = HullSource::Manual;
             return HullSync::Source;
         }
@@ -686,11 +691,26 @@ mod tests {
         assert_eq!(p.sync_hull(&mut s), HullSync::Hull);
         assert_eq!(s.rules.hull.unwrap().name, "Capsule");
         assert_eq!(p.sync_hull(&mut s), HullSync::None);
+    }
+
+    #[test]
+    fn sync_hull_drops_a_removed_pilot() {
+        use crate::settings::HullSource;
+        use crate::test_support::{overlay_universe, settings};
+        let uni = overlay_universe();
+        let dir = std::env::temp_dir().join("eve-router-test-pilots-sync-removed");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        // A store with a list file, as with a keyring.
+        let mut accounts = Accounts::with_store(Some(dir.join("characters.json")), Box::new(MemoryStore::default())).unwrap();
+        accounts.store(&tokens(1, "Alice")).unwrap();
+        let p = Pilots::for_tests(accounts, Fake::default(), dir.join("active-route.json"));
+        let mut s = settings(&uni, Some("Sin"));
         // A character that is not stored: the source becomes manual, and the hull stays.
         s.hull_source = HullSource::Pilot(99);
         assert_eq!(p.sync_hull(&mut s), HullSync::Source);
         assert_eq!(s.hull_source, HullSource::Manual);
-        assert_eq!(s.rules.hull.unwrap().name, "Capsule");
+        assert_eq!(s.rules.hull.unwrap().name, "Sin");
     }
 
     #[test]
@@ -699,6 +719,19 @@ mod tests {
         use crate::test_support::{overlay_universe, settings};
         let uni = overlay_universe();
         let p = Pilots::offline(std::env::temp_dir().join("eve-router-test-pilots-sync-off").join("active-route.json"));
+        let mut s = settings(&uni, Some("Sin"));
+        s.hull_source = HullSource::Pilot(1);
+        assert_eq!(p.sync_hull(&mut s), HullSync::None);
+        assert_eq!(s.hull_source, HullSource::Pilot(1));
+    }
+
+    #[test]
+    fn sync_hull_keeps_the_pilot_with_a_session_only_store() {
+        use crate::settings::HullSource;
+        use crate::test_support::{overlay_universe, settings};
+        let uni = overlay_universe();
+        let mut p = Pilots::offline(std::env::temp_dir().join("eve-router-test-pilots-sync-session").join("active-route.json"));
+        p.use_session_only();
         let mut s = settings(&uni, Some("Sin"));
         s.hull_source = HullSource::Pilot(1);
         assert_eq!(p.sync_hull(&mut s), HullSync::None);
