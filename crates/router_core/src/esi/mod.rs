@@ -2,6 +2,7 @@
 
 pub mod active;
 pub mod client;
+pub mod pilots;
 pub mod sso;
 pub mod store;
 pub mod tracker;

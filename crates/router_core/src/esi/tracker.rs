@@ -441,29 +441,30 @@ fn unix_now() -> u64 {
     SystemTime::now().duration_since(UNIX_EPOCH).map_or(0, |d| d.as_secs())
 }
 
+/// A fake `Api` for the tests of the tracker and of `Pilots`.
 #[cfg(test)]
-mod tests {
+pub(crate) mod fake {
     use super::*;
     use crate::esi::Character;
     use std::sync::{Arc, Mutex};
 
     /// A fake API. Each call goes into `calls`. The location comes from `system`.
     #[derive(Clone, Default)]
-    struct Fake(Arc<Mutex<FakeState>>);
+    pub(crate) struct Fake(pub Arc<Mutex<FakeState>>);
 
     #[derive(Default)]
-    struct FakeState {
-        calls: Vec<String>,
-        system: u32,
-        refresh_rejected: bool,
-        errors_left: Option<u32>,
-        limited: bool,
+    pub(crate) struct FakeState {
+        pub calls: Vec<String>,
+        pub system: u32,
+        pub refresh_rejected: bool,
+        pub errors_left: Option<u32>,
+        pub limited: bool,
         /// The waypoint call fails at this index.
-        fail_waypoint_at: Option<usize>,
-        waypoints: Vec<(u32, bool)>,
+        pub fail_waypoint_at: Option<usize>,
+        pub waypoints: Vec<(u32, bool)>,
     }
 
-    fn fetched<T>(value: T, errors_left: Option<u32>) -> Fetched<T> {
+    pub(crate) fn fetched<T>(value: T, errors_left: Option<u32>) -> Fetched<T> {
         Fetched { value, expires: None, errors_left }
     }
 
@@ -506,6 +507,12 @@ mod tests {
             Ok(())
         }
     }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::fake::Fake;
+    use super::*;
 
     fn fast() -> Intervals {
         let ms = Duration::from_millis;
