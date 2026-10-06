@@ -1,7 +1,9 @@
 //! EVE SSO and ESI. The login and the token store are here. The front ends hold no SSO code.
 
+pub mod client;
 pub mod sso;
 pub mod store;
+pub mod tracker;
 
 use oauth2::Scope;
 

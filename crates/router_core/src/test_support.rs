@@ -107,24 +107,39 @@ fn request_text(request: &mut tiny_http::Request) -> String {
     text
 }
 
-/// Send a JSON response. `status` is for example "404 Not Found".
-fn respond_json(request: tiny_http::Request, status: &str, body: &str) {
+/// Send a JSON response with extra headers. `status` is for example "404 Not Found".
+fn respond_json(request: tiny_http::Request, status: &str, body: &str, headers: &[(String, String)]) {
     let code: u16 = status.split(' ').next().and_then(|c| c.parse().ok()).expect("status code");
-    let header = tiny_http::Header::from_bytes("Content-Type", "application/json").unwrap();
-    let _ = request.respond(tiny_http::Response::from_string(body).with_status_code(code).with_header(header));
+    let header = |name: &str, value: &str| tiny_http::Header::from_bytes(name, value).unwrap();
+    let mut response =
+        tiny_http::Response::from_string(body).with_status_code(code).with_header(header("Content-Type", "application/json"));
+    for (name, value) in headers {
+        response = response.with_header(header(name, value));
+    }
+    let _ = request.respond(response);
 }
 
 /// Serve one canned HTTP response on 127.0.0.1. Return the base URL, and a channel that
 /// gives the request text.
 pub fn serve(status: &str, body: &str, delay: Duration) -> (String, Receiver<String>) {
+    serve_full(status, body, &[], delay)
+}
+
+/// `serve` with extra response headers, and no delay.
+pub fn serve_with_headers(status: &str, body: &str, headers: &[(&str, &str)]) -> (String, Receiver<String>) {
+    serve_full(status, body, headers, Duration::ZERO)
+}
+
+fn serve_full(status: &str, body: &str, headers: &[(&str, &str)], delay: Duration) -> (String, Receiver<String>) {
     let (server, url) = test_server();
     let (status, body) = (status.to_owned(), body.to_owned());
+    let headers: Vec<(String, String)> = headers.iter().map(|(k, v)| (k.to_string(), v.to_string())).collect();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let Ok(mut request) = server.recv() else { return };
         let _ = tx.send(request_text(&mut request));
         std::thread::sleep(delay);
-        respond_json(request, &status, &body);
+        respond_json(request, &status, &body, &headers);
     });
     (url, rx)
 }
@@ -141,7 +156,7 @@ pub fn serve_routes(routes: HashMap<String, String>) -> (String, Receiver<String
                 None => ("500 Internal Server Error", "{}"),
             };
             let _ = tx.send(request_text(&mut request));
-            respond_json(request, status, body);
+            respond_json(request, status, body, &[]);
         }
     });
     (url, rx)
