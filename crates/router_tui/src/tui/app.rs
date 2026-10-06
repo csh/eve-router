@@ -3,10 +3,10 @@
 use router_core::ansiblex::{HullClass, table};
 use router_core::config::{ApiKey, Config};
 use router_core::sources::{self, nexum::{self, MapInfo}};
-use super::Shortcuts;
+use router_core::labels::Shortcuts;
 use router_core::route::{Mode, Route};
 use router_core::universe::Universe;
-use crate::{Settings, resolve_all, split_systems};
+use router_core::settings::{Settings, resolve_all, split_systems};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
 use petgraph::graph::NodeIndex;

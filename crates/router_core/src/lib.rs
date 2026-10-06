@@ -3,12 +3,15 @@
 
 pub mod ansiblex;
 pub mod config;
+pub mod labels;
 pub mod overlay;
 pub mod route;
 pub mod sde;
 pub mod sde_update;
+pub mod settings;
 pub mod ships;
 pub mod sources;
+pub mod startup;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod universe;

@@ -1,18 +1,16 @@
 mod tui;
 
-use ansiblex::{BridgeRules, find_hull};
 use clap::Parser;
-use config::Config;
-use overlay::OverlayReport;
-use petgraph::graph::NodeIndex;
-use router_core::{ansiblex, config, overlay, route, sde, sde_update, sources, universe, wormhole, wormhole_types};
-use route::{Mode, Router};
-use sources::{evescout, nexum};
+use router_core::config::{self, Config};
+use router_core::labels::{Shortcuts, jumps_label, link_label, route_extras};
+use router_core::route::Mode;
+use router_core::settings::{Settings, resolve_all, split_systems};
+use router_core::universe::{Universe, display_sec};
+use router_core::{startup, wormhole};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
-use universe::{Universe, display_sec};
 
 /// mimalloc is faster than the system allocator for the many small maps of the route searches.
 #[global_allocator]
@@ -57,66 +55,6 @@ struct Cli {
     print: bool,
 }
 
-/// The settings that the TUI can change.
-pub struct Settings {
-    pub mode: Mode,
-    /// Visit each system one time, in the cheapest order. See `Router::optimize`.
-    pub optimize: bool,
-    pub top: usize,
-    pub wormholes: bool,
-    /// The Thera and Turnur switches.
-    pub hubs: wormhole::Hubs,
-    pub bridges: bool,
-    pub rules: BridgeRules,
-    /// The minimum time (minutes) that a wormhole must have left. The router skips other wormholes.
-    pub min_life: u64,
-    /// The sidebar destinations.
-    pub favourites: Vec<NodeIndex>,
-}
-
-impl Settings {
-    /// A router for the settings. `now` (Unix seconds) and `min_life` set which wormholes are usable.
-    pub fn router<'a>(&self, uni: &'a Universe, now: u64) -> Router<'a> {
-        let bridges = self.bridges && self.rules.blocked_reason().is_none();
-        Router::new(uni, self.mode, self.wormholes, self.hubs, bridges, self.rules, now + self.min_life * 60)
-    }
-
-    /// The waypoints in the order to route them, and a status text if the order changed.
-    pub fn order(&self, router: &Router, nodes: &[NodeIndex]) -> Result<(Vec<NodeIndex>, Option<String>), String> {
-        if !self.optimize {
-            return Ok((nodes.to_vec(), None));
-        }
-        let order = router.optimize(nodes)?;
-        let text = (order != nodes).then(|| {
-            let names: Vec<&str> = order.iter().map(|&n| router.uni.name(n)).collect();
-            format!("Optimized order: {}", names.join(" > "))
-        });
-        Ok((order, text))
-    }
-}
-
-/// Split the system arguments. A name can hold a space, for example "New Caldari".
-pub fn split_systems(input: &str) -> Vec<String> {
-    input
-        .split(['>', ','])
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect()
-}
-
-pub fn resolve_all(uni: &Universe, names: &[String]) -> Result<Vec<NodeIndex>, String> {
-    names
-        .iter()
-        .map(|name| {
-            uni.resolve(name).map_err(|candidates| match candidates.as_slice() {
-                [] => format!("Unknown system \"{name}\""),
-                c => format!("\"{name}\" matches more than one system: {}", c.join(", ")),
-            })
-        })
-        .collect()
-}
-
 fn main() -> ExitCode {
     match run() {
         Ok(()) => ExitCode::SUCCESS,
@@ -140,52 +78,17 @@ fn run() -> Result<(), String> {
     cfg.optimize = cli.optimize || cfg.optimize;
     cfg.top = cli.top.or(cfg.top);
 
-    // Start the Nexum load before the SDE update, so the fetch runs at the same time.
-    // Nexum data comes only from the API.
-    let cache_path = sources::cache_path(wormhole::SourceId::Nexum, &cfg_path);
-    let pending = nexum::start(&cfg.nexum, cache_path, wormhole::now());
-    // EVE-Scout is public, so the router always fetches it. The Thera and Turnur switches
-    // act at route time, so a switch works with no restart.
-    let scout_cache = sources::cache_path(wormhole::SourceId::EveScout, &cfg_path);
-    let scout_pending = evescout::start(evescout::URL, scout_cache, wormhole::now());
-
+    // Start the wormhole fetches before the SDE update, so they run at the same time.
+    let pending = startup::begin(&cfg, &cfg_path);
     let sde_dir = cli.sde.unwrap_or_else(config::default_sde_dir);
-    update_sde(&sde_dir)?;
-    ansiblex::init(&sde_dir)?;
+    let startup::Loaded { uni, report, wh, scout, all, wormhole_count, load_time } =
+        startup::finish(pending, &sde_dir, cli.bridges, |outcome| {
+            if let Some(text) = outcome.message(&sde_dir) {
+                eprintln!("{text}");
+            }
+        })?;
 
-    let started = Instant::now();
-    let mut uni = Universe::from_sde(sde::load(&sde_dir)?);
-    let bridges_path = config::overlay_path(cli.bridges, &cfg_path, config::BRIDGES_FILE);
-    let mut report = OverlayReport::default();
-    if let Some(path) = &bridges_path {
-        report = overlay::load_bridges(&mut uni, path)?;
-    }
-    let types = wormhole_types::load(&sde_dir)?;
-    let wh = nexum::finish(pending, |id| uni.by_id.contains_key(&id), &types);
-    let scout = evescout::finish(scout_pending, |id| uni.by_id.contains_key(&id), &types);
-    let all: Vec<wormhole::SourceData> = wh.data.iter().chain(&scout.data).cloned().collect();
-    let wormhole_count = uni.add_wormholes(&wormhole::merge(&all, wormhole::now()));
-    let load_time = started.elapsed();
-
-    let capital = match &cfg.capital {
-        Some(name) => Some(resolve_all(&uni, std::slice::from_ref(name))?[0]),
-        None => None,
-    };
-    let hull = match &cfg.hull {
-        Some(name) => Some(find_hull(name).ok_or_else(|| format!("Unknown hull \"{name}\""))?),
-        None => None,
-    };
-    let settings = Settings {
-        mode: cfg.mode.unwrap_or(Mode::Shortest),
-        optimize: cfg.optimize,
-        top: cfg.top.unwrap_or(5).max(1),
-        wormholes: true,
-        hubs: cfg.eve_scout,
-        bridges: true,
-        rules: BridgeRules { capital, hull, max_cap: cfg.max_cap_tj },
-        min_life: cfg.min_life_min.unwrap_or(config::DEFAULT_MIN_LIFE_MIN),
-        favourites: resolve_all(&uni, &favourite_names(&cfg))?,
-    };
+    let settings = Settings::from_config(&cfg, &uni)?;
     let systems = split_systems(&cli.systems.join(","));
 
     if cli.print {
@@ -206,22 +109,8 @@ fn run() -> Result<(), String> {
         }
         print_routes(&mut std::io::stdout().lock(), &uni, &settings, &systems, wormhole::now())
     } else {
-        let shortcuts = tui::Shortcuts::new(&uni, &report, &wh, &scout);
+        let shortcuts = Shortcuts::new(&uni, &report, &wh, &scout);
         tui::run(&uni, settings, cfg, cfg_path, systems.join(" > "), shortcuts)
-    }
-}
-
-fn update_sde(dir: &std::path::Path) -> Result<(), String> {
-    if let Some(text) = sde_update::ensure(dir)?.message(dir) {
-        eprintln!("{text}");
-    }
-    Ok(())
-}
-
-fn favourite_names(cfg: &Config) -> Vec<String> {
-    match &cfg.favourites {
-        Some(names) => names.clone(),
-        None => config::DEFAULT_FAVOURITES.map(String::from).to_vec(),
     }
 }
 
@@ -253,11 +142,11 @@ fn print_routes(out: &mut impl Write, uni: &Universe, settings: &Settings, names
     eprintln!("Found {} routes in {} ms", routes.len(), started.elapsed().as_millis());
     for (i, route) in routes.iter().enumerate() {
         writeln!(out, "
-#{} {}{}", i + 1, tui::jumps_label(route.jumps), tui::route_extras(route)).map_err(io)?;
+#{} {}{}", i + 1, jumps_label(route.jumps), route_extras(route)).map_err(io)?;
         for (step, &node) in route.path.nodes.iter().enumerate() {
             let sys = uni.system(node);
             let via = match step.checked_sub(1).map(|s| route.path.edges[s]) {
-                Some(e) => tui::link_label(uni, &settings.rules, e, now),
+                Some(e) => link_label(uni, &settings.rules, e, now),
                 None => String::new(),
             };
             let stop = route.stop_at(step).map(|s| s.label()).unwrap_or_default();
@@ -271,58 +160,7 @@ fn print_routes(out: &mut impl Write, uni: &Universe, settings: &Settings, names
 #[cfg(test)]
 mod tests {
     use super::*;
-    use router_core::test_support;
-
-    /// 2026-10-05T12:00:00Z.
-    const FIXTURE_TIME: u64 = 1_791_201_600;
-
-    fn overlay_universe() -> Universe {
-        let mut uni = Universe::from_sde(sde::load(&test_support::sde_dir()).unwrap());
-        overlay::load_bridges(&mut uni, &test_support::fixture("ansiblex.txt")).unwrap();
-        let text = std::fs::read_to_string(test_support::fixture("nexum-api.json")).unwrap();
-        let map = nexum::parse_map(&text).unwrap();
-        let types = wormhole_types::load(&test_support::sde_dir()).unwrap();
-        let (data, _) = nexum::convert(&map, &Default::default(), |id| uni.by_id.contains_key(&id), &types, FIXTURE_TIME);
-        uni.add_wormholes(&wormhole::merge(&[data], FIXTURE_TIME));
-        uni
-    }
-
-    fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
-        Settings {
-            mode: Mode::Shortest,
-            optimize: false,
-            top: 3,
-            wormholes: true,
-            hubs: Default::default(),
-            bridges: true,
-            rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| find_hull(h).unwrap()), max_cap: None },
-            min_life: 0,
-            favourites: Vec::new(),
-        }
-    }
-
-    #[test]
-    fn overlay_reaches_jspace() {
-        let uni = overlay_universe();
-        let nodes = resolve_all(&uni, &["Jita".into(), "J134702".into()]).unwrap();
-        let mut s = settings(&uni, None);
-        assert!(s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).unwrap()[0].wormholes > 0);
-        s.wormholes = false;
-        assert!(s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).is_err());
-    }
-
-    #[test]
-    fn bridges_need_capital_and_allowed_hull() {
-        let uni = overlay_universe();
-        // UALX-3 and IL-YTR have a bridge between them.
-        let nodes = resolve_all(&uni, &["UALX-3".into(), "IL-YTR".into()]).unwrap();
-        let uses_bridge = |s: &Settings| s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).unwrap()[0].bridges > 0;
-        let mut s = settings(&uni, Some("black-ops"));
-        assert!(uses_bridge(&s));
-        s.rules.capital = None;
-        assert!(!uses_bridge(&s));
-        assert!(!uses_bridge(&settings(&uni, Some("titan"))));
-    }
+    use router_core::test_support::{FIXTURE_TIME, overlay_universe, settings};
 
     /// The full `--print` text of two routes: one with jump bridges, one into J-space.
     #[test]
@@ -345,8 +183,4 @@ mod tests {
         router_core::assert_snapshot!("cli_help", text);
     }
 
-    #[test]
-    fn split_keeps_spaces_in_names() {
-        assert_eq!(split_systems("Jita > New Caldari, Amarr"), vec!["Jita", "New Caldari", "Amarr"]);
-    }
 }

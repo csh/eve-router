@@ -1,7 +1,12 @@
 //! Helpers for the tests.
 
+use crate::ansiblex::{BridgeRules, find_hull};
+use crate::route::Mode;
+use crate::settings::Settings;
+use crate::sources::nexum;
 use crate::universe::Universe;
-use crate::wormhole::{SourceId, Wormhole};
+use crate::wormhole::{self, SourceId, Wormhole};
+use crate::{overlay, sde, wormhole_types};
 use std::collections::HashMap;
 use std::fs;
 use std::io::{Read, Write};
@@ -30,11 +35,40 @@ pub fn universe() -> &'static Universe {
     UNI.get_or_init(|| Universe::from_sde(crate::sde::load(&sde_dir()).unwrap()))
 }
 
+/// 2026-10-05T12:00:00Z, the time of the Nexum fixture.
+pub const FIXTURE_TIME: u64 = 1_791_201_600;
+
+/// The SDE with the bridges and the Nexum wormholes of the fixtures, at `FIXTURE_TIME`.
+pub fn overlay_universe() -> Universe {
+    let mut uni = Universe::from_sde(sde::load(&sde_dir()).unwrap());
+    overlay::load_bridges(&mut uni, &fixture("ansiblex.txt")).unwrap();
+    let text = std::fs::read_to_string(fixture("nexum-api.json")).unwrap();
+    let map = nexum::parse_map(&text).unwrap();
+    let types = wormhole_types::load(&sde_dir()).unwrap();
+    let (data, _) = nexum::convert(&map, &Default::default(), |id| uni.by_id.contains_key(&id), &types, FIXTURE_TIME);
+    uni.add_wormholes(&wormhole::merge(&[data], FIXTURE_TIME));
+    uni
+}
+
+/// Shortest routes, the top 3, all overlays on, the capital JK-Q77, and no favourites.
+pub fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
+    Settings {
+        mode: Mode::Shortest,
+        optimize: false,
+        top: 3,
+        wormholes: true,
+        hubs: Default::default(),
+        bridges: true,
+        rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| find_hull(h).unwrap()), max_cap: None },
+        min_life: 0,
+        favourites: Vec::new(),
+    }
+}
+
 /// A wormhole between two systems, with no known values.
 pub fn hole(a: u32, b: u32) -> Wormhole {
     Wormhole::new(a, b, None, None, SourceId::Nexum)
 }
-
 
 /// Compare `text` with the snapshot file `tests/snapshots/<name>.txt` of the calling crate.
 /// Set `UPDATE_SNAPSHOTS=1` to write the file instead.

@@ -1,7 +1,7 @@
 //! Drawing.
 
 use super::app::{App, Focus, Popup, PromptKind, SettingsRow, hull_rows};
-use super::{jumps_label, link_label, route_extras};
+use router_core::labels::{jumps_label, link_label, route_extras};
 use router_core::route::Mode;
 use router_core::universe::display_sec;
 use ratatui::Frame;
