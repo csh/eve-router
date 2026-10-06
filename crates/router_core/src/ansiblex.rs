@@ -99,8 +99,8 @@ pub fn init(sde_dir: &std::path::Path) -> Result<&'static HullTable, String> {
 }
 
 pub fn table() -> &'static HullTable {
-    // The tests read the repository SDE.
-    #[cfg(test)]
+    // The tests, also the tests of the other crates, read the repository SDE.
+    #[cfg(any(test, feature = "test-support"))]
     init(&crate::test_support::sde_dir()).unwrap();
     TABLE.get().expect("ansiblex::init must run before ansiblex::table")
 }

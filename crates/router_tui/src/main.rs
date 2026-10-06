@@ -1,23 +1,11 @@
-mod ansiblex;
-mod config;
-mod overlay;
-mod route;
-mod sde;
-mod sde_update;
-mod ships;
-mod sources;
-#[cfg(test)]
-mod test_support;
 mod tui;
-mod universe;
-mod wormhole;
-mod wormhole_types;
 
 use ansiblex::{BridgeRules, find_hull};
 use clap::Parser;
 use config::Config;
 use overlay::OverlayReport;
 use petgraph::graph::NodeIndex;
+use router_core::{ansiblex, config, overlay, route, sde, sde_update, sources, universe, wormhole, wormhole_types};
 use route::{Mode, Router};
 use sources::{evescout, nexum};
 use std::io::Write;
@@ -32,7 +20,7 @@ static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 /// Find the top-n routes between EVE Online solar systems.
 #[derive(Parser)]
-#[command(version)]
+#[command(name = "eve-router", version)]
 struct Cli {
     /// The origin, the waypoints and the destination. Split them with spaces, ">" or ",".
     systems: Vec<String>,
@@ -283,6 +271,7 @@ fn print_routes(out: &mut impl Write, uni: &Universe, settings: &Settings, names
 #[cfg(test)]
 mod tests {
     use super::*;
+    use router_core::test_support;
 
     /// 2026-10-05T12:00:00Z.
     const FIXTURE_TIME: u64 = 1_791_201_600;
@@ -344,7 +333,7 @@ mod tests {
         let mut out = Vec::new();
         print_routes(&mut out, &uni, &s, &["UALX-3".into(), "Jita".into()], FIXTURE_TIME).unwrap();
         print_routes(&mut out, &uni, &s, &["Jita".into(), "J134702".into()], FIXTURE_TIME).unwrap();
-        crate::assert_snapshot!("print_routes", String::from_utf8(out).unwrap());
+        router_core::assert_snapshot!("print_routes", String::from_utf8(out).unwrap());
     }
 
     #[test]
@@ -353,7 +342,7 @@ mod tests {
         let mut cmd = Cli::command();
         let text = format!("{}
 {}", cmd.render_version(), cmd.render_long_help());
-        crate::assert_snapshot!("cli_help", text);
+        router_core::assert_snapshot!("cli_help", text);
     }
 
     #[test]

@@ -1,0 +1,20 @@
+[package]
+name = "router_core"
+version.workspace = true
+edition.workspace = true
+
+[features]
+# The test helpers, for the tests of the other crates.
+test-support = []
+clap = ["dep:clap"]
+
+[dependencies]
+chrono = "0.4.45"
+clap = { workspace = true, optional = true }
+dirs = "7.0.0"
+flate2 = "1.1.10"
+petgraph.workspace = true
+rayon.workspace = true
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+ureq = "3.4.2"

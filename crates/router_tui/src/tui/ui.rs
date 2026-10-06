@@ -2,8 +2,8 @@
 
 use super::app::{App, Focus, Popup, PromptKind, SettingsRow, hull_rows};
 use super::{jumps_label, link_label, route_extras};
-use crate::route::Mode;
-use crate::universe::display_sec;
+use router_core::route::Mode;
+use router_core::universe::display_sec;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -206,7 +206,7 @@ fn help_lines(app: &App, width: u16) -> Vec<Line<'static>> {
 }
 
 /// A ship shows its group, for example "Sin (Black Ops)". A group shows only its name.
-fn hull_label(h: crate::ansiblex::HullClass) -> String {
+fn hull_label(h: router_core::ansiblex::HullClass) -> String {
     match h.type_id {
         Some(_) => format!("{} ({})", h.name, h.group),
         None => h.name.clone(),
@@ -333,7 +333,7 @@ fn shortcut_lines(app: &App) -> Vec<Line<'static>> {
     let mut lines = vec![line("Wormholes:", app.shortcuts.wormholes, s.wormholes)];
     // The source and the data age, for example "Nexum, 2 min ago".
     for &(source, fetched_at) in &app.shortcuts.sources {
-        let age = crate::wormhole::age_text(fetched_at, app.now);
+        let age = router_core::wormhole::age_text(fetched_at, app.now);
         lines.push(Line::from(format!("  {}, {age}", source.label())).dark_gray());
     }
     // The hub counts. A hub that is off, or all wormholes off, shows in gray.

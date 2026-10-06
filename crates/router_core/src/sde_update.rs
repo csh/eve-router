@@ -109,7 +109,7 @@ fn latest_build(agent: &ureq::Agent) -> Result<u32, String> {
 }
 
 /// A file that gives byte ranges: a remote zip, or bytes in memory for tests.
-pub trait RangeSource: Sync {
+pub(crate) trait RangeSource: Sync {
     fn len(&self) -> Result<u64, String>;
     fn read(&self, start: u64, len: u64) -> Result<Vec<u8>, String>;
 }
@@ -243,7 +243,7 @@ fn inflate(data: &[u8], size: u64) -> std::io::Result<Vec<u8>> {
 
 /// Fetch `FILES` from the zip into `dir`, and make `ships.json` from the ship source files.
 /// The source files are not kept. Return the number of compressed bytes.
-pub fn download(src: &dyn RangeSource, dir: &Path) -> Result<u64, String> {
+pub(crate) fn download(src: &dyn RangeSource, dir: &Path) -> Result<u64, String> {
     let entries = read_directory(src)?;
     let names: Vec<&str> = FILES.iter().chain(&ships::SOURCES).copied().collect();
     let wanted: Vec<&Entry> = names

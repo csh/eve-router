@@ -539,23 +539,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "eve-router"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "clap",
- "dirs",
- "flate2",
- "mimalloc",
- "petgraph",
- "ratatui",
- "rayon",
- "serde",
- "serde_json",
- "ureq",
-]
-
-[[package]]
 name = "fancy-regex"
 version = "0.11.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1525,6 +1508,33 @@ dependencies = [
  "libc",
  "untrusted",
  "windows-sys 0.52.0",
+]
+
+[[package]]
+name = "router_core"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "clap",
+ "dirs",
+ "flate2",
+ "petgraph",
+ "rayon",
+ "serde",
+ "serde_json",
+ "ureq",
+]
+
+[[package]]
+name = "router_tui"
+version = "0.1.0"
+dependencies = [
+ "clap",
+ "mimalloc",
+ "petgraph",
+ "ratatui",
+ "rayon",
+ "router_core",
 ]
 
 [[package]]

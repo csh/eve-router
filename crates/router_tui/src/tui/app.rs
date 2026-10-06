@@ -1,11 +1,11 @@
 //! The TUI state and the key handling.
 
-use crate::ansiblex::{HullClass, table};
-use crate::config::{ApiKey, Config};
-use crate::sources::{self, nexum::{self, MapInfo}};
+use router_core::ansiblex::{HullClass, table};
+use router_core::config::{ApiKey, Config};
+use router_core::sources::{self, nexum::{self, MapInfo}};
 use super::Shortcuts;
-use crate::route::{Mode, Route};
-use crate::universe::Universe;
+use router_core::route::{Mode, Route};
+use router_core::universe::Universe;
 use crate::{Settings, resolve_all, split_systems};
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
@@ -113,7 +113,7 @@ impl<'a> App<'a> {
             detail_page: 10,
             settings_page: None,
             route_time: None,
-            now: crate::wormhole::now(),
+            now: router_core::wormhole::now(),
             hub_origin: None,
             hubs: Vec::new(),
             status: String::new(),
@@ -156,7 +156,7 @@ impl<'a> App<'a> {
             }
         };
         let started = Instant::now();
-        self.now = crate::wormhole::now();
+        self.now = router_core::wormhole::now();
         let router = self.settings.router(self.uni, self.now);
         self.hub_origin = Some(self.uni.name(nodes[0]).to_string());
         // The sidebar search and the route search are independent, so they run at the same time.
@@ -607,7 +607,7 @@ impl<'a> App<'a> {
                 Popup::Maps { maps, state: ListState::default().with_selected(Some(current.unwrap_or(0))) }
             }
             Err(sources::FetchError::Offline(detail)) => Popup::Message(format!("Nexum offline: {detail}")),
-            Err(e) => Popup::Message(e.status(crate::wormhole::SourceId::Nexum, None)),
+            Err(e) => Popup::Message(e.status(router_core::wormhole::SourceId::Nexum, None)),
         });
     }
 
@@ -665,10 +665,10 @@ pub fn hull_rows(filter: &str) -> Vec<Option<HullClass>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ansiblex::BridgeRules;
-    use crate::config::ApiKey;
-    use crate::route::Mode;
-    use crate::test_support::{serve, universe};
+    use router_core::ansiblex::BridgeRules;
+    use router_core::config::ApiKey;
+    use router_core::route::Mode;
+    use router_core::test_support::{serve, universe};
 
     fn app(name: &str, cfg: Config) -> App<'static> {
         let settings = Settings {

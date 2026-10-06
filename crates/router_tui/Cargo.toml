@@ -1,0 +1,19 @@
+[package]
+name = "router_tui"
+version.workspace = true
+edition.workspace = true
+
+[[bin]]
+name = "eve-router"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+mimalloc.workspace = true
+petgraph.workspace = true
+ratatui = "0.30"
+rayon.workspace = true
+router_core = { workspace = true, features = ["clap"] }
+
+[dev-dependencies]
+router_core = { workspace = true, features = ["test-support"] }

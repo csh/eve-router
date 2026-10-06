@@ -18,7 +18,8 @@ pub const PENALTY: u64 = 1_000_000;
 /// The most midpoints that "optimize order" takes. Held-Karp keeps m × 2^m states for m midpoints.
 pub const MAX_MIDPOINTS: usize = 20;
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "kebab-case")]
 pub enum Mode {
     Shortest,

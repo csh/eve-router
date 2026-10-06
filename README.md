@@ -89,6 +89,6 @@ Set `EVE_ROUTER_SKIP_SDE_CHECK=1` to skip this check on startup.
 cargo test
 ```
 
-The tests use the map files in `sde/` and the small fixtures in `tests/fixtures/`. They do not need network access.
+The tests use the map files in `sde/` and the small fixtures in `crates/router_core/tests/fixtures/`. They do not need network access.
 
 `cargo test regenerate_repo_sde -- --ignored` makes `sde/ships.json` and `sde/wormholes.json` again. It needs the network.

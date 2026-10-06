@@ -4,13 +4,13 @@ mod app;
 mod ui;
 
 use crate::Settings;
-use crate::ansiblex::BridgeRules;
-use crate::config::Config;
-use crate::overlay::OverlayReport;
-use crate::route::Route;
-use crate::sources::{evescout, nexum};
-use crate::universe::{Link, Universe};
-use crate::wormhole::{MassStatus, SourceId, THERA, TURNUR, Wormhole, expiry_text};
+use router_core::ansiblex::BridgeRules;
+use router_core::config::Config;
+use router_core::overlay::OverlayReport;
+use router_core::route::Route;
+use router_core::sources::{evescout, nexum};
+use router_core::universe::{Link, Universe};
+use router_core::wormhole::{MassStatus, SourceId, THERA, TURNUR, Wormhole, expiry_text};
 use app::App;
 use petgraph::graph::EdgeIndex;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
@@ -148,16 +148,16 @@ pub fn wormhole_label(w: &Wormhole, from: u32, now: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::ansiblex::find_hull;
-    use crate::route::Mode;
+    use router_core::ansiblex::find_hull;
+    use router_core::route::Mode;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
 
     #[test]
     fn wormhole_text() {
-        use crate::test_support::hole;
-        use crate::wormhole::{Expiry, MassStatus, Size, Wormhole};
+        use router_core::test_support::hole;
+        use router_core::wormhole::{Expiry, MassStatus, Size, Wormhole};
         let now = 1_000_000;
         let w = Wormhole {
             wh_type: Some("K162".into()),
@@ -180,8 +180,8 @@ mod tests {
 
     #[test]
     fn draws_and_handles_keys() {
-        let mut uni = Universe::from_sde(crate::sde::load(&crate::test_support::sde_dir()).unwrap());
-        crate::overlay::load_bridges(&mut uni, &crate::test_support::fixture("ansiblex.txt")).unwrap();
+        let mut uni = Universe::from_sde(router_core::sde::load(&router_core::test_support::sde_dir()).unwrap());
+        router_core::overlay::load_bridges(&mut uni, &router_core::test_support::fixture("ansiblex.txt")).unwrap();
         let settings = Settings {
             mode: Mode::Shortest,
             optimize: false,
@@ -283,8 +283,8 @@ mod tests {
     /// The first screen, with routes, the sidebar and the Shortcuts box.
     #[test]
     fn start_screen_snapshot() {
-        let mut uni = Universe::from_sde(crate::sde::load(&crate::test_support::sde_dir()).unwrap());
-        crate::overlay::load_bridges(&mut uni, &crate::test_support::fixture("ansiblex.txt")).unwrap();
+        let mut uni = Universe::from_sde(router_core::sde::load(&router_core::test_support::sde_dir()).unwrap());
+        router_core::overlay::load_bridges(&mut uni, &router_core::test_support::fixture("ansiblex.txt")).unwrap();
         let settings = Settings {
             mode: Mode::Shortest,
             optimize: false,
@@ -306,13 +306,13 @@ mod tests {
         let end = text.find(" ms ").unwrap();
         let start = text[..end].trim_end_matches(|c: char| c.is_ascii_digit() || c == '.').len();
         let text = format!("{}# ms {}{}", &text[..start], "─".repeat(end - start - 1), &text[end + 4..]);
-        crate::assert_snapshot!("start_screen", text);
+        router_core::assert_snapshot!("start_screen", text);
     }
 
     #[test]
     fn shortcuts_warning_text() {
-        use crate::sources::{evescout, nexum};
-        let uni = crate::test_support::universe();
+        use router_core::sources::{evescout, nexum};
+        let uni = router_core::test_support::universe();
         let report = OverlayReport { bridges: 0, unknown: vec!["Nowhere".into()] };
         let mut wh = nexum::Load { warning: Some("Nexum offline, map from 14:02".into()), ..Default::default() };
         wh.report.unknown = vec![1, 2];
@@ -338,10 +338,10 @@ mod tests {
 
     #[test]
     fn hub_counts_and_switches() {
-        use crate::test_support::hole;
-        use crate::wormhole::{THERA, TURNUR};
+        use router_core::test_support::hole;
+        use router_core::wormhole::{THERA, TURNUR};
         use ratatui::style::Color;
-        let mut uni = Universe::from_sde(crate::sde::load(&crate::test_support::sde_dir()).unwrap());
+        let mut uni = Universe::from_sde(router_core::sde::load(&router_core::test_support::sde_dir()).unwrap());
         uni.add_wormholes(&[hole(30000142, THERA), hole(30002187, THERA), hole(TURNUR, 30002053)]);
         let settings = Settings {
             mode: Mode::Shortest,
@@ -376,7 +376,7 @@ mod tests {
         app.on_key(KeyEvent::from(KeyCode::Char('s')));
         app.settings_page.as_mut().unwrap().select(Some(thera_row));
         app.on_key(KeyEvent::from(KeyCode::Enter));
-        assert_eq!(app.settings.hubs, crate::wormhole::Hubs { thera: false, turnur: true });
+        assert_eq!(app.settings.hubs, router_core::wormhole::Hubs { thera: false, turnur: true });
         assert_eq!(Config::load(&cfg_path).unwrap().eve_scout, app.settings.hubs);
         terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
         let screen = format!("{:?}", terminal.backend().buffer());
@@ -395,7 +395,7 @@ mod tests {
 
     #[test]
     fn mode_popup_toggles_optimize_order() {
-        let uni = Universe::from_sde(crate::sde::load(&crate::test_support::sde_dir()).unwrap());
+        let uni = Universe::from_sde(router_core::sde::load(&router_core::test_support::sde_dir()).unwrap());
         let settings = Settings {
             mode: Mode::Shortest,
             optimize: false,
