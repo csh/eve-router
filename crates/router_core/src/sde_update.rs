@@ -78,9 +78,15 @@ pub fn ensure(dir: &Path) -> Result<Outcome, String> {
         return Ok(Outcome::UpToDate);
     }
     let source = HttpSource { agent, url: format!("{BASE_URL}/eve-online-static-data-{latest}-jsonl.zip") };
-    let bytes = download(&source, dir)?;
+    install(&source, dir, latest)
+}
+
+/// Download build `latest` into `dir`. `from` is the local build before the download.
+fn install(src: &dyn RangeSource, dir: &Path, latest: u32) -> Result<Outcome, String> {
     // The local build can exist without ships.json or wormholes.json, from a version before these derived tables.
-    Ok(Outcome::Updated { from: crate::sde::build_number(dir), to: latest, bytes })
+    let from = crate::sde::build_number(dir);
+    let bytes = download(src, dir)?;
+    Ok(Outcome::Updated { from, to: latest, bytes })
 }
 
 /// The build number of the local SDE, if all files are present.
@@ -333,6 +339,18 @@ mod tests {
         let build = crate::sde::build_number(dir).unwrap();
         let source = HttpSource { agent: agent(), url: format!("{BASE_URL}/eve-online-static-data-{build}-jsonl.zip") };
         download(&source, dir).unwrap();
+    }
+
+    #[test]
+    fn install_reports_the_build_before_the_download() {
+        let dir = std::env::temp_dir().join("eve-router-test-sde-install");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        fs::write(dir.join("_sde.jsonl"), "{\"_key\": \"sde\", \"buildNumber\": 100}\n").unwrap();
+        // The fixture holds build 123.
+        let Outcome::Updated { from, to, .. } = install(&FIXTURE.to_vec(), &dir, 123).unwrap() else { panic!("not Updated") };
+        assert_eq!((from, to), (Some(100), 123));
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
