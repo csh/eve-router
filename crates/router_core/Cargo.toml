@@ -21,4 +21,5 @@ petgraph.workspace = true
 rayon.workspace = true
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
+tiny_http = "0.12.0"
 ureq = "3.4.2"

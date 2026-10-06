@@ -25,12 +25,12 @@ use oauth2::{
 };
 use serde::Deserialize;
 use std::fmt;
-use std::io::{self, Read, Write};
-use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
+use std::io;
+use std::net::{Ipv4Addr, SocketAddr};
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
+use tiny_http::{Header, Method, Request, Response, Server};
 
 pub const AUTHORIZE_URL: &str = "https://login.eveonline.com/v2/oauth/authorize";
 pub const TOKEN_URL: &str = "https://login.eveonline.com/v2/oauth/token";
@@ -49,8 +49,6 @@ const SUBJECT_PREFIX: &str = "CHARACTER:EVE:";
 pub const TIMEOUT: Duration = Duration::from_secs(10);
 /// The largest SSO response body.
 const MAX_BODY: u64 = 64 * 1024;
-/// The largest HTTP request that the listener reads.
-const MAX_REQUEST: usize = 8 * 1024;
 
 /// The callback URL, as registered for the EVE developer app.
 pub fn redirect_uri() -> String {
@@ -229,37 +227,33 @@ pub fn parse_callback(text: &str, state: &str) -> Result<AuthorizationCode, Logi
     param("code").filter(|c| !c.is_empty()).map(AuthorizationCode::new).ok_or(LoginError::NoCode)
 }
 
-/// The loopback listener. A thread accepts connections until a request gives a code or an
-/// error, or until the listener drops. A request with a wrong `state` does not stop it.
+/// The loopback listener, on `tiny_http`. A thread answers requests until one gives a code or
+/// an error, or until the listener drops. A request with a wrong `state` does not stop it.
 pub struct Listener {
     port: u16,
     rx: Receiver<Result<AuthorizationCode, LoginError>>,
-    stop: Arc<AtomicBool>,
+    server: Arc<Server>,
 }
 
 impl Listener {
     /// Listen on `127.0.0.1` only. Port 0 gives a free port, for the tests.
     pub fn bind(port: u16, state: String) -> io::Result<Listener> {
-        let socket = TcpListener::bind(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))?;
-        socket.set_nonblocking(true)?;
-        let port = socket.local_addr()?.port();
+        let server = Server::http(SocketAddr::from((Ipv4Addr::LOCALHOST, port)))
+            .map_err(|e| e.downcast::<io::Error>().map_or_else(|e| io::Error::other(e.to_string()), |e| *e))?;
+        let port = server.server_addr().to_ip().map_or(port, |addr| addr.port());
+        let server = Arc::new(server);
         let (tx, rx) = mpsc::channel();
-        let stop = Arc::new(AtomicBool::new(false));
-        let flag = stop.clone();
+        let thread_server = server.clone();
         std::thread::spawn(move || {
-            while !flag.load(Ordering::Relaxed) {
-                match socket.accept() {
-                    Ok((stream, _)) => {
-                        if let Some(result) = handle(stream, &state) {
-                            let _ = tx.send(result);
-                            return;
-                        }
-                    }
-                    Err(_) => std::thread::sleep(Duration::from_millis(50)),
+            // The loop ends when `Drop` unblocks the server.
+            for request in thread_server.incoming_requests() {
+                if let Some(result) = handle(request, &state) {
+                    let _ = tx.send(result);
+                    return;
                 }
             }
         });
-        Ok(Listener { port, rx, stop })
+        Ok(Listener { port, rx, server })
     }
 
     pub fn port(&self) -> u16 {
@@ -274,59 +268,45 @@ impl Listener {
 
 impl Drop for Listener {
     fn drop(&mut self) {
-        self.stop.store(true, Ordering::Relaxed);
+        self.server.unblock();
     }
 }
 
-/// Answer one HTTP request. `None` means "keep listening".
-fn handle(mut stream: TcpStream, state: &str) -> Option<Result<AuthorizationCode, LoginError>> {
-    let _ = stream.set_nonblocking(false);
-    let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
-    let mut buf = Vec::new();
-    let mut chunk = [0u8; 1024];
-    // Read only the request line.
-    while !buf.windows(2).any(|w| w == b"\r\n") && buf.len() < MAX_REQUEST {
-        match stream.read(&mut chunk) {
-            Ok(0) | Err(_) => break,
-            Ok(n) => buf.extend_from_slice(&chunk[..n]),
-        }
-    }
-    let request = String::from_utf8_lossy(&buf);
-    let line = request.lines().next().unwrap_or_default();
-    let mut parts = line.split(' ');
-    let (method, target) = (parts.next().unwrap_or_default(), parts.next().unwrap_or_default());
-    let path = target.split('?').next().unwrap_or_default();
-    if method != "GET" || path != CALLBACK_PATH {
-        respond(&mut stream, "404 Not Found", "Not found.");
+/// Answer one request. `None` means "keep listening".
+fn handle(request: Request, state: &str) -> Option<Result<AuthorizationCode, LoginError>> {
+    let path = request.url().split('?').next().unwrap_or_default();
+    if *request.method() != Method::Get || path != CALLBACK_PATH {
+        respond(request, 404, "Not found.");
         return None;
     }
-    match parse_callback(target, state) {
+    match parse_callback(request.url(), state) {
         Ok(code) => {
-            respond(&mut stream, "200 OK", "Login received. Close this tab and go back to EVE Router.");
+            respond(request, 200, "Login received. Close this tab and go back to EVE Router.");
             Some(Ok(code))
         }
         Err(LoginError::StateMismatch) => {
-            respond(&mut stream, "400 Bad Request", &LoginError::StateMismatch.to_string());
+            respond(request, 400, &LoginError::StateMismatch.to_string());
             None
         }
         Err(e) => {
-            respond(&mut stream, "400 Bad Request", &e.to_string());
+            respond(request, 400, &e.to_string());
             Some(Err(e))
         }
     }
 }
 
-fn respond(stream: &mut TcpStream, status: &str, message: &str) {
+fn respond(request: Request, status: u16, message: &str) {
     let body = format!(
         "<!doctype html><meta charset=\"utf-8\"><title>EVE Router</title>\
          <body style=\"font-family:sans-serif;background:#111;color:#ddd;padding:2em\"><p>{}</p></body>",
         message.replace('&', "&amp;").replace('<', "&lt;").replace('>', "&gt;")
     );
-    let head = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: text/html; charset=utf-8\r\nContent-Length: {}\r\nCache-Control: no-store\r\nConnection: close\r\n\r\n",
-        body.len()
-    );
-    let _ = stream.write_all(head.as_bytes()).and_then(|_| stream.write_all(body.as_bytes()));
+    let header = |name: &str, value: &str| Header::from_bytes(name, value).expect("ASCII header");
+    let response = Response::from_string(body)
+        .with_status_code(status)
+        .with_header(header("Content-Type", "text/html; charset=utf-8"))
+        .with_header(header("Cache-Control", "no-store"));
+    let _ = request.respond(response);
 }
 
 /// One login. Drop it to stop the listener.
@@ -419,6 +399,8 @@ mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde_json::json;
+    use std::io::{Read, Write};
+    use std::net::{TcpListener, TcpStream};
 
     const CLIENT: &str = "client-123";
     const NOW: u64 = 1_800_000_000;
@@ -564,7 +546,8 @@ mod tests {
     /// Send one request to the listener and return the response text.
     fn get(port: u16, target: &str) -> String {
         let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
-        write!(stream, "GET {target} HTTP/1.1\r\nHost: localhost\r\n\r\n").unwrap();
+        // `tiny_http` keeps a connection open unless the request says "close".
+        write!(stream, "GET {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").unwrap();
         let mut response = String::new();
         stream.read_to_string(&mut response).unwrap();
         response
@@ -592,6 +575,19 @@ mod tests {
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(response.contains("Login received"));
         assert_eq!(text(wait(&listener)), Ok("good".into()));
+    }
+
+    #[test]
+    fn drop_closes_the_server() {
+        let listener = Listener::bind(0, "s1".into()).unwrap();
+        let port = listener.port();
+        drop(listener);
+        // The server thread ends after the unblock. Then the port is free again.
+        let free = (0..50).any(|_| {
+            std::thread::sleep(Duration::from_millis(20));
+            TcpListener::bind((Ipv4Addr::LOCALHOST, port)).is_ok()
+        });
+        assert!(free, "port {port} is still in use");
     }
 
     #[test]
