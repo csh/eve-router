@@ -10,7 +10,7 @@ use egui::{
 use egui_extras::{Column, TableBuilder};
 use router_core::esi::active::{ActiveRoute, Hop};
 use router_core::esi::client::{IMAGES_URL, portrait};
-use router_core::esi::pilots::{HullSync, PilotView, StartPlan};
+use router_core::esi::pilots::{HullSync, PilotView, Pilots, StartPlan};
 use router_core::labels::{hull_label, ship_text};
 use router_core::route::Stop;
 use router_core::settings::HullSource;
@@ -212,8 +212,10 @@ impl PilotsUi {
 
     /// "Start route #n": choose the character, then confirm.
     pub fn begin_start(&mut self, s: &mut Session, route: usize) {
-        let ids: Vec<u64> = s.pilots.characters().into_iter().filter(|c| !c.live.expired).map(|c| c.id).collect();
+        let ids: Vec<u64> = s.pilots.senders().into_iter().map(|c| c.id).collect();
         match ids.len() {
+            // A waypoint does nothing without the game client, so an offline pilot is not in the list.
+            0 if s.pilots.characters().iter().any(|c| !c.live.expired) => s.status = Pilots::NO_SENDER.into(),
             0 => {
                 self.start_after_login = Some(route);
                 self.login(s);
@@ -403,7 +405,7 @@ impl PilotsUi {
             match start {
                 Start::Pick { route, chosen } => {
                     crate::settings_window::title(ui, &format!("Send route #{} to…", *route + 1));
-                    for pilot in s.pilots.characters().into_iter().filter(|c| !c.live.expired) {
+                    for pilot in s.pilots.senders() {
                         ui.horizontal(|ui| {
                             ui.radio_value(chosen, pilot.id, "");
                             avatar(ui, &mut self.portraits, &pilot, 24.0);
@@ -787,7 +789,7 @@ impl PilotsUi {
     }
 }
 
-/// "● Online · Jita". The word is always there, not only the color.
+/// A painted dot, then "Online · Jita". The word is always there, not only the color.
 fn status_text(ui: &mut Ui, s: &Session, pilot: &PilotView) {
     if pilot.live.expired {
         ui.label(RichText::new("Login expired").color(theme::WARN).small());
@@ -802,11 +804,17 @@ fn status_text(ui: &mut Ui, s: &Session, pilot: &PilotView) {
         Some(false) => (theme::TEXT_DIM, "Offline"),
         None => (theme::TEXT_DIM, "Checking…"),
     };
-    let mut text = format!("● {word}");
+    let mut text = word.to_string();
     if let Some(id) = pilot.live.system {
         text.push_str(&format!(" · {}", system_name(s, id)));
     }
-    ui.label(RichText::new(text).color(dot).small());
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 4.0;
+        // A painted dot: the fonts have no circle glyph.
+        let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+        ui.painter().circle_filled(rect.center(), 3.5, dot);
+        ui.label(RichText::new(text).color(dot).small());
+    });
 }
 
 /// `Apocalypse · "apoc"` under the status line. The type is bright, the name is dim.

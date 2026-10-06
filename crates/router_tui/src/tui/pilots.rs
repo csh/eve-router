@@ -3,7 +3,7 @@
 use super::app::{App, Popup, SettingsRow};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::widgets::ListState;
-use router_core::esi::pilots::{HullSync, StartPlan};
+use router_core::esi::pilots::{HullSync, Pilots, StartPlan};
 use router_core::settings::HullSource;
 
 /// The status text for a key that could change the route.
@@ -101,8 +101,13 @@ impl App<'_> {
     }
 
     fn start_route_at(&mut self, index: usize) {
-        let ids: Vec<u64> = self.pilots.characters().into_iter().filter(|c| !c.live.expired).map(|c| c.id).collect();
+        let ids: Vec<u64> = self.pilots.senders().into_iter().map(|c| c.id).collect();
         self.popup = match ids.len() {
+            // A waypoint does nothing without the game client, so an offline pilot is not in the list.
+            0 if self.pilots.characters().iter().any(|c| !c.live.expired) => {
+                self.status = Pilots::NO_SENDER.into();
+                None
+            }
             0 => {
                 self.start_after_login = Some(index);
                 self.begin_login()

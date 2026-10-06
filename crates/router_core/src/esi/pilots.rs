@@ -308,6 +308,14 @@ impl Pilots {
         if settings.follow(ship_type) { HullSync::Hull } else { HullSync::None }
     }
 
+    /// The status text when each logged-in pilot is offline.
+    pub const NO_SENDER: &str = "No pilot is online. Waypoints need the game client running.";
+
+    /// The pilots that can take a route: a valid login, and not offline. An unknown online state stays.
+    pub fn senders(&self) -> Vec<PilotView> {
+        self.characters().into_iter().filter(|c| !c.live.expired && c.live.online != Some(false)).collect()
+    }
+
     /// The Pilot picker rows: the characters whose name contains `filter`, then `hull_rows(filter)`.
     pub fn pilot_rows(&self, filter: &str) -> Vec<PilotRow> {
         let lower = filter.to_lowercase();
@@ -847,6 +855,21 @@ mod tests {
         // A Rorqual is not.
         flies(&mut pilot, "Rorqual");
         assert_eq!(StartPlan::new(&uni, &s, route, 1, &pilot, FIXTURE_TIME).flown.unwrap().name, "Rorqual");
+    }
+
+    #[test]
+    fn senders_leave_out_offline_pilots() {
+        let fake = Fake::default();
+        let mut p = pilots("eve-router-test-pilots-senders", &fake);
+        // The online state is not known yet: the pilot stays in the list.
+        assert_eq!(p.senders().len(), 1);
+        until(&mut p, |p| p.live.get(&1).is_some_and(|l| l.online == Some(true)));
+        assert_eq!(p.senders().len(), 1);
+        p.live.get_mut(&1).unwrap().online = Some(false);
+        assert!(p.senders().is_empty());
+        p.live.get_mut(&1).unwrap().expired = true;
+        p.live.get_mut(&1).unwrap().online = Some(true);
+        assert!(p.senders().is_empty());
     }
 
     #[test]
