@@ -12,7 +12,7 @@ use super::store::Accounts;
 use super::tracker::{Command, Event, Intervals, Live, Tracker};
 use super::{Character, client_id};
 use crate::route::Route;
-use crate::settings::Settings;
+use crate::settings::{HullSource, Settings};
 use crate::universe::Universe;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -66,6 +66,16 @@ pub struct SendState {
     pub done: usize,
     /// The error text, after a failure. `retry_send` sends all waypoints again.
     pub failed: Option<String>,
+}
+
+/// What `Pilots::sync_hull` changed.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum HullSync {
+    None,
+    /// The followed pilot flies a different hull.
+    Hull,
+    /// The followed character is not stored: the source is manual now, and the hull stays.
+    Source,
 }
 
 pub struct Pilots {
@@ -263,6 +273,19 @@ impl Pilots {
             .collect();
         rows.sort_by(|a, b| b.active.cmp(&a.active).then_with(|| a.name.to_lowercase().cmp(&b.name.to_lowercase())));
         rows
+    }
+
+    /// Set the hull from the live ship of the pilot in `settings.hull_source`.
+    /// Without a token store, the source stays: the keyring can come back at the next start.
+    pub fn sync_hull(&self, settings: &mut Settings) -> HullSync {
+        let HullSource::Pilot(id) = settings.hull_source else { return HullSync::None };
+        let Some(accounts) = &self.accounts else { return HullSync::None };
+        if !accounts.characters.iter().any(|c| c.id == id) {
+            settings.hull_source = HullSource::Manual;
+            return HullSync::Source;
+        }
+        let ship_type = self.live.get(&id).and_then(|l| l.ship.as_ref()).map(|s| s.ship_type_id);
+        if settings.follow(ship_type) { HullSync::Hull } else { HullSync::None }
     }
 
     /// The character of the last route start, for the preselection in the picker.
@@ -607,6 +630,40 @@ mod tests {
         // `for_tests` sets a client ID.
         let fake = Fake::default();
         assert!(pilots("eve-router-test-pilots-show-2", &fake).shows_characters());
+    }
+
+    #[test]
+    fn sync_hull_follows_the_pilot() {
+        use crate::settings::HullSource;
+        use crate::test_support::{overlay_universe, settings};
+        let uni = overlay_universe();
+        let fake = Fake::default();
+        let mut p = pilots("eve-router-test-pilots-sync", &fake);
+        let mut s = settings(&uni, Some("black-ops"));
+        // Before the first ship poll, nothing changes.
+        s.hull_source = HullSource::Pilot(1);
+        assert_eq!(p.sync_hull(&mut s), HullSync::None);
+        until(&mut p, |p| p.live.get(&1).is_some_and(|l| l.ship.is_some()));
+        assert_eq!(p.sync_hull(&mut s), HullSync::Hull);
+        assert_eq!(s.rules.hull.unwrap().name, "Capsule");
+        assert_eq!(p.sync_hull(&mut s), HullSync::None);
+        // A character that is not stored: the source becomes manual, and the hull stays.
+        s.hull_source = HullSource::Pilot(99);
+        assert_eq!(p.sync_hull(&mut s), HullSync::Source);
+        assert_eq!(s.hull_source, HullSource::Manual);
+        assert_eq!(s.rules.hull.unwrap().name, "Capsule");
+    }
+
+    #[test]
+    fn sync_hull_keeps_the_pilot_without_a_token_store() {
+        use crate::settings::HullSource;
+        use crate::test_support::{overlay_universe, settings};
+        let uni = overlay_universe();
+        let p = Pilots::offline(std::env::temp_dir().join("eve-router-test-pilots-sync-off").join("active-route.json"));
+        let mut s = settings(&uni, Some("Sin"));
+        s.hull_source = HullSource::Pilot(1);
+        assert_eq!(p.sync_hull(&mut s), HullSync::None);
+        assert_eq!(s.hull_source, HullSource::Pilot(1));
     }
 
     #[test]

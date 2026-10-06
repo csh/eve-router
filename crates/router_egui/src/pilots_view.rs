@@ -10,7 +10,7 @@ use egui::{
 use egui_extras::{Column, TableBuilder};
 use router_core::esi::active::{ActiveRoute, Hop};
 use router_core::esi::client::{IMAGES_URL, portrait};
-use router_core::esi::pilots::{PilotView, StartPlan};
+use router_core::esi::pilots::{HullSync, PilotView, StartPlan};
 use router_core::labels::ship_text;
 use router_core::route::Stop;
 use router_core::universe::display_sec;
@@ -165,6 +165,20 @@ impl PilotsUi {
         self.portraits.poll(ctx);
         let had_login = s.pilots.login.is_some();
         s.pilots.update();
+        match s.pilots.sync_hull(&mut s.settings) {
+            HullSync::None => {}
+            HullSync::Source => s.save_quietly(),
+            // The active route stays as it is. The pilot chooses when to re-route.
+            HullSync::Hull if s.pilots.active.is_some() => {
+                let kind = s.settings.rules.hull.map_or("an unknown ship".into(), |h| h.name.clone());
+                s.status = format!("Ship changed to {kind}. Re-route to plan for it.");
+                s.save_quietly();
+            }
+            HullSync::Hull => {
+                s.recompute();
+                s.save_quietly();
+            }
+        }
         for notice in std::mem::take(&mut s.pilots.notices) {
             s.status = notice;
         }

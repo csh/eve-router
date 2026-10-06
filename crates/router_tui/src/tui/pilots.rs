@@ -3,7 +3,7 @@
 use super::app::{App, Popup, SettingsRow};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::widgets::ListState;
-use router_core::esi::pilots::StartPlan;
+use router_core::esi::pilots::{HullSync, StartPlan};
 
 /// The status text for a key that could change the route.
 pub const LOCKED: &str = "Locked while route is active — press x to stop";
@@ -33,6 +33,20 @@ impl App<'_> {
     /// Read the tracker and the login. The run loop calls this after each key and each 250 ms.
     pub fn tick(&mut self) {
         self.pilots.update();
+        match self.pilots.sync_hull(&mut self.settings) {
+            HullSync::None => {}
+            HullSync::Source => self.save_quietly(),
+            // The active route stays as it is. The pilot chooses when to re-route.
+            HullSync::Hull if self.pilots.active.is_some() => {
+                let kind = self.settings.rules.hull.map_or("an unknown ship".into(), |h| h.name.clone());
+                self.status = format!("Ship changed to {kind}. Re-route to plan for it.");
+                self.save_quietly();
+            }
+            HullSync::Hull => {
+                self.recompute();
+                self.save_quietly();
+            }
+        }
         let notices = std::mem::take(&mut self.pilots.notices);
         if let Some(last) = notices.last() {
             self.status.clone_from(last);

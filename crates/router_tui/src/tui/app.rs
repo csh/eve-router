@@ -694,6 +694,13 @@ impl<'a> App<'a> {
         };
     }
 
+    /// Save the config. Show only an error on the status line.
+    pub(super) fn save_quietly(&mut self) {
+        if let Err(e) = self.write_config() {
+            self.status = e;
+        }
+    }
+
     /// Copy the settings to the config, and write the config file.
     fn write_config(&mut self) -> Result<(), String> {
         self.settings.store(self.uni, &mut self.cfg);
