@@ -46,7 +46,7 @@ pub enum SettingsRow {
 }
 
 pub enum Popup {
-    /// Row i is `Mode::ALL[i]`.
+    /// Row i is `Mode::ALL[i]`. The last row is "optimize order".
     Mode(ListState),
     /// The rows are `hull_rows(filter)`.
     Hull { filter: String, state: ListState },
@@ -162,15 +162,23 @@ impl<'a> App<'a> {
         // The sidebar search and the route search are independent, so they run at the same time.
         let (hubs, routes) = rayon::join(
             || router.jumps_to(nodes[0], &self.settings.favourites),
-            || (nodes.len() >= 2).then(|| router.routes(&nodes, self.settings.top)),
+            || {
+                (nodes.len() >= 2).then(|| {
+                    let (order, changed) = self.settings.order(&router, &nodes)?;
+                    router.routes(&order, self.settings.top).map(|routes| (routes, changed))
+                })
+            },
         );
         self.route_time = Some(started.elapsed());
         self.hubs = hubs;
         match routes {
             None => {}
-            Some(Ok(routes)) => {
+            Some(Ok((routes, changed))) => {
                 self.routes = routes;
                 self.selected.select(Some(0));
+                if let Some(text) = changed {
+                    self.status = if self.status.is_empty() { text } else { format!("{} · {text}", self.status) };
+                }
             }
             Some(Err(e)) => self.status = e,
         }
@@ -426,9 +434,15 @@ impl<'a> App<'a> {
                     Some(Popup::Mode(state))
                 }
                 KeyCode::Down => {
-                    if state.selected().is_some_and(|i| i + 1 < Mode::ALL.len()) {
+                    if state.selected().is_some_and(|i| i < Mode::ALL.len()) {
                         state.select_next();
                     }
+                    Some(Popup::Mode(state))
+                }
+                // The "optimize order" row toggles, and the popup stays open.
+                KeyCode::Enter if state.selected() == Some(Mode::ALL.len()) => {
+                    self.settings.optimize = !self.settings.optimize;
+                    self.recompute();
                     Some(Popup::Mode(state))
                 }
                 KeyCode::Enter => {
@@ -614,7 +628,7 @@ impl<'a> App<'a> {
     /// Save the config, and show the result on the status line.
     fn save(&mut self) {
         self.status = match self.write_config() {
-            Ok(()) => format!("Saved {}", self.cfg_path.display()),
+            Ok(()) => "Config saved!".into(),
             Err(e) => e,
         };
     }
@@ -626,6 +640,7 @@ impl<'a> App<'a> {
         self.cfg.hull = rules.hull.map(|h| h.name.clone());
         self.cfg.max_cap_tj = rules.max_cap;
         self.cfg.mode = Some(self.settings.mode);
+        self.cfg.optimize = self.settings.optimize;
         self.cfg.top = Some(self.settings.top);
         self.cfg.eve_scout = self.settings.hubs;
         self.cfg.favourites = Some(self.settings.favourites.iter().map(|&n| self.uni.name(n).to_string()).collect());
@@ -659,11 +674,13 @@ mod tests {
     fn app(name: &str, cfg: Config) -> App<'static> {
         let settings = Settings {
             mode: Mode::Shortest,
+            optimize: false,
             top: 1,
             wormholes: true,
             hubs: Default::default(),
             bridges: false,
             rules: BridgeRules::default(),
+            min_life: 0,
             favourites: Vec::new(),
         };
         let path = std::env::temp_dir().join(format!("eve-router-test-{name}.json"));

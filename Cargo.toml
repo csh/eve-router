@@ -14,3 +14,15 @@ dirs = "7.0.0"
 ureq = "3.4.2"
 flate2 = "1.1.10"
 chrono = "0.4.45"
+mimalloc = "0.1.52"
+
+[profile.release]
+strip = "debuginfo"
+codegen-units = 1
+opt-level = 3
+lto = "fat"
+panic = "abort"
+debug = false
+debug-assertions = false
+overflow-checks = false
+incremental = false

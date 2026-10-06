@@ -23,6 +23,10 @@ use std::process::ExitCode;
 use std::time::Instant;
 use universe::{Universe, display_sec};
 
+/// mimalloc is faster than the system allocator for the many small maps of the route searches.
+#[global_allocator]
+static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
+
 /// Find the top-n routes between EVE Online solar systems.
 #[derive(Parser)]
 #[command(version)]
@@ -48,9 +52,15 @@ struct Cli {
     /// The maximum capacitor (TJ) for one bridge jump.
     #[arg(long)]
     max_cap: Option<f32>,
+    /// The minimum time (minutes) that a wormhole must have left. The default is 60.
+    #[arg(long)]
+    min_life: Option<u64>,
     /// A jump bridge list in SMT format. The default is ansiblex.txt in the config directory.
     #[arg(long)]
     bridges: Option<PathBuf>,
+    /// Visit each system one time, in the cheapest order. The start and the destination stay in place.
+    #[arg(long)]
+    optimize: bool,
     /// Print the routes and exit. Do not start the TUI.
     #[arg(long)]
     print: bool,
@@ -59,21 +69,38 @@ struct Cli {
 /// The settings that the TUI can change.
 pub struct Settings {
     pub mode: Mode,
+    /// Visit each system one time, in the cheapest order. See `Router::optimize`.
+    pub optimize: bool,
     pub top: usize,
     pub wormholes: bool,
     /// The Thera and Turnur switches.
     pub hubs: wormhole::Hubs,
     pub bridges: bool,
     pub rules: BridgeRules,
+    /// The minimum time (minutes) that a wormhole must have left. The router skips other wormholes.
+    pub min_life: u64,
     /// The sidebar destinations.
     pub favourites: Vec<NodeIndex>,
 }
 
 impl Settings {
-    /// A router for the settings. `now` (Unix seconds) sets which wormholes are expired.
+    /// A router for the settings. `now` (Unix seconds) and `min_life` set which wormholes are usable.
     pub fn router<'a>(&self, uni: &'a Universe, now: u64) -> Router<'a> {
         let bridges = self.bridges && self.rules.blocked_reason().is_none();
-        Router::new(uni, self.mode, self.wormholes, self.hubs, bridges, self.rules, now)
+        Router::new(uni, self.mode, self.wormholes, self.hubs, bridges, self.rules, now + self.min_life * 60)
+    }
+
+    /// The waypoints in the order to route them, and a status text if the order changed.
+    pub fn order(&self, router: &Router, nodes: &[NodeIndex]) -> Result<(Vec<NodeIndex>, Option<String>), String> {
+        if !self.optimize {
+            return Ok((nodes.to_vec(), None));
+        }
+        let order = router.optimize(nodes)?;
+        let text = (order != nodes).then(|| {
+            let names: Vec<&str> = order.iter().map(|&n| router.uni.name(n)).collect();
+            format!("Optimized order: {}", names.join(" > "))
+        });
+        Ok((order, text))
     }
 }
 
@@ -117,7 +144,9 @@ fn run() -> Result<(), String> {
     cfg.capital = cli.capital.or(cfg.capital);
     cfg.hull = cli.hull.or(cfg.hull);
     cfg.max_cap_tj = cli.max_cap.or(cfg.max_cap_tj);
+    cfg.min_life_min = cli.min_life.or(cfg.min_life_min);
     cfg.mode = cli.mode.or(cfg.mode);
+    cfg.optimize = cli.optimize || cfg.optimize;
     cfg.top = cli.top.or(cfg.top);
 
     // Start the Nexum load before the SDE update, so the fetch runs at the same time.
@@ -157,11 +186,13 @@ fn run() -> Result<(), String> {
     };
     let settings = Settings {
         mode: cfg.mode.unwrap_or(Mode::Shortest),
+        optimize: cfg.optimize,
         top: cfg.top.unwrap_or(5).max(1),
         wormholes: true,
         hubs: cfg.eve_scout,
         bridges: true,
         rules: BridgeRules { capital, hull, max_cap: cfg.max_cap_tj },
+        min_life: cfg.min_life_min.unwrap_or(config::DEFAULT_MIN_LIFE_MIN),
         favourites: resolve_all(&uni, &favourite_names(&cfg))?,
     };
     let systems = split_systems(&cli.systems.join(","));
@@ -234,6 +265,10 @@ fn print_routes(uni: &Universe, settings: &Settings, names: &[String]) -> Result
         return Ok(());
     }
     let started = Instant::now();
+    let (nodes, changed) = settings.order(&router, &nodes)?;
+    if let Some(text) = changed {
+        eprintln!("{text}");
+    }
     let routes = router.routes(&nodes, settings.top)?;
     eprintln!("Found {} routes in {} ms", routes.len(), started.elapsed().as_millis());
     for (i, route) in routes.iter().enumerate() {
@@ -273,11 +308,13 @@ mod tests {
     fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
         Settings {
             mode: Mode::Shortest,
+            optimize: false,
             top: 3,
             wormholes: true,
             hubs: Default::default(),
             bridges: true,
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| find_hull(h).unwrap()), max_cap: None },
+            min_life: 0,
             favourites: Vec::new(),
         }
     }

@@ -184,11 +184,13 @@ mod tests {
         crate::overlay::load_bridges(&mut uni, Path::new("tests/fixtures/ansiblex.txt")).unwrap();
         let settings = Settings {
             mode: Mode::Shortest,
+            optimize: false,
             top: 3,
             wormholes: true,
             hubs: Default::default(),
             bridges: true,
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
+            min_life: 0,
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
         };
         let mut app = App::new(&uni, settings, Config::default(), std::env::temp_dir().join("eve-router-test.json"), "Jita > UALX-3".into(), Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default()));
@@ -286,11 +288,13 @@ mod tests {
         uni.add_wormholes(&[hole(30000142, THERA), hole(30002187, THERA), hole(TURNUR, 30002053)]);
         let settings = Settings {
             mode: Mode::Shortest,
+            optimize: false,
             top: 1,
             wormholes: true,
             hubs: Default::default(),
             bridges: true,
             rules: BridgeRules::default(),
+            min_life: 0,
             favourites: Vec::new(),
         };
         let cfg_path = std::env::temp_dir().join("eve-router-test-hubs").join("eve-router.json");
@@ -330,5 +334,47 @@ mod tests {
         terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
         assert_eq!(row_color(terminal.backend().buffer(), &turnur_line), Some(Color::DarkGray));
         std::fs::remove_dir_all(cfg_path.parent().unwrap()).unwrap();
+    }
+
+    #[test]
+    fn mode_popup_toggles_optimize_order() {
+        let uni = Universe::from_sde(crate::sde::load(Path::new("sde")).unwrap());
+        let settings = Settings {
+            mode: Mode::Shortest,
+            optimize: false,
+            top: 1,
+            wormholes: false,
+            hubs: Default::default(),
+            bridges: false,
+            rules: BridgeRules::default(),
+            min_life: 0,
+            favourites: Vec::new(),
+        };
+        let input = "UALX-3 > Dodixie > UALX-3 > Jita > Turnur > Hek > Rens > Jita > C-J6MT > UALX-3";
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
+        let cfg_path = std::env::temp_dir().join("eve-router-test-optimize.json");
+        let mut app = App::new(&uni, settings, Config::default(), cfg_path, input.into(), shortcuts);
+        let typed_jumps = app.routes[0].jumps;
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+
+        // The last row of the mode popup toggles the option, and the popup stays open.
+        app.on_key(KeyEvent::from(KeyCode::Char('m')));
+        for _ in 0..Mode::ALL.len() {
+            app.on_key(KeyEvent::from(KeyCode::Down));
+        }
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert!(app.settings.optimize);
+        assert!(matches!(app.popup, Some(app::Popup::Mode(_))));
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        assert!(format!("{:?}", terminal.backend().buffer()).contains("[x] Optimize order"));
+        app.on_key(KeyEvent::from(KeyCode::Esc));
+        assert_eq!(app.settings.mode, Mode::Shortest);
+
+        // Each system gets one visit: the start, six midpoints and the destination.
+        let route = &app.routes[0];
+        assert!(route.jumps < typed_jumps, "{}", app.status);
+        assert_eq!(route.stops.len(), 8);
+        assert!(app.status.contains("Optimized order: UALX-3 > "), "{}", app.status);
+        assert!(app.status.ends_with(" > UALX-3"), "{}", app.status);
     }
 }

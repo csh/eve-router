@@ -15,6 +15,9 @@ use std::collections::{BinaryHeap, HashSet};
 /// so a route first has the fewest unwanted jumps, then the fewest jumps.
 pub const PENALTY: u64 = 1_000_000;
 
+/// The most midpoints that "optimize order" takes. Held-Karp keeps m × 2^m states for m midpoints.
+pub const MAX_MIDPOINTS: usize = 20;
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq, clap::ValueEnum, Serialize, Deserialize)]
 #[serde(rename_all = "kebab-case")]
 pub enum Mode {
@@ -292,6 +295,107 @@ impl<'a> Router<'a> {
         Ok(routes)
     }
 
+    /// The waypoints in the cheapest order, as a classic TSP. Each system gets one visit: a repeated
+    /// midpoint merges, and a midpoint equal to the start or the destination drops out. The start and
+    /// the destination stay in place. A tie keeps the given order.
+    pub fn optimize(&self, waypoints: &[NodeIndex]) -> Result<Vec<NodeIndex>, String> {
+        let [from, inner @ .., to] = waypoints else {
+            return Ok(waypoints.to_vec());
+        };
+        let mut midpoints = Vec::new();
+        for &w in inner {
+            if w != *from && w != *to && !midpoints.contains(&w) {
+                midpoints.push(w);
+            }
+        }
+        if midpoints.len() > MAX_MIDPOINTS {
+            return Err(format!("Optimize order takes {MAX_MIDPOINTS} midpoints at most. This route has {}", midpoints.len()));
+        }
+        if midpoints.len() >= 2 {
+            midpoints = self.best_order(*from, &midpoints, *to);
+        }
+        Ok(std::iter::once(*from).chain(midpoints).chain([*to]).collect())
+    }
+
+    /// The cheapest order of `free` on a route from `from` to `to`, with Held-Karp.
+    fn best_order(&self, from: NodeIndex, free: &[NodeIndex], to: NodeIndex) -> Vec<NodeIndex> {
+        // Node 0 is `from`, nodes 1..=m are the midpoints, and node m + 1 is `to`.
+        let m = free.len();
+        let nodes: Vec<NodeIndex> = std::iter::once(from).chain(free.iter().copied()).chain([to]).collect();
+        let graph = EdgeFiltered::from_fn(&self.uni.graph, |e: EdgeReference<'_, Link>| self.link_allowed(e));
+        // dist[i][j]: the cost from node i to node j, or u64::MAX if no route exists.
+        // Each source has its own search, so the searches run in parallel.
+        let dist: Vec<Vec<u64>> = nodes[..=m]
+            .par_iter()
+            .map(|&src| {
+                let costs = dijkstra(&graph, src, None, |e| self.enter_cost(e.target()));
+                nodes.iter().map(|n| costs.get(n).copied().unwrap_or(u64::MAX)).collect()
+            })
+            .collect();
+
+        // A state is a set of visited midpoints (a bit mask) and the last midpoint j. A state reads
+        // only the states with one midpoint fewer. Thus each layer of equal set size runs in parallel.
+        // layers[s] holds the masks with s bits, and pos[mask] is the index of the mask in its layer.
+        let full = (1usize << m) - 1;
+        let mut layers: Vec<Vec<usize>> = vec![Vec::new(); m + 1];
+        let mut pos = vec![0u32; full + 1];
+        for mask in 1..=full {
+            let layer = &mut layers[mask.count_ones() as usize];
+            pos[mask] = layer.len() as u32;
+            layer.push(mask);
+        }
+        // cost[s][pos[mask] * m + j]: the cheapest cost from `from` through `mask`, ending at j.
+        // prev[s][...]: the midpoint before j, or NONE.
+        const NONE: u8 = u8::MAX;
+        // Only the layer below is necessary, so the cost keeps one layer. At 20 midpoints, the largest
+        // layer holds about 30 MB of costs. prev keeps all layers, for the order at the end.
+        let mut cost = vec![u64::MAX; m * m];
+        let mut prev: Vec<Vec<u8>> = vec![Vec::new(), vec![NONE; m * m]];
+        for j in 0..m {
+            cost[pos[1 << j] as usize * m + j] = dist[0][j + 1];
+        }
+        for layer in &layers[2..] {
+            let below = &cost;
+            let mut layer_cost = vec![u64::MAX; layer.len() * m];
+            let mut layer_prev = vec![NONE; layer.len() * m];
+            layer_cost.par_chunks_mut(m).zip(layer_prev.par_chunks_mut(m)).zip(layer).for_each(|((c, p), &mask)| {
+                for k in (0..m).filter(|&k| mask & (1 << k) != 0) {
+                    let rest = mask & !(1 << k);
+                    for j in (0..m).filter(|&j| rest & (1 << j) != 0) {
+                        let v = below[pos[rest] as usize * m + j].saturating_add(dist[j + 1][k + 1]);
+                        if v < c[k] {
+                            c[k] = v;
+                            p[k] = j as u8;
+                        }
+                    }
+                }
+            });
+            cost = layer_cost;
+            prev.push(layer_prev);
+        }
+
+        let end = |j: usize| cost[j].saturating_add(dist[j + 1][m + 1]);
+        let given = (0..=m).map(|i| dist[i][i + 1]).fold(0, u64::saturating_add);
+        let mut j = (0..m).min_by_key(|&j| end(j)).unwrap();
+        if end(j) >= given {
+            return free.to_vec();
+        }
+        let mut order = Vec::with_capacity(m);
+        let (mut mask, mut s) = (full, m);
+        loop {
+            order.push(free[j]);
+            let p = prev[s][pos[mask] as usize * m + j];
+            if p == NONE {
+                break;
+            }
+            mask &= !(1 << j);
+            s -= 1;
+            j = p as usize;
+        }
+        order.reverse();
+        order
+    }
+
     fn summarize(&self, path: Path) -> Route {
         let mut route =
             Route { jumps: path.edges.len(), wormholes: 0, bridges: 0, bridge_tj: None, stops: Vec::new(), path };
@@ -469,6 +573,69 @@ mod tests {
         assert_eq!(route.stop_at(route.stops[1]), Some(Stop::Midpoint(1)));
         assert_eq!(route.stop_at(route.jumps), Some(Stop::Destination));
         assert_eq!(route.stop_at(1), None);
+    }
+
+    #[test]
+    fn optimize_reorders_midpoints() {
+        let r = router(Mode::Shortest);
+        let typed = [node("Jita"), node("Amarr"), node("Perimeter"), node("Dodixie")];
+        let order = r.optimize(&typed).unwrap();
+        // Perimeter is one jump from Jita, so the route visits it before Amarr.
+        assert_eq!(order, [node("Jita"), node("Perimeter"), node("Amarr"), node("Dodixie")]);
+        // A shortest order stays as typed.
+        assert_eq!(r.optimize(&order).unwrap(), order);
+    }
+
+    #[test]
+    fn optimize_visits_each_system_once() {
+        let r = router(Mode::Shortest);
+        let names = ["UALX-3", "Dodixie", "UALX-3", "Jita", "Turnur", "Hek", "Rens", "Jita", "C-J6MT", "UALX-3"];
+        let typed: Vec<NodeIndex> = names.iter().map(|n| node(n)).collect();
+        let order = r.optimize(&typed).unwrap();
+        assert_eq!((order[0], order[7]), (node("UALX-3"), node("UALX-3")));
+        let mut midpoints = order[1..7].to_vec();
+        midpoints.sort();
+        let mut expected: Vec<NodeIndex> = ["Dodixie", "Jita", "Turnur", "Hek", "Rens", "C-J6MT"].map(node).to_vec();
+        expected.sort();
+        assert_eq!(midpoints, expected);
+    }
+
+    #[test]
+    fn optimize_matches_brute_force() {
+        let r = router(Mode::Shortest);
+        let start = node("Jita");
+        let end = node("Amarr");
+        let free = ["Rens", "Hek", "Dodixie", "Perimeter", "Tash-Murkon Prime"].map(node);
+        let jumps = |mid: &[NodeIndex]| {
+            let w: Vec<NodeIndex> = std::iter::once(start).chain(mid.iter().copied()).chain([end]).collect();
+            r.routes(&w, 1).unwrap()[0].jumps
+        };
+        // Every order of the five midpoints, with Heap's algorithm.
+        let mut perm = free.to_vec();
+        let mut c = vec![0; perm.len()];
+        let mut best = jumps(&perm);
+        let mut i = 0;
+        while i < perm.len() {
+            if c[i] < i {
+                perm.swap(if i % 2 == 0 { 0 } else { c[i] }, i);
+                best = best.min(jumps(&perm));
+                c[i] += 1;
+                i = 0;
+            } else {
+                c[i] = 0;
+                i += 1;
+            }
+        }
+        let typed: Vec<NodeIndex> = std::iter::once(start).chain(free).chain([end]).collect();
+        let order = r.optimize(&typed).unwrap();
+        assert_eq!(r.routes(&order, 1).unwrap()[0].jumps, best);
+    }
+
+    #[test]
+    fn optimize_limits_midpoints() {
+        let r = router(Mode::Shortest);
+        let waypoints: Vec<NodeIndex> = (0..MAX_MIDPOINTS + 3).map(NodeIndex::new).collect();
+        assert!(r.optimize(&waypoints).is_err());
     }
 
     #[test]

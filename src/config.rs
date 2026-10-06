@@ -43,6 +43,9 @@ pub fn overlay_path(flag: Option<PathBuf>, cfg_path: &Path, default_name: &str) 
     })
 }
 
+/// The default minimum time (minutes) that a wormhole must have left.
+pub const DEFAULT_MIN_LIFE_MIN: u64 = 60;
+
 /// The main trade hubs.
 pub const DEFAULT_FAVOURITES: [&str; 5] = ["Jita", "Amarr", "Dodixie", "Hek", "Rens"];
 
@@ -97,9 +100,13 @@ pub struct Config {
     pub hull: Option<String>,
     /// The maximum capacitor (TJ) that one bridge jump can use.
     pub max_cap_tj: Option<f32>,
+    /// The minimum time (minutes) that a wormhole must have left. `None` gives `DEFAULT_MIN_LIFE_MIN`.
+    pub min_life_min: Option<u64>,
     /// The sidebar destinations. `None` gives `DEFAULT_FAVOURITES`.
     pub favourites: Option<Vec<String>>,
     pub mode: Option<Mode>,
+    /// Visit each system one time, in the cheapest order.
+    pub optimize: bool,
     pub top: Option<usize>,
     pub nexum: NexumConfig,
     /// The Thera and Turnur switches. Both are on in a file without them.

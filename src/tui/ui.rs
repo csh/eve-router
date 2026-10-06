@@ -64,13 +64,18 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
 
     match &mut app.popup {
         Some(Popup::Mode(state)) => {
-            let area = centered(frame.area(), 56, Mode::ALL.len() as u16 * 2 + 2);
+            let area = centered(frame.area(), 56, (Mode::ALL.len() as u16 + 1) * 2 + 2);
+            let item = |title: String, description: &str| {
+                ListItem::new(vec![Line::from(title).bold(), Line::from(format!("  {description}")).dark_gray()])
+            };
+            let check = if app.settings.optimize { "[x]" } else { "[ ]" };
             let items: Vec<ListItem> = Mode::ALL
                 .iter()
-                .map(|m| ListItem::new(vec![Line::from(m.title()).bold(), Line::from(format!("  {}", m.description())).dark_gray()]))
+                .map(|m| item(m.title().into(), m.description()))
+                .chain([item(format!("{check} Optimize order"), "Visit each system once, in the cheapest order")])
                 .collect();
             let list = List::new(items)
-                .block(Block::bordered().title(" Safety mode "))
+                .block(Block::bordered().title(" Route mode "))
                 .highlight_style(Style::new().reversed())
                 .highlight_symbol("> ");
             frame.render_widget(Clear, area);
@@ -172,7 +177,7 @@ fn help_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             ("i", "Edit route".into()),
             ("↑↓", "Select route".into()),
             ("Enter", "Open route".into()),
-            ("m", format!("Safety mode: {}", s.mode.title())),
+            ("m", format!("Mode: {}{}", s.mode.title(), if s.optimize { " + optimize order" } else { "" })),
             ("w", format!("Wormholes: {}", on_off(s.wormholes))),
             ("j", format!("Jump bridges: {bridges}")),
             ("h", format!("Hull: {}", s.rules.hull.map_or("none".into(), hull_label))),

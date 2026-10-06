@@ -1,0 +1,14 @@
+# Build settings for speed. Cargo.toml already sets opt-level 3, fat LTO and one codegen unit.
+
+[build]
+# build-std needs an explicit target. The binary goes to target/x86_64-pc-windows-msvc/<profile>/.
+target = "x86_64-pc-windows-msvc"
+
+[unstable]
+# Build the standard library from source, with the same flags as the crate. Needs nightly and rust-src.
+build-std = ["std", "panic_abort"]
+
+[target.x86_64-pc-windows-msvc]
+# Use every instruction set of this CPU (AVX2, BMI2, POPCNT and others).
+# The binary can fail with "illegal instruction" on an older CPU. Remove this line to build for other machines.
+rustflags = ["-C", "target-cpu=native"]
