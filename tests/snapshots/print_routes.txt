@@ -1,0 +1,109 @@
+Shortest route from UALX-3 (shortest):
+  Jita               30
+  Amarr              27
+
+#1 30 jumps
+    0 Start       UALX-3               -0.2 Tenerifis            
+    1             3L3N-X               -0.2 Tenerifis            gate
+    2             Q-S7ZD               -0.0 Catch                gate
+    3             GJ0-OJ               -0.0 Catch                gate
+    4             A-803L               -0.0 Catch                gate
+    5             6X7-JO               -0.1 Catch                gate
+    6             HY-RWO               -0.1 Catch                gate
+    7             V-3YG7               -0.1 Catch                gate
+    8             B-3QPD               -0.1 Catch                gate
+    9             U-QVWD               -0.1 Catch                gate
+   10             0SHT-A               -0.2 Curse                gate
+   11             D87E-A               -0.1 Curse                gate
+   12             K-B2D3               -0.1 Curse                gate
+   13             VOL-MI               -0.0 Curse                gate
+   14             HLW-HP               -0.0 Curse                gate
+   15             KLMT-W               -0.0 Curse                gate
+   16             G-0Q86               -0.0 Curse                gate
+   17             Zarzakh              -1.0 Yasna Zakh           gate
+   18             Alsavoinon            0.3 Placid               gate
+   19             Vlillirier            0.3 Placid               gate
+   20             Aldranette            0.4 Placid               gate
+   21             Nennamaila            0.3 Black Rise           gate
+   22             Hikkoken              0.3 Black Rise           gate
+   23             Pynekastoh            0.2 Black Rise           gate
+   24             Hirri                 0.3 Black Rise           gate
+   25             Kedama                0.3 Black Rise           gate
+   26             Tama                  0.3 The Citadel          gate
+   27             Nourvukaiken          0.8 Lonetrek             gate
+   28             Tunttaras             0.9 Lonetrek             gate
+   29             Niyabainen            0.9 The Forge            gate
+   30 Destination Jita                  0.9 The Forge            gate
+
+#2 30 jumps (2 wormholes)
+    0 Start       UALX-3               -0.2 Tenerifis            
+    1             3L3N-X               -0.2 Tenerifis            gate
+    2             Q-S7ZD               -0.0 Catch                gate
+    3             GJ0-OJ               -0.0 Catch                gate
+    4             A-803L               -0.0 Catch                gate
+    5             6X7-JO               -0.1 Catch                gate
+    6             HY-RWO               -0.1 Catch                gate
+    7             V-3YG7               -0.1 Catch                gate
+    8             B-3QPD               -0.1 Catch                gate
+    9             U-QVWD               -0.1 Catch                gate
+   10             0SHT-A               -0.2 Curse                gate
+   11             D87E-A               -0.1 Curse                gate
+   12             K-B2D3               -0.1 Curse                gate
+   13             VOL-MI               -0.0 Curse                gate
+   14             HLW-HP               -0.0 Curse                gate
+   15             KLMT-W               -0.0 Curse                gate
+   16             G-0Q86               -0.0 Curse                gate
+   17             Zarzakh              -1.0 Yasna Zakh           gate
+   18             Turnur                0.4 Metropolis           gate
+   19             Aset                  0.4 Metropolis           gate
+   20             Avenod                0.4 Metropolis           gate
+   21             Audaerne              0.5 Sinq Laison          gate
+   22             Augnais               0.5 Sinq Laison          gate
+   23             Deltole               0.5 Sinq Laison          gate
+   24             Aufay                 0.5 Sinq Laison          gate
+   25             Balle                 0.5 Sinq Laison          gate
+   26             Vylade                0.8 Sinq Laison          gate
+   27             Dodixie               0.9 Sinq Laison          gate
+   28             Thera                -1.0 G-R00031             Wormhole · Sig. Unknown · XL · Less than 3h 0m remaining
+   29             Perimeter             0.9 The Forge            Wormhole · Sig. Unknown · Large
+   30 Destination Jita                  0.9 The Forge            gate
+
+#3 30 jumps (2 wormholes)
+    0 Start       UALX-3               -0.2 Tenerifis            
+    1             3L3N-X               -0.2 Tenerifis            gate
+    2             Q-S7ZD               -0.0 Catch                gate
+    3             GJ0-OJ               -0.0 Catch                gate
+    4             A-803L               -0.0 Catch                gate
+    5             6X7-JO               -0.1 Catch                gate
+    6             HY-RWO               -0.1 Catch                gate
+    7             V-3YG7               -0.1 Catch                gate
+    8             B-3QPD               -0.1 Catch                gate
+    9             U-QVWD               -0.1 Catch                gate
+   10             0SHT-A               -0.2 Curse                gate
+   11             D87E-A               -0.1 Curse                gate
+   12             K-B2D3               -0.1 Curse                gate
+   13             VOL-MI               -0.0 Curse                gate
+   14             HLW-HP               -0.0 Curse                gate
+   15             KLMT-W               -0.0 Curse                gate
+   16             G-0Q86               -0.0 Curse                gate
+   17             Zarzakh              -1.0 Yasna Zakh           gate
+   18             Turnur                0.4 Metropolis           gate
+   19             Aset                  0.4 Metropolis           gate
+   20             Avenod                0.4 Metropolis           gate
+   21             Audaerne              0.5 Sinq Laison          gate
+   22             Augnais               0.5 Sinq Laison          gate
+   23             Parchanier            0.9 Sinq Laison          gate
+   24             Doussivitte           0.8 Sinq Laison          gate
+   25             Mattere               0.9 Everyshore           gate
+   26             Meves                 0.9 Everyshore           gate
+   27             Dodixie               0.9 Sinq Laison          gate
+   28             Thera                -1.0 G-R00031             Wormhole · Sig. Unknown · XL · Less than 3h 0m remaining
+   29             Perimeter             0.9 The Forge            Wormhole · Sig. Unknown · Large
+   30 Destination Jita                  0.9 The Forge            gate
+Shortest route from Jita (shortest):
+  Jita                0
+  Amarr              11
+
+#1 1 jump (1 wormhole)
+    0 Start       Jita                  0.9 The Forge            
+    1 Destination J134702              -1.0 E-R00028             Wormhole · Sig. Unknown · Large · Less than 14h 0m remaining

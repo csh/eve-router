@@ -269,6 +269,62 @@ mod tests {
         assert_eq!(app.settings.rules.hull.unwrap().name, "Paladin");
     }
 
+    /// The text of each screen row, with no trailing spaces.
+    fn screen_text(buffer: &ratatui::buffer::Buffer) -> String {
+        let area = buffer.area;
+        let rows: Vec<String> = (area.top()..area.bottom())
+            .map(|y| (area.left()..area.right()).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_string())
+            .collect();
+        rows.join("
+") + "
+"
+    }
+
+    /// The first screen, with routes, the sidebar and the Shortcuts box.
+    #[test]
+    fn start_screen_snapshot() {
+        let mut uni = Universe::from_sde(crate::sde::load(Path::new("sde")).unwrap());
+        crate::overlay::load_bridges(&mut uni, Path::new("tests/fixtures/ansiblex.txt")).unwrap();
+        let settings = Settings {
+            mode: Mode::Shortest,
+            optimize: false,
+            top: 3,
+            wormholes: true,
+            hubs: Default::default(),
+            bridges: true,
+            rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
+            min_life: 0,
+            favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
+        };
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
+        let cfg_path = std::env::temp_dir().join("eve-router-test-snapshot.json");
+        let mut app = App::new(&uni, settings, Config::default(), cfg_path, "Jita > UALX-3".into(), shortcuts);
+        let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let text = screen_text(terminal.backend().buffer());
+        // Mask the search time in the title, for example "72.5 ms ──" gives "# ms ────".
+        let end = text.find(" ms ").unwrap();
+        let start = text[..end].trim_end_matches(|c: char| c.is_ascii_digit() || c == '.').len();
+        let text = format!("{}# ms {}{}", &text[..start], "─".repeat(end - start - 1), &text[end + 4..]);
+        crate::assert_snapshot!("start_screen", text);
+    }
+
+    #[test]
+    fn shortcuts_warning_text() {
+        use crate::sources::{evescout, nexum};
+        let uni = crate::universe::tests::universe();
+        let report = OverlayReport { bridges: 0, unknown: vec!["Nowhere".into()] };
+        let mut wh = nexum::Load { warning: Some("Nexum offline, map from 14:02".into()), ..Default::default() };
+        wh.report.unknown = vec![1, 2];
+        let mut scout = evescout::Load { warning: Some("EVE-Scout offline, feed from 14:02".into()), ..Default::default() };
+        scout.report.unknown = vec![3];
+        let warning = Shortcuts::new(uni, &report, &wh, &scout).warning.unwrap();
+        assert_eq!(
+            warning,
+            "Bridges: unknown systems: Nowhere · Nexum: unknown system IDs: 1, 2 · EVE-Scout: unknown system IDs: 3 · Nexum offline, map from 14:02 · EVE-Scout offline, feed from 14:02"
+        );
+    }
+
     /// The foreground color of the first cell of the screen row that starts with `text`.
     fn row_color(buffer: &ratatui::buffer::Buffer, text: &str) -> Option<ratatui::style::Color> {
         let area = buffer.area;

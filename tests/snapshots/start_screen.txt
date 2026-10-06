@@ -1,0 +1,40 @@
+┌ EVE Router · SDE 3569502 · # ms ─────────────────────────────────────────────────────────────┐┌ Shortcuts ───────────┐
+│Route: Jita > UALX-3                                                                          ││Wormholes:          0 │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘│Jump bridges:       3 │
+┌ Routes (3) ──────────────────────────────────────────────────────────────────────────────────┐└──────────────────────┘
+│> #1 30 jumps                                                                                 │┌ Shortest route ──────┐
+│  #2 30 jumps                                                                                 ││from Jita             │
+│  #3 31 jumps                                                                                 ││                      │
+│                                                                                              ││Jita                0 │
+│                                                                                              ││Amarr              11 │
+│                                                                                              ││                      │
+│                                                                                              ││                      │
+│                                                                                              ││                      │
+│                                                                                              ││                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘│                      │
+┌ Route #1 ────────────────────────────────────────────────────────────────────────────────────┐│                      │
+│#      Stop          System               Sec     Region                 Via                  ││                      │
+│0      Start         Jita                 0.9     The Forge                                   ││                      │
+│1                    Ikuchi               0.9     The Forge              gate                 ││                      │
+│2                    Tunttaras            0.9     Lonetrek               gate                 ││                      │
+│3                    Nourvukaiken         0.8     Lonetrek               gate                 ││                      │
+│4                    Tama                 0.3     The Citadel            gate                 ││                      │
+│5                    Kedama               0.3     Black Rise             gate                 ││                      │
+│6                    Hirri                0.3     Black Rise             gate                 ││                      │
+│7                    Pynekastoh           0.2     Black Rise             gate                 ││                      │
+│8                    Hikkoken             0.3     Black Rise             gate                 ││                      │
+│9                    Nennamaila           0.3     Black Rise             gate                 ││                      │
+│10                   Aldranette           0.4     Placid                 gate                 ││                      │
+│11                   Vlillirier           0.3     Placid                 gate                 ││                      │
+│12                   Alsavoinon           0.3     Placid                 gate                 ││                      │
+│13                   Zarzakh              -1.0    Yasna Zakh             gate                 ││                      │
+│14                   G-0Q86               -0.0    Curse                  gate                 ││                      │
+│15                   KLMT-W               -0.0    Curse                  gate                 ││                      │
+│16                   HLW-HP               -0.0    Curse                  gate                 ││                      │
+│17                   VOL-MI               -0.0    Curse                  gate                 ││                      │
+│18                   K-B2D3               -0.1    Curse                  gate                 ││                      │
+│19                   D87E-A               -0.1    Curse                  gate                 ││                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────┘
+
+ i  Edit route    ↑↓  Select route    Enter  Open route    m  Mode: Shortest    w  Wormholes: on    j  Jump bridges: on
+ h  Hull: Black Ops    +/-  Routes: 3    s  Settings    q  Quit

@@ -6,6 +6,8 @@ mod sde;
 mod sde_update;
 mod ships;
 mod sources;
+#[cfg(test)]
+mod test_support;
 mod tui;
 mod universe;
 mod wormhole;
@@ -18,6 +20,7 @@ use overlay::OverlayReport;
 use petgraph::graph::NodeIndex;
 use route::{Mode, Router};
 use sources::{evescout, nexum};
+use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::time::Instant;
@@ -213,7 +216,7 @@ fn run() -> Result<(), String> {
         for warning in wh.warning.iter().chain(&scout.warning) {
             eprintln!("{warning}");
         }
-        print_routes(&uni, &settings, &systems)
+        print_routes(&mut std::io::stdout().lock(), &uni, &settings, &systems, wormhole::now())
     } else {
         let shortcuts = tui::Shortcuts::new(&uni, &report, &wh, &scout);
         tui::run(&uni, settings, cfg, cfg_path, systems.join(" > "), shortcuts)
@@ -221,21 +224,8 @@ fn run() -> Result<(), String> {
 }
 
 fn update_sde(dir: &std::path::Path) -> Result<(), String> {
-    use sde_update::Outcome;
-    match sde_update::ensure(dir)? {
-        Outcome::Updated { from, to, bytes } => {
-            let mb = bytes as f64 / 1e6;
-            match from {
-                // Same build: only a file was missing, for example wormholes.json from an older version.
-                Some(b) if b == to => eprintln!("Completed SDE build {to} ({mb:.1} MB) in {}", dir.display()),
-                Some(b) => eprintln!("Updated the SDE from build {b} to build {to} ({mb:.1} MB) in {}", dir.display()),
-                None => eprintln!("Downloaded SDE build {to} ({mb:.1} MB) to {}", dir.display()),
-            }
-        }
-        Outcome::Offline { local, error } => {
-            eprintln!("Cannot check for a new SDE. Using local build {local}. Cause: {error}");
-        }
-        Outcome::Skipped | Outcome::UpToDate => {}
+    if let Some(text) = sde_update::ensure(dir)?.message(dir) {
+        eprintln!("{text}");
     }
     Ok(())
 }
@@ -247,18 +237,20 @@ fn favourite_names(cfg: &Config) -> Vec<String> {
     }
 }
 
-fn print_routes(uni: &Universe, settings: &Settings, names: &[String]) -> Result<(), String> {
+/// Write the routes to `out`. The status lines go to stderr. `now` (Unix seconds) sets which
+/// wormholes are usable, and the expiry text.
+fn print_routes(out: &mut impl Write, uni: &Universe, settings: &Settings, names: &[String], now: u64) -> Result<(), String> {
     let nodes = resolve_all(uni, names)?;
-    let now = wormhole::now();
     let router = settings.router(uni, now);
     if let Some(reason) = settings.rules.blocked_reason() {
         eprintln!("Jump bridges off: {reason}");
     }
+    let io = |e: std::io::Error| e.to_string();
     if let Some(&origin) = nodes.first() {
-        println!("Shortest route from {} ({}):", uni.name(origin), settings.mode.label());
+        writeln!(out, "Shortest route from {} ({}):", uni.name(origin), settings.mode.label()).map_err(io)?;
         for (target, jumps) in router.jumps_to(origin, &settings.favourites) {
             let jumps = jumps.map_or("-".into(), |j| j.to_string());
-            println!("  {:<16} {jumps:>4}", uni.name(target));
+            writeln!(out, "  {:<16} {jumps:>4}", uni.name(target)).map_err(io)?;
         }
     }
     if nodes.len() < 2 {
@@ -272,7 +264,8 @@ fn print_routes(uni: &Universe, settings: &Settings, names: &[String]) -> Result
     let routes = router.routes(&nodes, settings.top)?;
     eprintln!("Found {} routes in {} ms", routes.len(), started.elapsed().as_millis());
     for (i, route) in routes.iter().enumerate() {
-        println!("\n#{} {}{}", i + 1, tui::jumps_label(route.jumps), tui::route_extras(route));
+        writeln!(out, "
+#{} {}{}", i + 1, tui::jumps_label(route.jumps), tui::route_extras(route)).map_err(io)?;
         for (step, &node) in route.path.nodes.iter().enumerate() {
             let sys = uni.system(node);
             let via = match step.checked_sub(1).map(|s| route.path.edges[s]) {
@@ -280,7 +273,8 @@ fn print_routes(uni: &Universe, settings: &Settings, names: &[String]) -> Result
                 None => String::new(),
             };
             let stop = route.stop_at(step).map(|s| s.label()).unwrap_or_default();
-            println!("  {:>3} {stop:<11} {:<20} {:>4.1} {:<20} {via}", step, sys.name, display_sec(sys.security), sys.region);
+            writeln!(out, "  {:>3} {stop:<11} {:<20} {:>4.1} {:<20} {via}", step, sys.name, display_sec(sys.security), sys.region)
+                .map_err(io)?;
         }
     }
     Ok(())
@@ -340,6 +334,27 @@ mod tests {
         s.rules.capital = None;
         assert!(!uses_bridge(&s));
         assert!(!uses_bridge(&settings(&uni, Some("titan"))));
+    }
+
+    /// The full `--print` text of two routes: one with jump bridges, one into J-space.
+    #[test]
+    fn print_routes_snapshot() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, Some("black-ops"));
+        s.favourites = resolve_all(&uni, &["Jita".into(), "Amarr".into()]).unwrap();
+        let mut out = Vec::new();
+        print_routes(&mut out, &uni, &s, &["UALX-3".into(), "Jita".into()], FIXTURE_TIME).unwrap();
+        print_routes(&mut out, &uni, &s, &["Jita".into(), "J134702".into()], FIXTURE_TIME).unwrap();
+        crate::assert_snapshot!("print_routes", String::from_utf8(out).unwrap());
+    }
+
+    #[test]
+    fn cli_help_and_version_snapshot() {
+        use clap::CommandFactory;
+        let mut cmd = Cli::command();
+        let text = format!("{}
+{}", cmd.render_version(), cmd.render_long_help());
+        crate::assert_snapshot!("cli_help", text);
     }
 
     #[test]

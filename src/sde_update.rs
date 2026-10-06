@@ -32,6 +32,27 @@ pub enum Outcome {
     Offline { local: u32, error: String },
 }
 
+impl Outcome {
+    /// The status line for the user, if the check did more than confirm the local build.
+    pub fn message(&self, dir: &Path) -> Option<String> {
+        match self {
+            Outcome::Updated { from, to, bytes } => {
+                let mb = *bytes as f64 / 1e6;
+                Some(match from {
+                    // Same build: only a file was missing, for example wormholes.json from an older version.
+                    Some(b) if b == to => format!("Completed SDE build {to} ({mb:.1} MB) in {}", dir.display()),
+                    Some(b) => format!("Updated the SDE from build {b} to build {to} ({mb:.1} MB) in {}", dir.display()),
+                    None => format!("Downloaded SDE build {to} ({mb:.1} MB) to {}", dir.display()),
+                })
+            }
+            Outcome::Offline { local, error } => {
+                Some(format!("Cannot check for a new SDE. Using local build {local}. Cause: {error}"))
+            }
+            Outcome::Skipped | Outcome::UpToDate => None,
+        }
+    }
+}
+
 /// Make sure that `dir` holds the latest SDE files.
 pub fn ensure(dir: &Path) -> Result<Outcome, String> {
     if std::env::var(SKIP_ENV).as_deref() == Ok("1") {
@@ -319,6 +340,20 @@ mod tests {
         let build = crate::sde::build_number(dir).unwrap();
         let source = HttpSource { agent: agent(), url: format!("{BASE_URL}/eve-online-static-data-{build}-jsonl.zip") };
         download(&source, dir).unwrap();
+    }
+
+    #[test]
+    fn outcome_messages() {
+        let dir = Path::new("sde");
+        let text = |o: Outcome| o.message(dir);
+        assert_eq!(text(Outcome::Skipped), None);
+        assert_eq!(text(Outcome::UpToDate), None);
+        let updated = |from| Outcome::Updated { from, to: 7, bytes: 1_840_000 };
+        assert_eq!(text(updated(Some(7))).unwrap(), "Completed SDE build 7 (1.8 MB) in sde");
+        assert_eq!(text(updated(Some(6))).unwrap(), "Updated the SDE from build 6 to build 7 (1.8 MB) in sde");
+        assert_eq!(text(updated(None)).unwrap(), "Downloaded SDE build 7 (1.8 MB) to sde");
+        let offline = Outcome::Offline { local: 6, error: "timeout".into() };
+        assert_eq!(text(offline).unwrap(), "Cannot check for a new SDE. Using local build 6. Cause: timeout");
     }
 
     #[test]

@@ -1,0 +1,46 @@
+eve-router 0.1.0
+
+Find the top-n routes between EVE Online solar systems
+
+Usage: eve-router [OPTIONS] [SYSTEMS]...
+
+Arguments:
+  [SYSTEMS]...
+          The origin, the waypoints and the destination. Split them with spaces, ">" or ","
+
+Options:
+      --sde <SDE>
+          The SDE directory. The default is sde in the platform data directory, for example %LOCALAPPDATA%\com.smrkn.eve-router\sde on Windows. The router keeps it up to date. Set EVE_ROUTER_SKIP_SDE_CHECK=1 to skip the update check
+
+      --mode <MODE>
+          [possible values: shortest, prefer-highsec, less-secure]
+
+  -n, --top <TOP>
+          The number of routes
+
+      --capital <CAPITAL>
+          The alliance capital system. Jump bridges need it
+
+      --hull <HULL>
+          The ship ("Sin") or ship group ("black-ops"). It sets the bridge capacitor cost
+
+      --max-cap <MAX_CAP>
+          The maximum capacitor (TJ) for one bridge jump
+
+      --min-life <MIN_LIFE>
+          The minimum time (minutes) that a wormhole must have left. The default is 60
+
+      --bridges <BRIDGES>
+          A jump bridge list in SMT format. The default is ansiblex.txt in the config directory
+
+      --optimize
+          Visit each system one time, in the cheapest order. The start and the destination stay in place
+
+      --print
+          Print the routes and exit. Do not start the TUI
+
+  -h, --help
+          Print help
+
+  -V, --version
+          Print version

@@ -1,0 +1,21 @@
+{
+  "capital": "JK-Q77",
+  "hull": "black-ops",
+  "max_cap_tj": 36.5,
+  "min_life_min": 30,
+  "favourites": [
+    "Jita"
+  ],
+  "mode": "prefer-highsec",
+  "optimize": true,
+  "top": 3,
+  "nexum": {
+    "url": "https://nexum.example",
+    "key": "nxm_key",
+    "map_id": "m1"
+  },
+  "eve_scout": {
+    "thera": false,
+    "turnur": true
+  }
+}

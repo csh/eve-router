@@ -155,6 +155,27 @@ mod tests {
         assert!(path.ends_with(Path::new(APP_DIR).join(FILE_NAME)), "{}", path.display());
     }
 
+    /// The file format: the field names and the kebab-case mode names.
+    #[test]
+    fn config_json_snapshot() {
+        let cfg = Config {
+            capital: Some("JK-Q77".into()),
+            hull: Some("black-ops".into()),
+            max_cap_tj: Some(36.5),
+            min_life_min: Some(30),
+            favourites: Some(vec!["Jita".into()]),
+            mode: Some(Mode::PreferHighsec),
+            optimize: true,
+            top: Some(3),
+            nexum: NexumConfig { url: Some("https://nexum.example".into()), key: Some(ApiKey("nxm_key".into())), map_id: Some("m1".into()) },
+            eve_scout: Hubs { thera: false, turnur: true },
+        };
+        let text = serde_json::to_string_pretty(&cfg).unwrap();
+        crate::assert_snapshot!("config_json", text);
+        let back: Config = serde_json::from_str(&text).unwrap();
+        assert_eq!(serde_json::to_string_pretty(&back).unwrap(), text);
+    }
+
     #[test]
     fn overlay_path_order() {
         let dir = std::env::temp_dir().join("eve-router-test-overlay");
