@@ -11,6 +11,7 @@ use super::sso::{Login, LoginError, Sso, Tokens};
 use super::store::Accounts;
 use super::tracker::{Command, Event, Intervals, Live, Tracker};
 use super::{Character, client_id};
+use crate::ansiblex::{HullClass, hull_rows, same_hull};
 use crate::route::Route;
 use crate::settings::{HullSource, Settings};
 use crate::universe::Universe;
@@ -66,6 +67,25 @@ pub struct SendState {
     pub done: usize,
     /// The error text, after a failure. `retry_send` sends all waypoints again.
     pub failed: Option<String>,
+}
+
+/// A row of the Pilot picker.
+pub enum PilotRow {
+    /// Follow the ship of this character.
+    Pilot(PilotView),
+    /// A manual hull. `None` is the "none" row.
+    Hull(Option<HullClass>),
+}
+
+impl PilotRow {
+    /// True if the row is the hull source of `settings`.
+    pub fn is_current(&self, settings: &Settings) -> bool {
+        match (self, settings.hull_source) {
+            (PilotRow::Pilot(v), HullSource::Pilot(id)) => v.id == id,
+            (PilotRow::Hull(h), HullSource::Manual) => same_hull(*h, settings.rules.hull),
+            _ => false,
+        }
+    }
 }
 
 /// What `Pilots::sync_hull` changed.
@@ -286,6 +306,13 @@ impl Pilots {
         }
         let ship_type = self.live.get(&id).and_then(|l| l.ship.as_ref()).map(|s| s.ship_type_id);
         if settings.follow(ship_type) { HullSync::Hull } else { HullSync::None }
+    }
+
+    /// The Pilot picker rows: the characters whose name contains `filter`, then `hull_rows(filter)`.
+    pub fn pilot_rows(&self, filter: &str) -> Vec<PilotRow> {
+        let lower = filter.to_lowercase();
+        let pilots = self.characters().into_iter().filter(|c| c.name.to_lowercase().contains(&lower)).map(PilotRow::Pilot);
+        pilots.chain(hull_rows(filter).into_iter().map(PilotRow::Hull)).collect()
     }
 
     /// The character of the last route start, for the preselection in the picker.
@@ -664,6 +691,41 @@ mod tests {
         s.hull_source = HullSource::Pilot(1);
         assert_eq!(p.sync_hull(&mut s), HullSync::None);
         assert_eq!(s.hull_source, HullSource::Pilot(1));
+    }
+
+    #[test]
+    fn pilot_rows_list_the_characters_then_the_hulls() {
+        let fake = Fake::default();
+        let p = pilots("eve-router-test-pilots-rows", &fake);
+        let rows = p.pilot_rows("");
+        assert!(matches!(&rows[0], PilotRow::Pilot(v) if v.name == "Alice"));
+        assert!(matches!(rows[1], PilotRow::Hull(None)));
+        assert!(matches!(rows[2], PilotRow::Hull(Some(_))));
+        // The filter applies to the names and the hulls.
+        let rows = p.pilot_rows("ali");
+        assert!(matches!(&rows[0], PilotRow::Pilot(_)));
+        assert!(rows.iter().skip(1).all(|r| matches!(r, PilotRow::Hull(_))));
+        let rows = p.pilot_rows("rorqual");
+        assert!(matches!(rows[0], PilotRow::Hull(None)));
+        assert!(matches!(rows[1], PilotRow::Hull(Some(h)) if h.name == "Rorqual"));
+    }
+
+    #[test]
+    fn pilot_row_marks_the_current_source() {
+        use crate::ansiblex::find_hull;
+        use crate::settings::HullSource;
+        use crate::test_support::{overlay_universe, settings};
+        let uni = overlay_universe();
+        let fake = Fake::default();
+        let p = pilots("eve-router-test-pilots-current", &fake);
+        let mut s = settings(&uni, Some("Sin"));
+        let alice = p.pilot_rows("").into_iter().next().unwrap();
+        let sin = PilotRow::Hull(find_hull("Sin"));
+        assert!(sin.is_current(&s) && !alice.is_current(&s));
+        // With a pilot source, the hull row of the same hull is not current.
+        s.hull_source = HullSource::Pilot(1);
+        assert!(alice.is_current(&s) && !sin.is_current(&s));
+        assert!(!PilotRow::Hull(None).is_current(&s));
     }
 
     #[test]

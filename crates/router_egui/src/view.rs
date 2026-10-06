@@ -9,7 +9,7 @@ use crate::theme::{self, panel};
 use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
 use petgraph::graph::NodeIndex;
-use router_core::labels::{hull_label, jumps_label, link_label, on_off, route_extras, route_text};
+use router_core::labels::{jumps_label, link_label, on_off, pilot_label, route_extras, route_text};
 use router_core::route::{Mode, Stop};
 use router_core::sources::FetchError;
 use router_core::sources::nexum::MapInfo;
@@ -199,11 +199,6 @@ impl View {
                 ui.label(theme::header_text("Routes"));
                 ui.separator();
 
-                let hull = s.settings.rules.hull.map_or("none".into(), hull_label);
-                if ui.button(format!("Hull: {hull}")).clicked() {
-                    self.popup = Some(Popup::Hull { filter: String::new() });
-                }
-
                 let blocked = s.settings.rules.blocked_reason();
                 let bridges = match &blocked {
                     Some(_) => "off (no capital)",
@@ -274,6 +269,13 @@ impl View {
                 let hint = "Add many systems at once: one name for each line, or names separated by commas";
                 if ui.button("Paste list…").on_hover_text(hint).clicked() {
                     self.popup = Some(Popup::List { text: String::new(), problems: Vec::new() });
+                }
+            });
+            ui.horizontal(|ui| {
+                ui.label(theme::header_text("Pilot"));
+                let hint = "Plan for the ship of a character, or for a hull that you pick";
+                if ui.button(format!("{} ▾", pilot_label(&s.settings, &s.pilots))).on_hover_text(hint).clicked() {
+                    self.popup = Some(Popup::Pilot { filter: String::new() });
                 }
             });
             ui.add_space(6.0);

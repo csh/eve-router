@@ -7,8 +7,8 @@ use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Clear, List, ListItem, Paragraph, Row, Table};
-use router_core::ansiblex::hull_rows;
-use router_core::labels::{hull_label, jumps_label, link_label, on_off, route_extras, sec_rgb};
+use router_core::esi::pilots::PilotRow;
+use router_core::labels::{jumps_label, link_label, on_off, pilot_label, route_extras, sec_rgb, ship_text};
 use router_core::route::Mode;
 use router_core::universe::display_sec;
 
@@ -77,20 +77,24 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
             frame.render_widget(Clear, area);
             frame.render_stateful_widget(list, area, state);
         }
-        Some(Popup::Hull { filter, state }) => {
+        Some(Popup::Pilot { filter, state }) => {
             let area = centered(frame.area(), 74, 22);
-            let rows = hull_rows(filter);
+            let rows = app.pilots.pilot_rows(filter);
             let items: Vec<ListItem> = rows
                 .iter()
                 .map(|row| match row {
-                    None => ListItem::new("none"),
-                    Some(h) => match h.base_tj {
+                    PilotRow::Pilot(v) => {
+                        let ship = v.live.ship.as_ref().map_or("ship unknown".into(), |sh| ship_text(sh, &v.name).to_string());
+                        ListItem::new(format!("{:<26}{ship}", v.name)).bold()
+                    }
+                    PilotRow::Hull(None) => ListItem::new("none"),
+                    PilotRow::Hull(Some(h)) => match h.base_tj {
                         Some(tj) => ListItem::new(format!("{:<26}{:<28}{tj:>7} TJ", h.name, h.group)),
                         None => ListItem::new(format!("{:<26}{:<28}{:>10}", h.name, h.group, "no JB")).dark_gray(),
                     },
                 })
                 .collect();
-            let title = format!(" Hull ({} ships) ", rows.len() - 1);
+            let title = " Pilot or hull ";
             let block = Block::bordered().title(title).border_style(Style::new().cyan());
             let inner = block.inner(area);
             let [search, list_area] = Layout::vertical([Constraint::Length(1), Constraint::Min(1)]).areas(inner);
@@ -186,7 +190,7 @@ fn help_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             ("m", format!("Mode: {}{}", s.mode.title(), if s.optimize { " + optimize order" } else { "" })),
             ("w", format!("Wormholes: {}", on_off(s.wormholes))),
             ("j", format!("Jump bridges: {bridges}")),
-            ("h", format!("Hull: {}", s.rules.hull.map_or("none".into(), hull_label))),
+            ("h", pilot_label(s, &app.pilots)),
             ("+/-", format!("Routes: {}", s.top)),
             ("g", "Start route".into()),
             ("c", format!("Characters ({})", app.pilots.characters().len())),

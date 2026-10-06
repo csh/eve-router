@@ -2,8 +2,10 @@
 
 use crate::ansiblex::{BridgeRules, HullClass, hull_by_type};
 use crate::esi::client::Ship;
+use crate::esi::pilots::Pilots;
 use crate::overlay::OverlayReport;
 use crate::route::Route;
+use crate::settings::{HullSource, Settings};
 use crate::sources::{evescout, nexum};
 use crate::universe::{Link, Universe, display_sec};
 use crate::wormhole::{MassStatus, SourceId, THERA, TURNUR, Wormhole, expiry_text};
@@ -115,6 +117,18 @@ impl std::fmt::Display for ShipText {
     }
 }
 
+/// The text of the Pilot button, for example `smrkn · Apocalypse` or `Hull: Sin (Black Ops)`.
+pub fn pilot_label(settings: &Settings, pilots: &Pilots) -> String {
+    match settings.hull_source {
+        HullSource::Pilot(id) => {
+            let name = pilots.characters().into_iter().find(|c| c.id == id).map_or_else(|| id.to_string(), |c| c.name);
+            let kind = settings.rules.hull.map_or("ship unknown".into(), |h| h.name.clone());
+            format!("{name} · {kind}")
+        }
+        HullSource::Manual => format!("Hull: {}", settings.rules.hull.map_or("none".into(), hull_label)),
+    }
+}
+
 pub fn jumps_label(jumps: usize) -> String {
     if jumps == 1 { "1 jump".into() } else { format!("{jumps} jumps") }
 }
@@ -189,6 +203,21 @@ pub fn wormhole_label(w: &Wormhole, from: u32, now: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn pilot_label_names_the_source() {
+        use crate::settings::HullSource;
+        use crate::test_support::{overlay_universe, settings};
+        let uni = overlay_universe();
+        let pilots = Pilots::offline(std::env::temp_dir().join("eve-router-test-pilot-label").join("active-route.json"));
+        let mut s = settings(&uni, Some("Sin"));
+        assert_eq!(pilot_label(&s, &pilots), "Hull: Sin (Black Ops)");
+        // A character that is not in the list shows its ID.
+        s.hull_source = HullSource::Pilot(7);
+        assert_eq!(pilot_label(&s, &pilots), "7 · Sin");
+        s.rules.hull = None;
+        assert_eq!(pilot_label(&s, &pilots), "7 · ship unknown");
+    }
 
     #[test]
     fn ship_text_shows_the_type_first() {

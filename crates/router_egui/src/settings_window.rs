@@ -1,22 +1,23 @@
-//! The modal windows: the settings, the hull picker, the Nexum map list and the messages.
+//! The modal windows: the settings, the Pilot picker, the Nexum map list and the messages.
 
 use crate::app::Session;
 use crate::search::SearchBox;
 use crate::theme;
 use crate::view::View;
 use egui::{Button, Color32, Frame, Id, Key, Margin, Modal, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, vec2};
-use router_core::ansiblex::{hull_rows, same_hull};
+use router_core::ansiblex::HullClass;
 use router_core::config::{self, ApiKey};
-use router_core::labels::on_off;
-use router_core::settings::parse_max_cap;
+use router_core::esi::pilots::PilotRow;
+use router_core::labels::{on_off, ship_text};
+use router_core::settings::{HullSource, parse_max_cap};
 use router_core::sources::{
     self,
     nexum::{self, MapInfo},
 };
 
 pub enum Popup {
-    /// The hull picker. The rows are `hull_rows(filter)`.
-    Hull {
+    /// The Pilot picker. The rows are `Pilots::pilot_rows(filter)`.
+    Pilot {
         filter: String,
     },
     Maps(Vec<MapInfo>),
@@ -91,8 +92,8 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
 
     let close = match &mut view.popup {
         None => false,
-        Some(Popup::Hull { filter }) => {
-            let response = Modal::new(Id::new("hull")).frame(modal_frame()).show(ui.ctx(), |ui| hull_picker(ui, filter, s));
+        Some(Popup::Pilot { filter }) => {
+            let response = Modal::new(Id::new("pilot")).frame(modal_frame()).show(ui.ctx(), |ui| pilot_picker(ui, filter, s));
             response.inner || response.should_close()
         }
         Some(Popup::Maps(maps)) => {
@@ -396,12 +397,18 @@ fn paste_list(ui: &mut Ui, text: &mut String, problems: &mut Vec<String>, s: &mu
     close
 }
 
-/// The hull list with a filter. Return true when a hull is picked.
-fn hull_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
+/// A pick in the Pilot picker.
+enum Picked {
+    Pilot(u64),
+    Hull(Option<HullClass>),
+}
+
+/// The characters and the hulls, with one filter. Return true when a row is picked.
+fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
     ui.set_width(560.0);
-    let rows = hull_rows(filter);
-    title(ui, &format!("Hull ({} ships)", rows.len() - 1));
-    let response = ui.add(TextEdit::singleline(filter).hint_text("Filter by ship or group…").desired_width(f32::INFINITY));
+    let rows = s.pilots.pilot_rows(filter);
+    title(ui, "Pilot or hull");
+    let response = ui.add(TextEdit::singleline(filter).hint_text("Filter by character, ship or group…").desired_width(f32::INFINITY));
     if !response.has_focus() && filter.is_empty() {
         response.request_focus();
     }
@@ -409,14 +416,16 @@ fn hull_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
     let enter = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
     let mut picked = None;
     if enter {
-        picked = Some(rows.get(usize::from(!filter.is_empty() && rows.len() > 1)).copied().flatten());
+        picked = rows.iter().find(|r| !matches!(r, PilotRow::Hull(None))).map(|r| match r {
+            PilotRow::Pilot(v) => Picked::Pilot(v.id),
+            PilotRow::Hull(h) => Picked::Hull(*h),
+        });
     }
     ui.add_space(6.0);
     ScrollArea::vertical().max_height(420.0).auto_shrink([false, true]).show(ui, |ui| {
         for row in &rows {
             let (rect, click) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
-            let current = same_hull(*row, s.settings.rules.hull);
-            if current {
+            if row.is_current(&s.settings) {
                 ui.painter().rect_filled(rect, 0.0, theme::ROW_FILL);
                 theme::selection_bar(ui, rect);
             } else if click.hovered() {
@@ -426,8 +435,13 @@ fn hull_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
             let p = ui.painter();
             let left = rect.left_center() + vec2(10.0, 0.0);
             match row {
-                None => _ = p.text(left, egui::Align2::LEFT_CENTER, "none", font, theme::TEXT),
-                Some(h) => {
+                PilotRow::Pilot(v) => {
+                    p.text(left, egui::Align2::LEFT_CENTER, &v.name, font.clone(), Color32::WHITE);
+                    let ship = v.live.ship.as_ref().map_or("ship unknown".into(), |sh| ship_text(sh, &v.name).to_string());
+                    p.text(left + vec2(200.0, 0.0), egui::Align2::LEFT_CENTER, ship, font, theme::TEXT_DIM);
+                }
+                PilotRow::Hull(None) => _ = p.text(left, egui::Align2::LEFT_CENTER, "none", font, theme::TEXT),
+                PilotRow::Hull(Some(h)) => {
                     let color = if h.base_tj.is_some() { theme::TEXT } else { theme::TEXT_DIM };
                     p.text(left, egui::Align2::LEFT_CENTER, &h.name, font.clone(), color);
                     p.text(left + vec2(200.0, 0.0), egui::Align2::LEFT_CENTER, &h.group, font.clone(), theme::TEXT_DIM);
@@ -436,17 +450,25 @@ fn hull_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
                 }
             }
             if click.clicked() {
-                picked = Some(*row);
+                picked = Some(match row {
+                    PilotRow::Pilot(v) => Picked::Pilot(v.id),
+                    PilotRow::Hull(h) => Picked::Hull(*h),
+                });
             }
         }
     });
     match picked {
-        Some(hull) => {
-            s.settings.rules.hull = hull;
-            s.recompute();
-            s.save_quietly();
-            true
+        Some(Picked::Pilot(id)) => {
+            s.settings.hull_source = HullSource::Pilot(id);
+            s.pilots.sync_hull(&mut s.settings);
         }
-        None => false,
+        Some(Picked::Hull(hull)) => {
+            s.settings.hull_source = HullSource::Manual;
+            s.settings.rules.hull = hull;
+        }
+        None => return false,
     }
+    s.recompute();
+    s.save_quietly();
+    true
 }

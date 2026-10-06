@@ -4,13 +4,12 @@ use super::pilots::{LOCKED, route_setting};
 use petgraph::graph::NodeIndex;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
-use router_core::ansiblex::{HullClass, hull_rows, same_hull};
 use router_core::config::{self, ApiKey, Config};
 use router_core::esi::active::{ActiveRoute, active_path};
-use router_core::esi::pilots::{Pilots, StartPlan};
+use router_core::esi::pilots::{PilotRow, Pilots, StartPlan};
 use router_core::labels::Shortcuts;
 use router_core::route::{Mode, Route};
-use router_core::settings::{Settings, parse_max_cap, resolve_all, split_systems};
+use router_core::settings::{HullSource, Settings, parse_max_cap, resolve_all, split_systems};
 use router_core::sources::{
     self,
     nexum::{self, MapInfo},
@@ -54,8 +53,8 @@ pub enum SettingsRow {
 pub enum Popup {
     /// Row i is `Mode::ALL[i]`. The last row is "optimize order".
     Mode(ListState),
-    /// The rows are `hull_rows(filter)`.
-    Hull {
+    /// The Pilot picker. The rows are `Pilots::pilot_rows(filter)`.
+    Pilot {
         filter: String,
         state: ListState,
     },
@@ -343,11 +342,9 @@ impl<'a> App<'a> {
                 self.recompute();
             }
             KeyCode::Char('h') => {
-                let current = self.settings.rules.hull;
-                let same = |row: &Option<HullClass>| same_hull(*row, current);
-                let row = hull_rows("").iter().position(same).unwrap_or(0);
+                let row = self.pilots.pilot_rows("").iter().position(|r| r.is_current(&self.settings)).unwrap_or(0);
                 let state = ListState::default().with_selected(Some(row));
-                self.popup = Some(Popup::Hull { filter: String::new(), state });
+                self.popup = Some(Popup::Pilot { filter: String::new(), state });
             }
             KeyCode::Char('s') => self.settings_page = Some(ListState::default().with_selected(Some(0))),
             KeyCode::Char('g') => self.start_route(),
@@ -508,16 +505,15 @@ impl<'a> App<'a> {
                 }
                 _ => Some(Popup::Mode(state)),
             },
-            Popup::Hull { mut filter, mut state } => {
-                let rows = hull_rows(&filter);
+            Popup::Pilot { mut filter, mut state } => {
+                let rows = self.pilots.pilot_rows(&filter);
                 match key.code {
                     KeyCode::Esc => return None,
                     KeyCode::Up => state.select_previous(),
                     KeyCode::Down if state.selected().is_some_and(|i| i + 1 < rows.len()) => state.select_next(),
                     KeyCode::Enter => {
-                        if let Some(&hull) = state.selected().and_then(|i| rows.get(i)) {
-                            self.settings.rules.hull = hull;
-                            self.recompute();
+                        if let Some(row) = state.selected().and_then(|i| rows.get(i)) {
+                            self.pick_pilot(row);
                         }
                         return None;
                     }
@@ -528,12 +524,13 @@ impl<'a> App<'a> {
                             filter.pop();
                         }
                         // Select the first match, not the "none" row.
-                        let first_match = !filter.is_empty() && hull_rows(&filter).len() > 1;
-                        state.select(Some(usize::from(first_match)));
+                        let rows = self.pilots.pilot_rows(&filter);
+                        let first = if filter.is_empty() { None } else { rows.iter().position(|r| !matches!(r, PilotRow::Hull(None))) };
+                        state.select(Some(first.unwrap_or(0)));
                     }
                     _ => {}
                 }
-                Some(Popup::Hull { filter, state })
+                Some(Popup::Pilot { filter, state })
             }
             Popup::Maps { maps, mut state } => match key.code {
                 KeyCode::Esc => None,
@@ -692,6 +689,22 @@ impl<'a> App<'a> {
             Ok(()) => "Config saved!".into(),
             Err(e) => e,
         };
+    }
+
+    /// Apply a row of the Pilot picker: follow a character, or set a manual hull.
+    fn pick_pilot(&mut self, row: &PilotRow) {
+        match row {
+            PilotRow::Pilot(v) => {
+                self.settings.hull_source = HullSource::Pilot(v.id);
+                self.pilots.sync_hull(&mut self.settings);
+            }
+            PilotRow::Hull(hull) => {
+                self.settings.hull_source = HullSource::Manual;
+                self.settings.rules.hull = *hull;
+            }
+        }
+        self.recompute();
+        self.save_quietly();
     }
 
     /// Save the config. Show only an error on the status line.
