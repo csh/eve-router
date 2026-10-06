@@ -10,7 +10,7 @@ use egui::{
 use egui_extras::{Column, TableBuilder};
 use router_core::esi::active::{ActiveRoute, Hop};
 use router_core::esi::client::{IMAGES_URL, portrait};
-use router_core::esi::pilots::{HullSync, PilotView, Pilots, StartPlan};
+use router_core::esi::pilots::{HullSync, PilotView, Pilots, StartPlan, pilots_by_step};
 use router_core::labels::{hull_label, ship_text, wormhole_hint};
 use router_core::route::Stop;
 use router_core::settings::HullSource;
@@ -123,11 +123,6 @@ pub fn avatar_row(ui: &mut Ui, portraits: &mut Portraits, here: &[PilotView]) {
             }
         });
     }
-}
-
-/// The pilots in a system, in the order of the character list: the active pilot first.
-pub fn pilots_in(characters: &[PilotView], system: u32) -> Vec<PilotView> {
-    characters.iter().filter(|p| p.live.system == Some(system)).cloned().collect()
 }
 
 /// The step of a route start.
@@ -643,6 +638,8 @@ impl PilotsUi {
 
     fn active_table(&mut self, ui: &mut Ui, s: &mut Session, active: &ActiveRoute) {
         let characters = s.pilots.characters();
+        let systems: Vec<u32> = active.steps.iter().map(|st| st.system).collect();
+        let by_step = pilots_by_step(&systems, &characters, Some(active));
         let scroll = std::mem::take(&mut self.scroll);
         panel(ui, &format!("Route #{}", active.number), "", true, |ui| {
             let header = |ui: &mut Ui, text: &str| _ = ui.label(theme::header_text(text));
@@ -713,7 +710,7 @@ impl PilotsUi {
                                 ui.label(sec.color(dim(theme::sec_color(sys.security))));
                             }
                         });
-                        row.col(|ui| avatar_row(ui, &mut self.portraits, &pilots_in(&characters, step.system)));
+                        row.col(|ui| avatar_row(ui, &mut self.portraits, &by_step[i]));
                         row.col(|ui| {
                             let region = sys.map(|sys| sys.region.as_str()).unwrap_or_default();
                             ui.add(Label::new(RichText::new(region).color(theme::TEXT_DIM)).truncate());

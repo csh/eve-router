@@ -8,7 +8,7 @@ use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Clear, Gauge, List, ListItem, Paragraph, Row, Table, Wrap};
 use router_core::esi::active::Hop;
-use router_core::esi::pilots::PilotView;
+use router_core::esi::pilots::{PilotView, pilots_by_step};
 use router_core::labels::{hull_label, ship_text, wormhole_hint};
 use router_core::universe::display_sec;
 
@@ -99,8 +99,10 @@ pub fn draw_active(frame: &mut Frame, app: &mut App, area: Rect) {
 
     // The pilots of each system on the route.
     let pilots = app.pilots.characters();
-    let pilots_at = |system: u32| -> String {
-        let here: Vec<&PilotView> = pilots.iter().filter(|p| p.live.system == Some(system)).collect();
+    let systems: Vec<u32> = active.steps.iter().map(|s| s.system).collect();
+    let by_step = pilots_by_step(&systems, &pilots, Some(&active));
+    let pilots_at = |step: usize| -> String {
+        let here = &by_step[step];
         let mut text: Vec<String> = here.iter().take(MAX_PILOTS).map(|p| initials(&p.name)).collect();
         if here.len() > MAX_PILOTS {
             text.push(format!("+{}", here.len() - MAX_PILOTS));
@@ -137,7 +139,7 @@ pub fn draw_active(frame: &mut Frame, app: &mut App, area: Rect) {
             Cell::from(stop.map(|s| s.label()).unwrap_or_default()).cyan(),
             Cell::from(name),
             sec.map_or_else(|| Cell::from(""), |s| Cell::from(format!("{:.1}", display_sec(s))).fg(sec_color(s))),
-            Cell::from(pilots_at(step.system)).cyan(),
+            Cell::from(pilots_at(i)).cyan(),
             Cell::from(region),
             Cell::from(via).style(via_style),
         ]);

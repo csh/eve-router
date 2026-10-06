@@ -2,13 +2,14 @@
 //! planner), the route list, the route table, the sidebar and the status line.
 
 use crate::app::Session;
-use crate::pilots_view::{PilotsUi, avatar_row, pilots_in};
+use crate::pilots_view::{PilotsUi, avatar_row};
 use crate::search::{Pick, SearchBox};
 use crate::settings_window::{self, Popup, SettingsForm};
 use crate::theme::{self, panel};
 use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
 use petgraph::graph::NodeIndex;
+use router_core::esi::pilots::pilots_by_step;
 use router_core::labels::{jumps_label, link_label, on_off, pilot_label, route_extras, route_text};
 use router_core::route::{Mode, Stop};
 use router_core::sources::FetchError;
@@ -447,6 +448,8 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                 }
             })
             .body(|body| {
+                let systems: Vec<u32> = route.path.nodes.iter().map(|&n| uni.system(n).id).collect();
+                let by_step = pilots_by_step(&systems, &characters, None);
                 body.rows(22.0, route.path.nodes.len(), |mut row| {
                     let step = row.index();
                     let sys = uni.system(route.path.nodes[step]);
@@ -475,7 +478,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                     });
                     row.col(|ui| _ = ui.add(Label::new(name).truncate()));
                     if show_pilots {
-                        row.col(|ui| avatar_row(ui, &mut pilots.portraits, &pilots_in(&characters, sys.id)));
+                        row.col(|ui| avatar_row(ui, &mut pilots.portraits, &by_step[step]));
                     }
                     row.col(|ui| {
                         _ = ui.label(RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)))

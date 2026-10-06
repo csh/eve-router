@@ -88,6 +88,22 @@ impl PilotRow {
     }
 }
 
+/// The pilots at each step of a route, for the Pilots column. A route can visit a system more
+/// than one time, but a pilot shows at one step only: the progress step for the pilot of
+/// `active`, else the first visit of the system of the pilot.
+pub fn pilots_by_step(systems: &[u32], pilots: &[PilotView], active: Option<&ActiveRoute>) -> Vec<Vec<PilotView>> {
+    let mut rows = vec![Vec::new(); systems.len()];
+    for pilot in pilots {
+        let Some(system) = pilot.live.system else { continue };
+        let progress = active.filter(|a| a.character == pilot.id).map(|a| a.progress);
+        let step = progress.filter(|&i| systems.get(i) == Some(&system)).or_else(|| systems.iter().position(|&s| s == system));
+        if let Some(step) = step {
+            rows[step].push(pilot.clone());
+        }
+    }
+    rows
+}
+
 /// What `Pilots::sync_hull` changed.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum HullSync {
@@ -936,6 +952,28 @@ mod tests {
         p.live.get_mut(&1).unwrap().expired = true;
         p.live.get_mut(&1).unwrap().online = Some(true);
         assert!(p.senders().is_empty());
+    }
+
+    #[test]
+    fn a_pilot_shows_at_one_step_only() {
+        let pilot = |id: u64, system: u32| PilotView {
+            id,
+            name: format!("P{id}"),
+            live: PilotState { system: Some(system), ..PilotState::default() },
+            needs_reauth: false,
+            active: false,
+        };
+        // A round trip: system 1 is the start and the destination.
+        let systems = [1, 2, 3, 1];
+        let pilots = [pilot(7, 1), pilot(8, 3), pilot(9, 99)];
+        let ids = |rows: &[Vec<PilotView>]| rows.iter().map(|r| r.iter().map(|p| p.id).collect()).collect::<Vec<Vec<u64>>>();
+        // In the planner, a pilot shows at the first visit of its system.
+        assert_eq!(ids(&pilots_by_step(&systems, &pilots, None)), [vec![7], vec![], vec![8], vec![]]);
+        // The active pilot shows at the progress step. The other pilots stay at the first visit.
+        let mut active = route(&systems, None);
+        active.character = 7;
+        active.progress = 3;
+        assert_eq!(ids(&pilots_by_step(&systems, &pilots, Some(&active))), [vec![], vec![], vec![8], vec![7]]);
     }
 
     #[test]
