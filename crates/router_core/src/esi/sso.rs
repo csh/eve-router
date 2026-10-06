@@ -399,8 +399,7 @@ mod tests {
     use super::*;
     use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde_json::json;
-    use std::io::{Read, Write};
-    use std::net::{TcpListener, TcpStream};
+    use std::net::TcpListener;
 
     const CLIENT: &str = "client-123";
     const NOW: u64 = 1_800_000_000;
@@ -549,14 +548,11 @@ mod tests {
         assert!(matches!(claims_of("a.!!!.c".into(), NOW), Err(LoginError::BadToken(_))));
     }
 
-    /// Send one request to the listener and return the response text.
-    fn get(port: u16, target: &str) -> String {
-        let mut stream = TcpStream::connect((Ipv4Addr::LOCALHOST, port)).unwrap();
-        // `tiny_http` keeps a connection open unless the request says "close".
-        write!(stream, "GET {target} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n").unwrap();
-        let mut response = String::new();
-        stream.read_to_string(&mut response).unwrap();
-        response
+    /// Send one GET request to the listener. Return the status code and the body.
+    fn get(port: u16, target: &str) -> (u16, String) {
+        let agent: ureq::Agent = ureq::Agent::config_builder().http_status_as_error(false).build().into();
+        let mut response = agent.get(&format!("http://127.0.0.1:{port}{target}")).call().unwrap();
+        (response.status().as_u16(), response.body_mut().read_to_string().unwrap())
     }
 
     fn wait(listener: &Listener) -> Result<AuthorizationCode, LoginError> {
@@ -573,13 +569,13 @@ mod tests {
     fn listener_gets_the_code() {
         let listener = Listener::bind(0, "s1".into()).unwrap();
         let port = listener.port();
-        assert!(get(port, "/favicon.ico").starts_with("HTTP/1.1 404"));
+        assert_eq!(get(port, "/favicon.ico").0, 404);
         // A wrong state does not stop the listener.
-        assert!(get(port, "/callback?code=bad&state=s2").starts_with("HTTP/1.1 400"));
+        assert_eq!(get(port, "/callback?code=bad&state=s2").0, 400);
         assert!(listener.try_recv().is_none());
-        let response = get(port, "/callback?code=good&state=s1");
-        assert!(response.starts_with("HTTP/1.1 200"), "{response}");
-        assert!(response.contains("Login received"));
+        let (status, body) = get(port, "/callback?code=good&state=s1");
+        assert_eq!(status, 200);
+        assert!(body.contains("Login received"), "{body}");
         assert_eq!(text(wait(&listener)), Ok("good".into()));
     }
 
@@ -599,7 +595,7 @@ mod tests {
     #[test]
     fn listener_reports_a_denied_login() {
         let listener = Listener::bind(0, "s1".into()).unwrap();
-        assert!(get(listener.port(), "/callback?error=access_denied&state=s1").starts_with("HTTP/1.1 400"));
+        assert_eq!(get(listener.port(), "/callback?error=access_denied&state=s1").0, 400);
         assert_eq!(text(wait(&listener)), Err(LoginError::Denied("access_denied".into())));
     }
 
