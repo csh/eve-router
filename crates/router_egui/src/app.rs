@@ -14,7 +14,7 @@ use router_core::startup;
 use router_core::universe::Universe;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
 enum State {
@@ -34,6 +34,9 @@ pub struct RouterApp {
 /// only after input or a repaint request, so the window draws no frames while it is idle.
 const MIN_FRAME_TIME: Duration = Duration::from_millis(16);
 
+/// The error when the load thread stops without a result. A panic in the load does this.
+const LOAD_STOPPED: &str = "The startup load stopped with an internal error. Start the router from a terminal to see the cause.";
+
 impl RouterApp {
     /// Set the theme and start the load. `ctx` gets a repaint request when the load ends.
     pub fn new(ctx: egui::Context) -> Self {
@@ -50,7 +53,11 @@ impl RouterApp {
     /// Take the load result, if the thread sent it.
     fn poll(&mut self, ctx: &egui::Context) {
         let State::Loading(rx) = &self.state else { return };
-        let Ok(result) = rx.try_recv() else { return };
+        let result = match rx.try_recv() {
+            Ok(result) => result,
+            Err(TryRecvError::Empty) => return,
+            Err(TryRecvError::Disconnected) => Err(LOAD_STOPPED.into()),
+        };
         self.state = match result {
             Ok(session) => {
                 // For example "EVE Router - SDE 3579973".
@@ -380,6 +387,16 @@ mod tests {
         let problems = s.replace_list("Nowhere");
         assert_eq!(problems.len(), 1);
         assert!(s.waypoints.is_empty() && s.routes.is_empty());
+    }
+
+    #[test]
+    fn a_lost_load_thread_shows_an_error() {
+        let (tx, rx) = mpsc::channel::<Result<Session, String>>();
+        drop(tx);
+        let mut app = RouterApp { state: State::Loading(rx), last_frame: None };
+        app.poll(&egui::Context::default());
+        let State::Failed(text) = &app.state else { panic!("the state is not Failed") };
+        assert_eq!(text, LOAD_STOPPED);
     }
 
     #[test]
