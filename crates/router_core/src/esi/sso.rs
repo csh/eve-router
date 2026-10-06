@@ -480,7 +480,13 @@ mod tests {
         let tokens = sso_at(&url).exchange(AuthorizationCode::new("c0de".into()), PkceCodeVerifier::new("v".repeat(43))).unwrap();
         assert_eq!(tokens.character.id, 2112625428);
         assert_eq!(tokens.refresh.secret(), "r1");
-        assert!(rx.recv().unwrap().starts_with("POST / HTTP/1.1"));
+        let request = rx.recv().unwrap();
+        assert!(request.starts_with("POST / HTTP/1.1"), "{request}");
+        // A native app sends the client ID and the PKCE verifier in the form body.
+        let body = request.split("\r\n\r\n").nth(1).unwrap();
+        for part in ["grant_type=authorization_code", "code=c0de", &format!("code_verifier={}", "v".repeat(43)), "client_id=client-123"] {
+            assert!(body.split('&').any(|p| p == part), "{part} not in {body}");
+        }
     }
 
     #[test]
