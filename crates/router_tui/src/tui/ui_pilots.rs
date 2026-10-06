@@ -9,7 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Clear, Gauge, List, ListItem, Paragraph, Row, Table, Wrap};
 use router_core::esi::active::Hop;
 use router_core::esi::pilots::PilotView;
-use router_core::labels::{hull_label, ship_text};
+use router_core::labels::{hull_label, ship_text, wormhole_hint};
 use router_core::universe::display_sec;
 
 /// At most this many pilots show in a row of the step table. More give "+n".
@@ -62,6 +62,9 @@ fn banner(app: &App) -> Option<(String, Color)> {
     if active.is_off_route() {
         let here = live.and_then(|l| l.system).map_or_else(|| "?".into(), |s| app.system_name(s));
         return Some((format!("Off route — {name} is in {here}. r Re-route from here · x Stop route"), Color::Yellow));
+    }
+    if let Some(hint) = wormhole_hint(app.uni, active) {
+        return Some((hint, Color::Magenta));
     }
     if app.pilots.limited {
         return Some(("ESI limited — slowing updates".into(), Color::DarkGray));

@@ -354,7 +354,7 @@ mod tests {
         let steps = systems
             .iter()
             .enumerate()
-            .map(|(i, &system)| Step { system, hop: if i == 0 { Hop::Start } else { Hop::Gate }, via: String::new() })
+            .map(|(i, &system)| Step { system, hop: if i == 0 { Hop::Start } else { Hop::Gate }, via: String::new(), sig: None })
             .collect();
         ActiveRoute::from_steps(steps, vec![0, systems.len() - 1], 1, 7, "Alice")
     }

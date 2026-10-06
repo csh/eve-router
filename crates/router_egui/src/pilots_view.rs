@@ -11,7 +11,7 @@ use egui_extras::{Column, TableBuilder};
 use router_core::esi::active::{ActiveRoute, Hop};
 use router_core::esi::client::{IMAGES_URL, portrait};
 use router_core::esi::pilots::{HullSync, PilotView, Pilots, StartPlan};
-use router_core::labels::{hull_label, ship_text};
+use router_core::labels::{hull_label, ship_text, wormhole_hint};
 use router_core::route::Stop;
 use router_core::settings::HullSource;
 use router_core::universe::display_sec;
@@ -634,6 +634,8 @@ impl PilotsUi {
                     self.stop = true;
                 }
             });
+        } else if let Some(hint) = wormhole_hint(&s.uni, active) {
+            bar(ui, theme::WORMHOLE, &mut |ui| _ = ui.label(RichText::new(&hint).color(theme::WORMHOLE)));
         } else if s.pilots.limited {
             ui.label(RichText::new("ESI limited — slowing updates").color(theme::TEXT_DIM).small());
         }

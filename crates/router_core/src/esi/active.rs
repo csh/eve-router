@@ -56,6 +56,9 @@ pub struct Step {
     pub hop: Hop,
     /// The link label at the start of the route, for example "Ansiblex · Zone 1 → 2 · 36 TJ".
     pub via: String,
+    /// For a wormhole: the signature letters in the system that the jump leaves, if known.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub sig: Option<String>,
 }
 
 /// What a location means for the route.
@@ -110,14 +113,14 @@ impl ActiveRoute {
             .map(|(i, &node)| {
                 let system = uni.system(node).id;
                 let Some(&edge) = i.checked_sub(1).and_then(|e| route.path.edges.get(e)) else {
-                    return Step { system, hop: Hop::Start, via: String::new() };
+                    return Step { system, hop: Hop::Start, via: String::new(), sig: None };
                 };
-                let hop = match &uni.graph[edge] {
-                    Link::Stargate => Hop::Gate,
-                    Link::Wormhole(_) => Hop::Wormhole,
-                    Link::JumpBridge => Hop::Bridge,
+                let (hop, sig) = match &uni.graph[edge] {
+                    Link::Stargate => (Hop::Gate, None),
+                    Link::Wormhole(w) => (Hop::Wormhole, w.sig_at(uni.system(route.path.nodes[i - 1]).id)),
+                    Link::JumpBridge => (Hop::Bridge, None),
                 };
-                Step { system, hop, via: link_label(uni, rules, edge, now) }
+                Step { system, hop, via: link_label(uni, rules, edge, now), sig }
             })
             .collect();
         Self::from_steps(steps, route.stops.clone(), number, character, character_name)
@@ -185,6 +188,11 @@ impl ActiveRoute {
         }
         let last = end - 1;
         range.filter(|&i| i == last || self.stops.contains(&i)).map(|i| self.steps[i].system).collect()
+    }
+
+    /// The step of the next wormhole after the progress: the end of the segment in the game.
+    pub fn next_wormhole(&self) -> Option<usize> {
+        (self.progress + 1..self.steps.len()).find(|&i| self.steps[i].hop == Hop::Wormhole)
     }
 
     /// The waypoints to send at the start.
@@ -272,7 +280,7 @@ mod tests {
                     Some((_, hop)) => *hop,
                     None => Hop::Gate,
                 };
-                Step { system, hop, via: String::new() }
+                Step { system, hop, via: String::new(), sig: None }
             })
             .collect();
         ActiveRoute::from_steps(steps, vec![0, systems.len() - 1], 1, 7, "Alice")
@@ -299,6 +307,18 @@ mod tests {
         assert_eq!(r.segment_waypoints(1), [6]);
         assert_eq!(r.waypoint_count(), 4);
         assert_eq!(r.manual_hops(), 1);
+    }
+
+    #[test]
+    fn next_wormhole_is_the_end_of_the_segment() {
+        // Step 2 is a bridge, step 3 is a wormhole.
+        let mut r = route(&[1, 2, 3, 4, 5], &[(3, Hop::Bridge), (4, Hop::Wormhole)]);
+        assert_eq!(r.next_wormhole(), Some(3));
+        r.observe(&at(3));
+        assert_eq!(r.next_wormhole(), Some(3));
+        // The pilot takes the wormhole: no wormhole is ahead.
+        r.observe(&at(4));
+        assert_eq!(r.next_wormhole(), None);
     }
 
     #[test]

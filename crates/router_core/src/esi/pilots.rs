@@ -660,6 +660,7 @@ mod tests {
                     Hop::Gate
                 },
                 via: String::new(),
+                sig: None,
             })
             .collect();
         ActiveRoute::from_steps(steps, vec![0, systems.len() - 1], 1, 1, "Alice")
