@@ -1,0 +1,30 @@
+ Route #1 → UALX-3 · Alice Ander · 3/30 jumps                                                   ┌ Shortcuts ───────────┐
+██████████                                                                                      │Wormholes:          0 │
+┌ Route #1 ────────────────────────────────────────────────────────────────────────────────────┐│Jump bridges:       3 │
+│   #     Stop         System              Sec    Pilots       Region              Via         │└──────────────────────┘
+│✓  0     Start        Jita                0.9                 The Forge                       │┌ Shortest route ──────┐
+│✓  1                  Ikuchi              0.9                 The Forge           gate        ││from Jita             │
+│✓  2                  Tunttaras           0.9                 Lonetrek            gate        ││                      │
+│▶  3                  Nourvukaiken        0.8                 Lonetrek            gate        ││Jita                0 │
+│   4                  Tama                0.3                 The Citadel         gate        ││                      │
+│   5                  Kedama              0.3                 Black Rise          gate        ││                      │
+│   6                  Hirri               0.3                 Black Rise          gate        ││                      │
+│   7                  Pynekastoh          0.2                 Black Rise          gate        ││                      │
+│   8                  Hikkoken            0.3                 Black Rise          gate        ││                      │
+│   9                  Nennamaila          0.3                 Black Rise          gate        ││                      │
+│   10                 Aldranette          0.4                 Placid              gate        ││                      │
+│   11                 Vlillirier          0.3                 Placid              gate        ││                      │
+│   12                 Alsavoinon          0.3                 Placid              gate        ││                      │
+│   13                 Zarzakh             -1.0                Yasna Zakh          gate        ││                      │
+│   14                 G-0Q86              -0.0                Curse               gate        ││                      │
+│   15                 KLMT-W              -0.0                Curse               gate        ││                      │
+│   16                 HLW-HP              -0.0                Curse               gate        ││                      │
+│   17                 VOL-MI              -0.0                Curse               gate        ││                      │
+│   18                 K-B2D3              -0.1                Curse               gate        ││                      │
+│   19                 D87E-A              -0.1                Curse               gate        ││                      │
+│   20                 0SHT-A              -0.2                Curse               gate        ││                      │
+│   21                 U-QVWD              -0.1                Catch               gate        ││                      │
+└──────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────┘
+
+ x  Stop route    ↑↓  Scroll    n/p  Next/prev stop    c  Characters    s  Settings    q  Quit
+

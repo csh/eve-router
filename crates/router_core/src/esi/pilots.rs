@@ -9,7 +9,7 @@ use super::active::{ActiveRoute, Observation, active_path};
 use super::client::{Esi, Location, Ship};
 use super::sso::{Login, LoginError, Sso, Tokens};
 use super::store::Accounts;
-use super::tracker::{Api, Command, Event, Intervals, Live, Tracker};
+use super::tracker::{Command, Event, Intervals, Live, Tracker};
 use super::{Character, client_id};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -107,6 +107,12 @@ impl Pilots {
         pilots.keyring_error = keyring_error;
         pilots.resume = ActiveRoute::load(&pilots.active_path);
         pilots
+    }
+
+    /// No token store, no client ID and no tracker. The UI shows the planner only. The tests of
+    /// the front ends use it, and the TUI uses it until `open` is done.
+    pub fn offline(active_path: PathBuf) -> Pilots {
+        Self::with_parts(None, None, None, active_path, Arc::new(|| {}))
     }
 
     fn with_parts(
@@ -463,7 +469,7 @@ impl Pilots {
 /// `Pilots` with a test `Api` and short poll intervals, for the tests of the front ends.
 #[cfg(any(test, feature = "test-support"))]
 impl Pilots {
-    pub fn for_tests(accounts: Accounts, api: impl Api, active_path: PathBuf) -> Pilots {
+    pub fn for_tests(accounts: Accounts, api: impl super::tracker::Api, active_path: PathBuf) -> Pilots {
         // Short intervals, so a test sees a change in milliseconds.
         let ms = std::time::Duration::from_millis;
         let intervals = Intervals { active_location: ms(20), location: ms(50), ship: ms(1000), online: ms(1000) };
