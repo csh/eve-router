@@ -126,6 +126,12 @@ struct HttpSource {
     url: String,
 }
 
+/// The HTTP `Range` value for `len` bytes from `start`. `None` for zero bytes, which has no valid range.
+fn range_header(start: u64, len: u64) -> Option<String> {
+    let last = start + len.checked_sub(1)?;
+    Some(format!("bytes={start}-{last}"))
+}
+
 impl RangeSource for HttpSource {
     fn len(&self) -> Result<u64, String> {
         let resp = self.agent.head(&self.url).call().map_err(|e| format!("{}: {e}", self.url))?;
@@ -136,7 +142,7 @@ impl RangeSource for HttpSource {
     }
 
     fn read(&self, start: u64, len: u64) -> Result<Vec<u8>, String> {
-        let range = format!("bytes={start}-{}", start + len - 1);
+        let Some(range) = range_header(start, len) else { return Ok(Vec::new()) };
         let mut resp = self.agent.get(&self.url).header("Range", &range).call().map_err(|e| format!("{}: {e}", self.url))?;
         // 206 Partial Content. A 200 is the full 99 MB zip, so stop.
         if resp.status().as_u16() != 206 {
@@ -351,6 +357,14 @@ mod tests {
         let Outcome::Updated { from, to, .. } = install(&FIXTURE.to_vec(), &dir, 123).unwrap() else { panic!("not Updated") };
         assert_eq!((from, to), (Some(100), 123));
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn range_header_values() {
+        assert_eq!(range_header(10, 5).as_deref(), Some("bytes=10-14"));
+        assert_eq!(range_header(10, 1).as_deref(), Some("bytes=10-10"));
+        // No bytes: "bytes=10-9" is not a valid range.
+        assert_eq!(range_header(10, 0), None);
     }
 
     #[test]
