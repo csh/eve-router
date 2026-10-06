@@ -281,6 +281,13 @@ impl Session {
         self.recompute();
     }
 
+    /// Replace the waypoints with a pasted list. Return the problems, as `add_list` does.
+    /// `clear` recomputes, so no old route stays when no name resolves.
+    pub fn replace_list(&mut self, text: &str) -> Vec<String> {
+        self.clear();
+        self.add_list(text)
+    }
+
     /// Add a favourite. Return false if it is already a favourite.
     pub fn add_favourite(&mut self, node: NodeIndex) -> bool {
         if self.settings.favourites.contains(&node) {
@@ -365,6 +372,16 @@ mod tests {
     }
 
     /// The same routes as the `--print` snapshot of the TUI crate.
+    #[test]
+    fn replace_with_no_good_name_clears_the_routes() {
+        let mut s = session("replace");
+        s.add_list("Jita, Amarr");
+        assert!(!s.routes.is_empty(), "{}", s.status);
+        let problems = s.replace_list("Nowhere");
+        assert_eq!(problems.len(), 1);
+        assert!(s.waypoints.is_empty() && s.routes.is_empty());
+    }
+
     #[test]
     fn waypoints_give_the_print_routes() {
         let mut s = session("routes");

@@ -378,10 +378,7 @@ fn paste_list(ui: &mut Ui, text: &mut String, problems: &mut Vec<String>, s: &mu
         }
     });
     if let Some(replace) = action {
-        if replace {
-            s.waypoints.clear();
-        }
-        *problems = s.add_list(text);
+        *problems = if replace { s.replace_list(text) } else { s.add_list(text) };
         // The window stays open while a name has a problem. The added names leave the text,
         // so a second try adds only the fixed names.
         if problems.is_empty() {
