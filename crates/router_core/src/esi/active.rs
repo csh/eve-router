@@ -214,9 +214,10 @@ impl ActiveRoute {
         // back, and is not off the path.
         let ahead = (self.progress..self.steps.len()).find(|&i| self.steps[i].system == system);
         let behind = self.steps[..self.progress].iter().any(|s| s.system == system);
-        // A route can visit a system two times, for example a round trip. A system behind the
-        // progress and also far ahead is the visit behind: the pilot went back.
-        let ahead = ahead.filter(|&i| !behind || i <= self.progress + MAX_SKIP);
+        // A match ahead counts only when it is near, and when the skip does not cross a wormhole
+        // after the next step. A gate jump can reach a system that the route visits much later,
+        // for example on a round trip. Such a match is off the route, so no segment goes out.
+        let ahead = ahead.filter(|&i| i <= self.progress + MAX_SKIP && !(self.progress + 2..=i).any(|k| self.steps[k].hop.is_manual()));
         let Some(step) = ahead else {
             if behind {
                 self.off_polls = 0;
@@ -352,6 +353,39 @@ mod tests {
         assert_eq!(r.observe(&at(4)), Observation::Progress(3));
         assert_eq!(r.observe(&at(5)), Observation::Progress(4));
         assert_eq!(r.observe(&at(1)), Observation::Arrived);
+    }
+
+    #[test]
+    fn a_far_match_ahead_is_off_route() {
+        // The shape of a round trip from UALX-3 (1): Y-ORBJ (2) and DT-PXH (9) both have a gate
+        // to UALX-3, but DT-PXH comes late in the route, after two wormholes.
+        let mut r = route(&[1, 2, 3, 4, 5, 6, 7, 8, 9, 1], &[(4, Hop::Wormhole), (7, Hop::Wormhole)]);
+        assert_eq!(r.observe(&at(2)), Observation::Progress(1));
+        assert_eq!(r.observe(&at(1)), Observation::Same);
+        // A gate jump to DT-PXH: the progress stays, and no segment goes out.
+        assert_eq!(r.observe(&at(9)), Observation::Same);
+        assert_eq!(r.observe(&at(9)), Observation::OffRoute { system: 9 });
+        assert_eq!((r.progress, r.sent_segment), (1, 0));
+    }
+
+    #[test]
+    fn a_skip_does_not_cross_a_wormhole_ahead() {
+        // Step 3 (system 4) is a wormhole.
+        let mut r = route(&[1, 2, 3, 4, 5], &[(4, Hop::Wormhole)]);
+        // From step 1, the wormhole is two steps away: a match on its far side is off route.
+        assert_eq!(r.observe(&at(2)), Observation::Progress(1));
+        assert_eq!(r.observe(&at(4)), Observation::Same);
+        assert_eq!(r.sent_segment, 0);
+        // From step 2, the system before the wormhole, the jump counts.
+        assert_eq!(r.observe(&at(3)), Observation::Progress(2));
+        assert_eq!(r.observe(&at(4)), Observation::NextSegment { step: 3, waypoints: vec![5] });
+    }
+
+    #[test]
+    fn a_wormhole_and_a_gate_between_two_polls() {
+        // Step 1 (system 2) is a wormhole. From step 0, the pilot jumps it and one gate more.
+        let mut r = route(&[1, 2, 3, 4], &[(2, Hop::Wormhole)]);
+        assert_eq!(r.observe(&at(3)), Observation::NextSegment { step: 2, waypoints: vec![3, 4] });
     }
 
     #[test]

@@ -881,7 +881,9 @@ mod tests {
         p.start_route(route(&[10, 20, 30, 40], Some(30)));
         until(&mut p, |p| p.active.is_some());
         assert_eq!(fake.0.lock().unwrap().waypoints, [(20, true)]);
-        // The pilot takes the bridge into 30.
+        // The pilot gates to 20, then takes the wormhole into 30.
+        fake.0.lock().unwrap().system = 20;
+        until(&mut p, |p| p.active.as_ref().is_some_and(|a| a.progress == 1));
         fake.0.lock().unwrap().system = 30;
         until(&mut p, |p| p.active.as_ref().is_some_and(|a| a.progress == 2) && p.send.is_none());
         assert_eq!(fake.0.lock().unwrap().waypoints, [(20, true), (40, true)]);
