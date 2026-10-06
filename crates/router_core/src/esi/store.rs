@@ -9,9 +9,10 @@
 //! Without a keyring, the front end can offer `Accounts::session_only`. The tokens then stay in
 //! memory and go at exit. The router never writes a token to a file.
 
+use super::Character;
 use super::sso::Tokens;
-use super::{Character, Secret};
 use crate::config::APP_DIR;
+use oauth2::{RefreshToken, Scope};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::fs;
@@ -28,9 +29,9 @@ pub fn characters_path(cfg_path: &Path) -> PathBuf {
 }
 
 /// A place for refresh tokens, by character ID.
-pub trait SecretStore: Send + Sync {
-    fn get(&self, id: u64) -> Result<Option<Secret>, String>;
-    fn set(&self, id: u64, secret: &Secret) -> Result<(), String>;
+pub trait TokenStore: Send + Sync {
+    fn get(&self, id: u64) -> Result<Option<RefreshToken>, String>;
+    fn set(&self, id: u64, token: &RefreshToken) -> Result<(), String>;
     /// Delete the token. A missing token is not an error.
     fn delete(&self, id: u64) -> Result<(), String>;
 }
@@ -50,17 +51,17 @@ impl Keyring {
     }
 }
 
-impl SecretStore for Keyring {
-    fn get(&self, id: u64) -> Result<Option<Secret>, String> {
+impl TokenStore for Keyring {
+    fn get(&self, id: u64) -> Result<Option<RefreshToken>, String> {
         match Self::entry(id)?.get_password() {
-            Ok(token) => Ok(Some(Secret::new(token))),
+            Ok(token) => Ok(Some(RefreshToken::new(token))),
             Err(keyring::Error::NoEntry) => Ok(None),
             Err(e) => Err(e.to_string()),
         }
     }
 
-    fn set(&self, id: u64, secret: &Secret) -> Result<(), String> {
-        Self::entry(id)?.set_password(secret.expose()).map_err(|e| e.to_string())
+    fn set(&self, id: u64, token: &RefreshToken) -> Result<(), String> {
+        Self::entry(id)?.set_password(token.secret()).map_err(|e| e.to_string())
     }
 
     fn delete(&self, id: u64) -> Result<(), String> {
@@ -73,15 +74,15 @@ impl SecretStore for Keyring {
 
 /// Tokens in memory only, for "Session only" and for the tests.
 #[derive(Default)]
-pub struct MemoryStore(Mutex<HashMap<u64, Secret>>);
+pub struct MemoryStore(Mutex<HashMap<u64, RefreshToken>>);
 
-impl SecretStore for MemoryStore {
-    fn get(&self, id: u64) -> Result<Option<Secret>, String> {
+impl TokenStore for MemoryStore {
+    fn get(&self, id: u64) -> Result<Option<RefreshToken>, String> {
         Ok(self.0.lock().map_err(|e| e.to_string())?.get(&id).cloned())
     }
 
-    fn set(&self, id: u64, secret: &Secret) -> Result<(), String> {
-        self.0.lock().map_err(|e| e.to_string())?.insert(id, secret.clone());
+    fn set(&self, id: u64, token: &RefreshToken) -> Result<(), String> {
+        self.0.lock().map_err(|e| e.to_string())?.insert(id, token.clone());
         Ok(())
     }
 
@@ -97,7 +98,7 @@ pub struct CharacterEntry {
     pub id: u64,
     pub name: String,
     #[serde(default)]
-    pub scopes: Vec<String>,
+    pub scopes: Vec<Scope>,
     /// The last start of a route with this character, in Unix seconds.
     #[serde(default)]
     pub last_used: Option<u64>,
@@ -114,7 +115,7 @@ pub struct Accounts {
     pub characters: Vec<CharacterEntry>,
     /// `None` for "Session only": the list is not written.
     path: Option<PathBuf>,
-    secrets: Box<dyn SecretStore>,
+    secrets: Box<dyn TokenStore>,
 }
 
 impl Accounts {
@@ -129,7 +130,7 @@ impl Accounts {
     }
 
     /// Read the list file, if `path` is set. A missing file gives an empty list.
-    pub fn with_store(path: Option<PathBuf>, secrets: Box<dyn SecretStore>) -> Result<Accounts, String> {
+    pub fn with_store(path: Option<PathBuf>, secrets: Box<dyn TokenStore>) -> Result<Accounts, String> {
         let characters = match &path {
             Some(path) => load(path)?,
             None => Vec::new(),
@@ -157,7 +158,7 @@ impl Accounts {
     }
 
     /// The refresh token of a character. `None` means the character must log in again.
-    pub fn refresh_token(&self, id: u64) -> Result<Option<Secret>, String> {
+    pub fn refresh_token(&self, id: u64) -> Result<Option<RefreshToken>, String> {
         self.secrets.get(id)
     }
 
@@ -215,11 +216,16 @@ mod tests {
 
     fn tokens(id: u64, name: &str, refresh: &str) -> Tokens {
         Tokens {
-            character: Character { id, name: name.into(), scopes: vec!["esi-ui.write_waypoint.v1".into()] },
-            access: Secret::new("access"),
-            refresh: Secret::new(refresh),
+            character: Character { id, name: name.into(), scopes: vec![Scope::new("esi-ui.write_waypoint.v1".into())] },
+            access: oauth2::AccessToken::new("access".into()),
+            refresh: RefreshToken::new(refresh.into()),
             expires_at: 0,
         }
+    }
+
+    /// The token text. `RefreshToken` has no `PartialEq`.
+    fn secret(result: Result<Option<RefreshToken>, String>) -> Option<String> {
+        result.unwrap().map(|t| t.secret().clone())
     }
 
     fn dir(name: &str) -> PathBuf {
@@ -236,17 +242,26 @@ mod tests {
         accounts.store(&tokens(2, "Bob", "r2")).unwrap();
         // A refresh rotates the token and keeps one entry.
         accounts.store(&tokens(1, "Alice Ander", "r1b")).unwrap();
-        assert_eq!(accounts.refresh_token(1).unwrap(), Some(Secret::new("r1b")));
+        assert_eq!(secret(accounts.refresh_token(1)).as_deref(), Some("r1b"));
         assert_eq!(accounts.characters.len(), 2);
 
         // The file holds the list, with no token.
         let text = fs::read_to_string(&path).unwrap();
         assert!(text.contains("Alice Ander") && !text.contains("r1b") && !text.contains("access"), "{text}");
+        // A `Scope` is a plain string in the file.
+        assert!(
+            text.contains(
+                r#""scopes": [
+      "esi-ui.write_waypoint.v1"
+    ]"#
+            ),
+            "{text}"
+        );
         let reloaded = load(&path).unwrap();
         assert_eq!(reloaded, accounts.characters);
 
         accounts.remove(1).unwrap();
-        assert_eq!(accounts.refresh_token(1).unwrap(), None);
+        assert_eq!(secret(accounts.refresh_token(1)), None);
         assert_eq!(load(&path).unwrap().iter().map(|e| e.id).collect::<Vec<_>>(), [2]);
         // A second remove is not an error.
         accounts.remove(1).unwrap();
@@ -292,9 +307,9 @@ mod tests {
     fn keyring_round_trip() {
         let keyring = Keyring::open().unwrap();
         let id = 1;
-        keyring.set(id, &Secret::new("test-token")).unwrap();
-        assert_eq!(keyring.get(id).unwrap(), Some(Secret::new("test-token")));
+        keyring.set(id, &RefreshToken::new("test-token".into())).unwrap();
+        assert_eq!(secret(keyring.get(id)).as_deref(), Some("test-token"));
         keyring.delete(id).unwrap();
-        assert_eq!(keyring.get(id).unwrap(), None);
+        assert_eq!(secret(keyring.get(id)), None);
     }
 }

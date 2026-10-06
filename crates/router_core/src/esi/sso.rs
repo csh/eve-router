@@ -12,15 +12,16 @@
 //! token endpoint over TLS, so TLS proves where the token came from. The router still checks the
 //! issuer, the audience, the expiry and the subject.
 
-use super::{Character, SCOPES, Secret};
+use super::{Character, SCOPES};
 use base64::Engine;
 use base64::engine::general_purpose::URL_SAFE_NO_PAD_INDIFFERENT;
 use oauth2::basic::BasicClient;
+use oauth2::helpers::deserialize_optional_string_or_vec_string;
 use oauth2::url::Url;
 use oauth2::{
-    AuthType, AuthUrl, AuthorizationCode, ClientId, CsrfToken, EndpointNotSet, EndpointSet, ErrorResponseType, HttpRequest, HttpResponse,
-    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, RevocationUrl, Scope, StandardErrorResponse,
-    StandardRevocableToken, SyncHttpClient, TokenResponse, TokenUrl,
+    AccessToken, AuthType, AuthUrl, AuthorizationCode, ClientId, CsrfToken, EndpointNotSet, EndpointSet, ErrorResponseType, HttpRequest,
+    HttpResponse, PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, RevocationUrl, Scope,
+    StandardErrorResponse, StandardRevocableToken, SyncHttpClient, TokenResponse, TokenUrl,
 };
 use serde::Deserialize;
 use std::fmt;
@@ -134,7 +135,6 @@ type EveClient = BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, Endpoi
 pub struct Sso {
     client: EveClient,
     http: Http,
-    client_id: String,
 }
 
 impl Sso {
@@ -151,7 +151,7 @@ impl Sso {
             .set_redirect_uri(RedirectUrl::new(redirect.to_owned()).expect("redirect URL"))
             // A native app has no secret. The client ID goes in the form body.
             .set_auth_type(AuthType::RequestBody);
-        Sso { client, http: Http::new(), client_id: client_id.to_owned() }
+        Sso { client, http: Http::new() }
     }
 
     /// Make the PKCE pair and the state, and listen on the callback port. A listener failure
@@ -176,43 +176,41 @@ impl Sso {
     }
 
     /// Send the code and the verifier, and get the tokens.
-    pub fn exchange(&self, code: &str, verifier: PkceCodeVerifier) -> Result<Tokens, LoginError> {
-        let response =
-            self.client.exchange_code(AuthorizationCode::new(code.to_owned())).set_pkce_verifier(verifier).request(&self.http)?;
+    pub fn exchange(&self, code: AuthorizationCode, verifier: PkceCodeVerifier) -> Result<Tokens, LoginError> {
+        let response = self.client.exchange_code(code).set_pkce_verifier(verifier).request(&self.http)?;
         self.tokens(&response, None, now())
     }
 
     /// Get a new access token with the refresh token. If SSO gives no new refresh token, the old
     /// one stays valid.
-    pub fn refresh(&self, refresh: &Secret) -> Result<Tokens, LoginError> {
-        let token = RefreshToken::new(refresh.expose().to_owned());
-        let response = self.client.exchange_refresh_token(&token).request(&self.http)?;
+    pub fn refresh(&self, refresh: &RefreshToken) -> Result<Tokens, LoginError> {
+        let response = self.client.exchange_refresh_token(refresh).request(&self.http)?;
         self.tokens(&response, Some(refresh), now())
     }
 
     /// Revoke a refresh token at SSO. After this, the token gives no access.
-    pub fn revoke(&self, refresh: &Secret) -> Result<(), LoginError> {
-        let token = StandardRevocableToken::RefreshToken(RefreshToken::new(refresh.expose().to_owned()));
+    pub fn revoke(&self, refresh: &RefreshToken) -> Result<(), LoginError> {
+        let token = StandardRevocableToken::RefreshToken(refresh.clone());
         let request = self.client.revoke_token(token).map_err(|e| LoginError::Offline(e.to_string()))?;
         request.request(&self.http).map_err(LoginError::from)
     }
 
-    fn tokens(&self, response: &impl TokenResponse, old_refresh: Option<&Secret>, now: u64) -> Result<Tokens, LoginError> {
-        let access = response.access_token().secret();
-        let character = read_claims(access, &self.client_id, now)?;
+    fn tokens(&self, response: &impl TokenResponse, old_refresh: Option<&RefreshToken>, now: u64) -> Result<Tokens, LoginError> {
+        let access = response.access_token();
+        let character = read_claims(access, self.client.client_id(), now)?;
         let refresh = match (response.refresh_token(), old_refresh) {
-            (Some(token), _) => Secret::new(token.secret().clone()),
+            (Some(token), _) => token.clone(),
             (None, Some(old)) => old.clone(),
             (None, None) => return Err(LoginError::BadToken("no refresh token".into())),
         };
         let expires_in = response.expires_in().map_or(0, |d| d.as_secs());
-        Ok(Tokens { character, access: Secret::new(access.clone()), refresh, expires_at: now + expires_in })
+        Ok(Tokens { character, access: access.clone(), refresh, expires_at: now + expires_in })
     }
 }
 
 /// Read the code from a callback URL, a callback request target or a bare query string.
 /// The URL must have the `state` of this login.
-pub fn parse_callback(text: &str, state: &str) -> Result<String, LoginError> {
+pub fn parse_callback(text: &str, state: &str) -> Result<AuthorizationCode, LoginError> {
     let text = text.trim();
     let query = match text.split_once('?') {
         Some((_, query)) => query,
@@ -228,14 +226,14 @@ pub fn parse_callback(text: &str, state: &str) -> Result<String, LoginError> {
     if let Some(error) = param("error") {
         return Err(LoginError::Denied(error));
     }
-    param("code").filter(|c| !c.is_empty()).ok_or(LoginError::NoCode)
+    param("code").filter(|c| !c.is_empty()).map(AuthorizationCode::new).ok_or(LoginError::NoCode)
 }
 
 /// The loopback listener. A thread accepts connections until a request gives a code or an
 /// error, or until the listener drops. A request with a wrong `state` does not stop it.
 pub struct Listener {
     port: u16,
-    rx: Receiver<Result<String, LoginError>>,
+    rx: Receiver<Result<AuthorizationCode, LoginError>>,
     stop: Arc<AtomicBool>,
 }
 
@@ -269,7 +267,7 @@ impl Listener {
     }
 
     /// The code or the error, when a request gave one.
-    pub fn try_recv(&self) -> Option<Result<String, LoginError>> {
+    pub fn try_recv(&self) -> Option<Result<AuthorizationCode, LoginError>> {
         self.rx.try_recv().ok()
     }
 }
@@ -281,7 +279,7 @@ impl Drop for Listener {
 }
 
 /// Answer one HTTP request. `None` means "keep listening".
-fn handle(mut stream: TcpStream, state: &str) -> Option<Result<String, LoginError>> {
+fn handle(mut stream: TcpStream, state: &str) -> Option<Result<AuthorizationCode, LoginError>> {
     let _ = stream.set_nonblocking(false);
     let _ = stream.set_read_timeout(Some(Duration::from_secs(2)));
     let mut buf = Vec::new();
@@ -347,12 +345,12 @@ impl Login {
     }
 
     /// The code from the listener, when the browser sent it.
-    pub fn poll(&self) -> Option<Result<String, LoginError>> {
+    pub fn poll(&self) -> Option<Result<AuthorizationCode, LoginError>> {
         self.listener.as_ref().ok()?.try_recv()
     }
 
     /// The code from a pasted URL.
-    pub fn paste(&self, text: &str) -> Result<String, LoginError> {
+    pub fn paste(&self, text: &str) -> Result<AuthorizationCode, LoginError> {
         parse_callback(text, self.state.secret())
     }
 
@@ -366,50 +364,33 @@ impl Login {
 #[derive(Debug)]
 pub struct Tokens {
     pub character: Character,
-    pub access: Secret,
+    pub access: AccessToken,
     /// SSO can give a new refresh token at each refresh. Store the new one before the next use.
-    pub refresh: Secret,
+    pub refresh: RefreshToken,
     /// The expiry of the access token, in Unix seconds.
     pub expires_at: u64,
 }
 
+/// The claims of an EVE access token (a JWT). `oauth2` has no JWT type, and its introspection
+/// response needs an `active` field and a `scope` string, which an EVE token does not have.
 #[derive(Deserialize)]
 struct Claims {
     iss: String,
-    #[serde(default)]
-    aud: OneOrMany,
+    #[serde(default, deserialize_with = "deserialize_optional_string_or_vec_string")]
+    aud: Option<Vec<String>>,
     exp: u64,
     sub: String,
     name: String,
-    #[serde(default)]
-    scp: OneOrMany,
-}
-
-/// SSO gives one value as a string, and more values as a list.
-#[derive(Deserialize, Default)]
-#[serde(untagged)]
-enum OneOrMany {
-    One(String),
-    Many(Vec<String>),
-    #[default]
-    None,
-}
-
-impl OneOrMany {
-    fn into_vec(self) -> Vec<String> {
-        match self {
-            OneOrMany::One(s) => vec![s],
-            OneOrMany::Many(list) => list,
-            OneOrMany::None => vec![],
-        }
-    }
+    /// One scope comes as a string, and more scopes as a list.
+    #[serde(default, deserialize_with = "deserialize_optional_string_or_vec_string")]
+    scp: Option<Vec<String>>,
 }
 
 /// Read the character from the access token, and check the issuer, the audience, the expiry
 /// and the subject. See the module comment about the signature.
-pub fn read_claims(token: &str, client_id: &str, now: u64) -> Result<Character, LoginError> {
+pub fn read_claims(token: &AccessToken, client_id: &ClientId, now: u64) -> Result<Character, LoginError> {
     let bad = |text: &str| LoginError::BadToken(text.to_owned());
-    let mut parts = token.split('.');
+    let mut parts = token.secret().split('.');
     let (Some(_), Some(payload), Some(_), None) = (parts.next(), parts.next(), parts.next(), parts.next()) else {
         return Err(bad("not a JWT"));
     };
@@ -418,15 +399,15 @@ pub fn read_claims(token: &str, client_id: &str, now: u64) -> Result<Character, 
     if !ISSUERS.contains(&claims.iss.as_str()) {
         return Err(LoginError::BadToken(format!("wrong issuer {}", claims.iss)));
     }
-    let audience = claims.aud.into_vec();
-    if !audience.iter().any(|a| a == client_id) || !audience.iter().any(|a| a == AUDIENCE) {
+    let audience = claims.aud.unwrap_or_default();
+    if !audience.iter().any(|a| a == client_id.as_str()) || !audience.iter().any(|a| a == AUDIENCE) {
         return Err(bad("wrong audience"));
     }
     if claims.exp <= now {
         return Err(bad("expired"));
     }
     let id = claims.sub.strip_prefix(SUBJECT_PREFIX).and_then(|id| id.parse().ok()).ok_or_else(|| bad("bad subject"))?;
-    Ok(Character { id, name: claims.name, scopes: claims.scp.into_vec() })
+    Ok(Character { id, name: claims.name, scopes: claims.scp.unwrap_or_default().into_iter().map(Scope::new).collect() })
 }
 
 fn now() -> u64 {
@@ -457,6 +438,15 @@ mod tests {
             "name": "Alice Ander",
             "scp": ["esi-ui.write_waypoint.v1", "esi-location.read_location.v1"],
         })
+    }
+
+    fn claims_of(token: String, now: u64) -> Result<Character, LoginError> {
+        read_claims(&AccessToken::new(token), &ClientId::new(CLIENT.into()), now)
+    }
+
+    /// The code text of a parse result. `AuthorizationCode` has no `PartialEq`.
+    fn text(result: Result<AuthorizationCode, LoginError>) -> Result<String, LoginError> {
+        result.map(|code| code.secret().clone())
     }
 
     /// An `Sso` whose token and revoke URLs are a test server.
@@ -490,24 +480,24 @@ mod tests {
     #[test]
     fn parse_pasted_urls() {
         let full = "http://localhost:21404/callback?code=abc%2Bdef&state=s1";
-        assert_eq!(parse_callback(full, "s1"), Ok("abc+def".into()));
-        assert_eq!(parse_callback(&format!("  {full}#frag \n"), "s1"), Ok("abc+def".into()));
-        assert_eq!(parse_callback("code=xyz&state=s1", "s1"), Ok("xyz".into()));
-        assert_eq!(parse_callback(full, "other"), Err(LoginError::StateMismatch));
-        assert_eq!(parse_callback("http://localhost:21404/callback?state=s1", "s1"), Err(LoginError::NoCode));
-        assert_eq!(parse_callback("hello", "s1"), Err(LoginError::NoCode));
-        assert_eq!(parse_callback("/callback?error=access_denied&state=s1", "s1"), Err(LoginError::Denied("access_denied".into())));
+        assert_eq!(text(parse_callback(full, "s1")), Ok("abc+def".into()));
+        assert_eq!(text(parse_callback(&format!("  {full}#frag \n"), "s1")), Ok("abc+def".into()));
+        assert_eq!(text(parse_callback("code=xyz&state=s1", "s1")), Ok("xyz".into()));
+        assert_eq!(text(parse_callback(full, "other")), Err(LoginError::StateMismatch));
+        assert_eq!(text(parse_callback("http://localhost:21404/callback?state=s1", "s1")), Err(LoginError::NoCode));
+        assert_eq!(text(parse_callback("hello", "s1")), Err(LoginError::NoCode));
+        assert_eq!(text(parse_callback("/callback?error=access_denied&state=s1", "s1")), Err(LoginError::Denied("access_denied".into())));
         // An error with no matching state is not from this login.
-        assert_eq!(parse_callback("/callback?error=access_denied", "s1"), Err(LoginError::StateMismatch));
+        assert_eq!(text(parse_callback("/callback?error=access_denied", "s1")), Err(LoginError::StateMismatch));
     }
 
     #[test]
     fn exchange_gives_the_tokens() {
         let body = json!({"access_token": jwt(claims(u64::MAX / 2)), "expires_in": 1199, "refresh_token": "r1", "token_type": "Bearer"});
         let (url, rx) = crate::test_support::serve("200 OK", &body.to_string(), Duration::ZERO);
-        let tokens = sso_at(&url).exchange("c0de", PkceCodeVerifier::new("v".repeat(43))).unwrap();
+        let tokens = sso_at(&url).exchange(AuthorizationCode::new("c0de".into()), PkceCodeVerifier::new("v".repeat(43))).unwrap();
         assert_eq!(tokens.character.id, 2112625428);
-        assert_eq!(tokens.refresh.expose(), "r1");
+        assert_eq!(tokens.refresh.secret(), "r1");
         assert!(rx.recv().unwrap().starts_with("POST / HTTP/1.1"));
     }
 
@@ -515,44 +505,44 @@ mod tests {
     fn refresh_keeps_the_old_token_if_sso_gives_none() {
         let body = json!({"access_token": jwt(claims(u64::MAX / 2)), "expires_in": 1199, "token_type": "Bearer"});
         let (url, _rx) = crate::test_support::serve("200 OK", &body.to_string(), Duration::ZERO);
-        let tokens = sso_at(&url).refresh(&Secret::new("old")).unwrap();
-        assert_eq!(tokens.refresh.expose(), "old");
+        let tokens = sso_at(&url).refresh(&RefreshToken::new("old".into())).unwrap();
+        assert_eq!(tokens.refresh.secret(), "old");
     }
 
     #[test]
     fn refused_refresh_token_is_rejected() {
         let body = r#"{"error":"invalid_grant","error_description":"Invalid refresh token."}"#;
         let (url, _rx) = crate::test_support::serve("400 Bad Request", body, Duration::ZERO);
-        assert_eq!(sso_at(&url).refresh(&Secret::new("old")).unwrap_err(), LoginError::Rejected("invalid_grant".into()));
+        assert_eq!(sso_at(&url).refresh(&RefreshToken::new("old".into())).unwrap_err(), LoginError::Rejected("invalid_grant".into()));
     }
 
     /// `oauth2` sends a revoke only to an HTTPS URL. The test server has no TLS, so the test
     /// examines that guard.
     #[test]
     fn revoke_needs_https() {
-        let err = sso_at("http://127.0.0.1:9/revoke").revoke(&Secret::new("old")).unwrap_err();
+        let err = sso_at("http://127.0.0.1:9/revoke").revoke(&RefreshToken::new("old".into())).unwrap_err();
         assert!(matches!(&err, LoginError::Offline(e) if e.contains("HTTPS")), "{err:?}");
     }
 
     #[test]
     fn server_error_is_offline() {
         let (url, _rx) = crate::test_support::serve("503 Service Unavailable", "down", Duration::ZERO);
-        assert!(matches!(sso_at(&url).refresh(&Secret::new("old")), Err(LoginError::Offline(_))));
+        assert!(matches!(sso_at(&url).refresh(&RefreshToken::new("old".into())), Err(LoginError::Offline(_))));
     }
 
     #[test]
     fn claims_give_the_character() {
-        let character = read_claims(&jwt(claims(NOW + 1200)), CLIENT, NOW).unwrap();
+        let character = claims_of(jwt(claims(NOW + 1200)), NOW).unwrap();
         assert_eq!(character.id, 2112625428);
         assert_eq!(character.name, "Alice Ander");
-        assert_eq!(character.scopes, ["esi-ui.write_waypoint.v1", "esi-location.read_location.v1"]);
+        assert_eq!(character.scopes, [Scope::new("esi-ui.write_waypoint.v1".into()), Scope::new("esi-location.read_location.v1".into())]);
     }
 
     #[test]
     fn one_scope_as_a_string() {
         let mut c = claims(NOW + 1200);
         c["scp"] = json!("esi-ui.write_waypoint.v1");
-        assert_eq!(read_claims(&jwt(c), CLIENT, NOW).unwrap().scopes, ["esi-ui.write_waypoint.v1"]);
+        assert_eq!(claims_of(jwt(c), NOW).unwrap().scopes, [Scope::new("esi-ui.write_waypoint.v1".into())]);
     }
 
     #[test]
@@ -560,15 +550,15 @@ mod tests {
         let check = |key: &str, value: serde_json::Value| {
             let mut c = claims(NOW + 1200);
             c[key] = value;
-            assert!(matches!(read_claims(&jwt(c), CLIENT, NOW), Err(LoginError::BadToken(_))), "{key}");
+            assert!(matches!(claims_of(jwt(c), NOW), Err(LoginError::BadToken(_))), "{key}");
         };
         check("iss", json!("https://evil.example"));
         check("aud", json!(["other-client", "EVE Online"]));
         check("aud", json!(CLIENT));
         check("exp", json!(NOW));
         check("sub", json!("CORPORATION:EVE:1"));
-        assert!(matches!(read_claims("a.b", CLIENT, NOW), Err(LoginError::BadToken(_))));
-        assert!(matches!(read_claims("a.!!!.c", CLIENT, NOW), Err(LoginError::BadToken(_))));
+        assert!(matches!(claims_of("a.b".into(), NOW), Err(LoginError::BadToken(_))));
+        assert!(matches!(claims_of("a.!!!.c".into(), NOW), Err(LoginError::BadToken(_))));
     }
 
     /// Send one request to the listener and return the response text.
@@ -580,7 +570,7 @@ mod tests {
         response
     }
 
-    fn wait(listener: &Listener) -> Result<String, LoginError> {
+    fn wait(listener: &Listener) -> Result<AuthorizationCode, LoginError> {
         for _ in 0..100 {
             if let Some(result) = listener.try_recv() {
                 return result;
@@ -601,14 +591,14 @@ mod tests {
         let response = get(port, "/callback?code=good&state=s1");
         assert!(response.starts_with("HTTP/1.1 200"), "{response}");
         assert!(response.contains("Login received"));
-        assert_eq!(wait(&listener), Ok("good".into()));
+        assert_eq!(text(wait(&listener)), Ok("good".into()));
     }
 
     #[test]
     fn listener_reports_a_denied_login() {
         let listener = Listener::bind(0, "s1".into()).unwrap();
         assert!(get(listener.port(), "/callback?error=access_denied&state=s1").starts_with("HTTP/1.1 400"));
-        assert_eq!(wait(&listener), Err(LoginError::Denied("access_denied".into())));
+        assert_eq!(text(wait(&listener)), Err(LoginError::Denied("access_denied".into())));
     }
 
     #[test]
@@ -619,6 +609,6 @@ mod tests {
         assert_eq!(login.listen_error(), Some(format!("Port {port} is in use. Paste the redirected URL instead.").as_str()));
         assert!(login.poll().is_none());
         let state = login.state.secret();
-        assert_eq!(login.paste(&format!("http://localhost:{port}/callback?code=c0de&state={state}")), Ok("c0de".into()));
+        assert_eq!(text(login.paste(&format!("http://localhost:{port}/callback?code=c0de&state={state}"))), Ok("c0de".into()));
     }
 }
