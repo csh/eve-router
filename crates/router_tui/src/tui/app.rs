@@ -424,8 +424,14 @@ impl<'a> App<'a> {
                 favs.swap(i, i + 1);
                 state.select_next();
             }
-            (KeyCode::Up, _) if !shift => state.select_previous(),
-            (KeyCode::Down, _) if !shift && index + 1 < rows.len() => state.select_next(),
+            (KeyCode::Up, _) if !shift => {
+                state.select_previous();
+                return;
+            }
+            (KeyCode::Down, _) if !shift && index + 1 < rows.len() => {
+                state.select_next();
+                return;
+            }
             (KeyCode::Delete | KeyCode::Backspace | KeyCode::Char('d'), SettingsRow::Favourite(i)) => {
                 favs.remove(i);
             }
@@ -451,13 +457,15 @@ impl<'a> App<'a> {
             }
             (KeyCode::Enter, SettingsRow::Thera) => {
                 self.settings.hubs.thera = !self.settings.hubs.thera;
-                self.save();
                 self.recompute();
+                self.save();
+                return;
             }
             (KeyCode::Enter, SettingsRow::Turnur) => {
                 self.settings.hubs.turnur = !self.settings.hubs.turnur;
-                self.save();
                 self.recompute();
+                self.save();
+                return;
             }
             (KeyCode::Enter, SettingsRow::NexumMap) => {
                 if self.cfg.nexum.url.is_none() || self.cfg.nexum.key.is_none() {
@@ -745,6 +753,32 @@ pub(crate) mod tests {
         let path = std::env::temp_dir().join(format!("eve-router-test-{name}.json"));
         let shortcuts = Shortcuts::new(universe(), &Default::default(), &Default::default(), &Default::default());
         App::new(universe(), settings, cfg, path, String::new(), shortcuts)
+    }
+
+    #[test]
+    fn settings_arrows_keep_the_routes_and_the_status() {
+        let mut app = app("settings-arrows", Config::default());
+        app.settings.top = 3;
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        assert!(app.routes.len() >= 2, "{}", app.status);
+        app.selected.select(Some(1));
+        app.status = "keep".into();
+        open_row(&mut app, SettingsRow::Capital);
+        app.on_key(KeyEvent::from(KeyCode::Down));
+        app.on_key(KeyEvent::from(KeyCode::Up));
+        assert_eq!(app.status, "keep");
+        assert_eq!(app.selected.selected(), Some(1));
+    }
+
+    #[test]
+    fn hub_switch_keeps_the_saved_status() {
+        let mut app = app("settings-thera", Config::default());
+        let thera = app.settings.hubs.thera;
+        open_row(&mut app, SettingsRow::Thera);
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        assert_eq!(app.settings.hubs.thera, !thera);
+        assert_eq!(app.status, "Config saved!");
     }
 
     fn open_row(app: &mut App, row: SettingsRow) {
