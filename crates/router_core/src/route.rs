@@ -250,10 +250,7 @@ impl<'a> Router<'a> {
         if waypoints.len() < 2 {
             return Err("Give two or more systems".into());
         }
-        let legs: Vec<Vec<Path>> = waypoints
-            .par_windows(2)
-            .map(|w| self.k_shortest(w[0], w[1], n))
-            .collect();
+        let legs: Vec<Vec<Path>> = waypoints.par_windows(2).map(|w| self.k_shortest(w[0], w[1], n)).collect();
         for (w, leg) in waypoints.windows(2).zip(&legs) {
             if leg.is_empty() {
                 return Err(format!("No route from {} to {}", self.uni.name(w[0]), self.uni.name(w[1])));
@@ -398,8 +395,7 @@ impl<'a> Router<'a> {
     }
 
     fn summarize(&self, path: Path) -> Route {
-        let mut route =
-            Route { jumps: path.edges.len(), wormholes: 0, bridges: 0, bridge_tj: None, stops: Vec::new(), path };
+        let mut route = Route { jumps: path.edges.len(), wormholes: 0, bridges: 0, bridge_tj: None, stops: Vec::new(), path };
         let mut tj = Some(0.0);
         for &e in &route.path.edges {
             match &self.uni.graph[e] {

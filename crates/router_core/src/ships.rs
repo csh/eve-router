@@ -95,10 +95,7 @@ struct SdeAttribute {
 
 fn parse_lines<T: DeserializeOwned + Send>(name: &str, data: &[u8]) -> Result<Vec<T>, String> {
     let text = std::str::from_utf8(data).map_err(|e| format!("{name}: {e}"))?;
-    text.par_lines()
-        .filter(|l| !l.trim().is_empty())
-        .map(|l| serde_json::from_str(l).map_err(|e| format!("{name}: {e}")))
-        .collect()
+    text.par_lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).map_err(|e| format!("{name}: {e}"))).collect()
 }
 
 /// The 3 SDE source files, parsed. The ship table and the wormhole table both read it.
@@ -182,12 +179,7 @@ pub fn save(dir: &Path, data: &ShipData) -> Result<(), String> {
 
 pub fn load(dir: &Path) -> Result<ShipData, String> {
     let path = dir.join(FILE);
-    let text = fs::read_to_string(&path).map_err(|e| {
-        format!(
-            "{}: {e}. Unset {} to download it.",
-            path.display(),
-            crate::sde_update::SKIP_ENV
-        )
-    })?;
+    let text =
+        fs::read_to_string(&path).map_err(|e| format!("{}: {e}. Unset {} to download it.", path.display(), crate::sde_update::SKIP_ENV))?;
     serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
 }

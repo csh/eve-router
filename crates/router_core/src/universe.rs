@@ -33,11 +33,7 @@ pub enum Band {
 
 /// The security value that the game shows. A value above 0.0 and below 0.05 shows as 0.1.
 pub fn display_sec(security: f64) -> f64 {
-    if security > 0.0 && security < 0.05 {
-        0.1
-    } else {
-        (security * 10.0).round() / 10.0
-    }
+    if security > 0.0 && security < 0.05 { 0.1 } else { (security * 10.0).round() / 10.0 }
 }
 
 pub fn band(security: f64) -> Band {
@@ -62,8 +58,7 @@ pub struct Universe {
 
 impl Universe {
     pub fn from_sde(data: SdeData) -> Self {
-        let regions: HashMap<u32, String> =
-            data.regions.into_iter().map(|r| (r.id, r.name.en)).collect();
+        let regions: HashMap<u32, String> = data.regions.into_iter().map(|r| (r.id, r.name.en)).collect();
         let mut graph = DiGraph::with_capacity(data.systems.len(), data.stargates.len());
         let mut by_id = HashMap::with_capacity(data.systems.len());
         for s in data.systems {
@@ -83,10 +78,7 @@ impl Universe {
                 graph.add_edge(a, b, Link::Stargate);
             }
         }
-        let mut sorted: Vec<(String, NodeIndex)> = graph
-            .node_indices()
-            .map(|n| (graph[n].name.to_lowercase(), n))
-            .collect();
+        let mut sorted: Vec<(String, NodeIndex)> = graph.node_indices().map(|n| (graph[n].name.to_lowercase(), n)).collect();
         sorted.sort();
         let by_name = sorted.iter().cloned().collect();
         Universe { graph, by_id, by_name, sorted, build: data.build }
@@ -109,11 +101,22 @@ impl Universe {
     pub fn complete(&self, prefix: &str) -> Vec<NodeIndex> {
         let prefix = prefix.trim().to_lowercase();
         let start = self.sorted.partition_point(|(n, _)| n.as_str() < prefix.as_str());
-        self.sorted[start..]
-            .iter()
-            .take_while(|(n, _)| n.starts_with(&prefix))
-            .map(|&(_, node)| node)
-            .collect()
+        self.sorted[start..].iter().take_while(|(n, _)| n.starts_with(&prefix)).map(|&(_, node)| node).collect()
+    }
+
+    /// Up to `limit` systems for a search box: the names that start with `query` first,
+    /// then the names that contain it. Case-insensitive.
+    pub fn search(&self, query: &str, limit: usize) -> Vec<NodeIndex> {
+        let query = query.trim().to_lowercase();
+        if query.is_empty() {
+            return Vec::new();
+        }
+        let mut found: Vec<NodeIndex> = self.complete(&query).into_iter().take(limit).collect();
+        if found.len() < limit {
+            let contains = self.sorted.iter().filter(|(n, _)| !n.starts_with(&query) && n.contains(&query));
+            found.extend(contains.map(|&(_, node)| node).take(limit - found.len()));
+        }
+        found
     }
 
     /// Find a system by its exact name, else by a unique prefix.
@@ -181,6 +184,18 @@ impl Universe {
 pub mod tests {
     use super::*;
     use crate::test_support::{sde_dir, universe};
+
+    #[test]
+    fn search_puts_prefix_matches_first() {
+        let uni = universe();
+        let names: Vec<&str> = uni.search("ama", 50).iter().map(|&n| uni.name(n)).collect();
+        let prefix = names.iter().take_while(|n| n.to_lowercase().starts_with("ama")).count();
+        assert!(names.contains(&"Amarr"), "{names:?}");
+        assert!(prefix > 0 && prefix < names.len(), "{names:?}");
+        assert!(names[prefix..].iter().all(|n| n.to_lowercase().contains("ama")), "{names:?}");
+        assert_eq!(uni.search("ama", 3).len(), 3);
+        assert!(uni.search("  ", 10).is_empty());
+    }
 
     #[test]
     fn stargate_edge_count() {

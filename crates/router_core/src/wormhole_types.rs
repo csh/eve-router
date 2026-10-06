@@ -96,8 +96,8 @@ pub fn save(dir: &Path, data: &WormholeTypes) -> Result<(), String> {
 
 pub fn load(dir: &Path) -> Result<WormholeTypes, String> {
     let path = dir.join(FILE);
-    let text = fs::read_to_string(&path)
-        .map_err(|e| format!("{}: {e}. Unset {} to download it.", path.display(), crate::sde_update::SKIP_ENV))?;
+    let text =
+        fs::read_to_string(&path).map_err(|e| format!("{}: {e}. Unset {} to download it.", path.display(), crate::sde_update::SKIP_ENV))?;
     serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
 }
 
@@ -106,14 +106,20 @@ mod tests {
     use super::*;
 
     const TYPES: &str = concat!(
-        r#"{"_key": 30677, "groupID": 988, "name": {"en": "Wormhole B274"}, "published": false}"#, "\n",
-        r#"{"_key": 30831, "groupID": 988, "name": {"en": "Wormhole K162"}, "published": false}"#, "\n",
-        r#"{"_key": 587, "groupID": 25, "name": {"en": "Rifter"}, "published": true, "mass": 1067000.0}"#, "\n",
-        r#"{"_key": 99999, "groupID": 988, "name": {"en": "Wormhole Beacon"}, "published": false}"#, "\n",
+        r#"{"_key": 30677, "groupID": 988, "name": {"en": "Wormhole B274"}, "published": false}"#,
+        "\n",
+        r#"{"_key": 30831, "groupID": 988, "name": {"en": "Wormhole K162"}, "published": false}"#,
+        "\n",
+        r#"{"_key": 587, "groupID": 25, "name": {"en": "Rifter"}, "published": true, "mass": 1067000.0}"#,
+        "\n",
+        r#"{"_key": 99999, "groupID": 988, "name": {"en": "Wormhole Beacon"}, "published": false}"#,
+        "\n",
     );
     const DOGMA: &str = concat!(
-        r#"{"_key": 30677, "dogmaAttributes": [{"attributeID": 1381, "value": 7.0}, {"attributeID": 1382, "value": 1440.0}, {"attributeID": 1383, "value": 2000000000.0}, {"attributeID": 1384, "value": 0.0}, {"attributeID": 1385, "value": 375000000.0}]}"#, "\n",
-        r#"{"_key": 99999, "dogmaAttributes": [{"attributeID": 1385, "value": 5.0}]}"#, "\n",
+        r#"{"_key": 30677, "dogmaAttributes": [{"attributeID": 1381, "value": 7.0}, {"attributeID": 1382, "value": 1440.0}, {"attributeID": 1383, "value": 2000000000.0}, {"attributeID": 1384, "value": 0.0}, {"attributeID": 1385, "value": 375000000.0}]}"#,
+        "\n",
+        r#"{"_key": 99999, "dogmaAttributes": [{"attributeID": 1385, "value": 5.0}]}"#,
+        "\n",
     );
 
     #[test]

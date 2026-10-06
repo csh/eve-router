@@ -2,10 +2,10 @@ mod tui;
 
 use clap::Parser;
 use router_core::config::{self, Config};
-use router_core::labels::{Shortcuts, jumps_label, link_label, route_extras};
+use router_core::labels::{Shortcuts, route_text};
 use router_core::route::Mode;
 use router_core::settings::{Settings, resolve_all, split_systems};
-use router_core::universe::{Universe, display_sec};
+use router_core::universe::Universe;
 use router_core::{startup, wormhole};
 use std::io::Write;
 use std::path::PathBuf;
@@ -92,12 +92,7 @@ fn run() -> Result<(), String> {
     let systems = split_systems(&cli.systems.join(","));
 
     if cli.print {
-        eprintln!(
-            "Loaded {} systems in {} ms. Bridges: {}",
-            uni.graph.node_count(),
-            load_time.as_millis(),
-            report.summary()
-        );
+        eprintln!("Loaded {} systems in {} ms. Bridges: {}", uni.graph.node_count(), load_time.as_millis(), report.summary());
         if !all.is_empty() {
             let now = wormhole::now();
             let from: Vec<String> =
@@ -141,18 +136,7 @@ fn print_routes(out: &mut impl Write, uni: &Universe, settings: &Settings, names
     let routes = router.routes(&nodes, settings.top)?;
     eprintln!("Found {} routes in {} ms", routes.len(), started.elapsed().as_millis());
     for (i, route) in routes.iter().enumerate() {
-        writeln!(out, "
-#{} {}{}", i + 1, jumps_label(route.jumps), route_extras(route)).map_err(io)?;
-        for (step, &node) in route.path.nodes.iter().enumerate() {
-            let sys = uni.system(node);
-            let via = match step.checked_sub(1).map(|s| route.path.edges[s]) {
-                Some(e) => link_label(uni, &settings.rules, e, now),
-                None => String::new(),
-            };
-            let stop = route.stop_at(step).map(|s| s.label()).unwrap_or_default();
-            writeln!(out, "  {:>3} {stop:<11} {:<20} {:>4.1} {:<20} {via}", step, sys.name, display_sec(sys.security), sys.region)
-                .map_err(io)?;
-        }
+        writeln!(out, "\n{}", route_text(uni, &settings.rules, i, route, now)).map_err(io)?;
     }
     Ok(())
 }
@@ -178,9 +162,12 @@ mod tests {
     fn cli_help_and_version_snapshot() {
         use clap::CommandFactory;
         let mut cmd = Cli::command();
-        let text = format!("{}
-{}", cmd.render_version(), cmd.render_long_help());
+        let text = format!(
+            "{}
+{}",
+            cmd.render_version(),
+            cmd.render_long_help()
+        );
         router_core::assert_snapshot!("cli_help", text);
     }
-
 }

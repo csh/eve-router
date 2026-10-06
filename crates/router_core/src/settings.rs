@@ -1,6 +1,6 @@
 //! The route settings, and the system names of the user input.
 
-use crate::ansiblex::{BridgeRules, find_hull};
+use crate::ansiblex::{BridgeRules, find_hull, table};
 use crate::config::{self, Config};
 use crate::route::{Mode, Router};
 use crate::universe::Universe;
@@ -54,6 +54,18 @@ impl Settings {
         Router::new(uni, self.mode, self.wormholes, self.hubs, bridges, self.rules, now + self.min_life * 60)
     }
 
+    /// Copy the settings to `cfg`, for `Config::save`. The other fields of `cfg` stay.
+    pub fn store(&self, uni: &Universe, cfg: &mut Config) {
+        cfg.capital = self.rules.capital.map(|n| uni.name(n).to_string());
+        cfg.hull = self.rules.hull.map(|h| h.name.clone());
+        cfg.max_cap_tj = self.rules.max_cap;
+        cfg.mode = Some(self.mode);
+        cfg.optimize = self.optimize;
+        cfg.top = Some(self.top);
+        cfg.eve_scout = self.hubs;
+        cfg.favourites = Some(self.favourites.iter().map(|&n| uni.name(n).to_string()).collect());
+    }
+
     /// The waypoints in the order to route them, and a status text if the order changed.
     pub fn order(&self, router: &Router, nodes: &[NodeIndex]) -> Result<(Vec<NodeIndex>, Option<String>), String> {
         if !self.optimize {
@@ -68,14 +80,23 @@ impl Settings {
     }
 }
 
-/// Split the system arguments. A name can hold a space, for example "New Caldari".
+/// Split the system arguments, or a pasted list. The separators are ">", ",", ";", a tab and a
+/// line break. A name can hold a space, for example "New Caldari".
 pub fn split_systems(input: &str) -> Vec<String> {
-    input
-        .split(['>', ','])
-        .map(str::trim)
-        .filter(|s| !s.is_empty())
-        .map(String::from)
-        .collect()
+    input.split(['>', ',', ';', '\t', '\n', '\r']).map(str::trim).filter(|s| !s.is_empty()).map(String::from).collect()
+}
+
+/// The max TJ for one bridge jump, from a text field. An empty text gives no limit.
+pub fn parse_max_cap(text: &str) -> Result<Option<f32>, String> {
+    let value = text.trim();
+    if value.is_empty() {
+        return Ok(None);
+    }
+    let max = table().gate_capacitor_tj;
+    match value.parse::<f32>() {
+        Ok(tj) if (0.0..=max).contains(&tj) => Ok(Some(tj)),
+        _ => Err(format!("\"{value}\" is not a TJ value. Give a number from 0 to {max}, or leave it empty for no limit.")),
+    }
 }
 
 pub fn resolve_all(uni: &Universe, names: &[String]) -> Result<Vec<NodeIndex>, String> {
@@ -126,7 +147,34 @@ mod tests {
     }
 
     #[test]
+    fn max_cap_text() {
+        assert_eq!(parse_max_cap(" "), Ok(None));
+        assert_eq!(parse_max_cap("36.5"), Ok(Some(36.5)));
+        assert!(parse_max_cap("-1").unwrap_err().contains("is not a TJ value"));
+        assert!(parse_max_cap("lots").is_err());
+    }
+
+    #[test]
+    fn store_copies_settings_to_config() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, Some("black-ops"));
+        s.favourites = vec![uni.exact("Jita").unwrap()];
+        s.rules.max_cap = Some(36.5);
+        let mut cfg = Config { min_life_min: Some(30), ..Config::default() };
+        s.store(&uni, &mut cfg);
+        assert_eq!(cfg.capital.as_deref(), Some("JK-Q77"));
+        assert_eq!(cfg.hull.as_deref(), Some("Black Ops"));
+        assert_eq!(cfg.max_cap_tj, Some(36.5));
+        assert_eq!(cfg.mode, Some(Mode::Shortest));
+        assert_eq!(cfg.top, Some(3));
+        assert_eq!(cfg.favourites, Some(vec!["Jita".to_string()]));
+        // A field that the settings do not hold stays.
+        assert_eq!(cfg.min_life_min, Some(30));
+    }
+
+    #[test]
     fn split_keeps_spaces_in_names() {
         assert_eq!(split_systems("Jita > New Caldari, Amarr"), vec!["Jita", "New Caldari", "Amarr"]);
+        assert_eq!(split_systems("Jita\r\n New Caldari \n\nAmarr;Rens\tHek\n"), vec!["Jita", "New Caldari", "Amarr", "Rens", "Hek"]);
     }
 }

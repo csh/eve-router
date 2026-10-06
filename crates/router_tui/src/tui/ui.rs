@@ -1,46 +1,28 @@
 //! Drawing.
 
-use super::app::{App, Focus, Popup, PromptKind, SettingsRow, hull_rows};
-use router_core::labels::{jumps_label, link_label, route_extras};
-use router_core::route::Mode;
-use router_core::universe::display_sec;
+use super::app::{App, Focus, Popup, PromptKind, SettingsRow};
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
 use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Clear, List, ListItem, Paragraph, Row, Table};
+use router_core::ansiblex::hull_rows;
+use router_core::labels::{hull_label, jumps_label, link_label, on_off, route_extras, sec_rgb};
+use router_core::route::Mode;
+use router_core::universe::display_sec;
 
 /// The in-game security colors.
 pub fn sec_color(security: f64) -> Color {
-    let rgb = match (display_sec(security) * 10.0).round() as i32 {
-        10.. => 0x2FEFEF,
-        9 => 0x48F0C0,
-        8 => 0x00EF47,
-        7 => 0x00F000,
-        6 => 0x8FEF2F,
-        5 => 0xEFEF00,
-        4 => 0xD77700,
-        3 => 0xF06000,
-        2 => 0xF04800,
-        1 => 0xD73000,
-        _ => 0xF00000,
-    };
-    Color::from_u32(rgb)
+    Color::from_u32(sec_rgb(security))
 }
 
 /// The background of a stop row in the route table.
 const STOP_BG: Color = Color::Indexed(236);
 
-fn on_off(on: bool) -> &'static str {
-    if on { "on" } else { "off" }
-}
-
 pub fn draw(frame: &mut Frame, app: &mut App) {
-    let [main, status, help] =
-        Layout::vertical([Constraint::Min(10), Constraint::Length(1), Constraint::Length(2)]).areas(frame.area());
+    let [main, status, help] = Layout::vertical([Constraint::Min(10), Constraint::Length(1), Constraint::Length(2)]).areas(frame.area());
     let [left, sidebar] = Layout::horizontal([Constraint::Min(40), Constraint::Length(24)]).areas(main);
-    let [input, list, detail] =
-        Layout::vertical([Constraint::Length(3), Constraint::Percentage(30), Constraint::Min(5)]).areas(left);
+    let [input, list, detail] = Layout::vertical([Constraint::Length(3), Constraint::Percentage(30), Constraint::Min(5)]).areas(left);
 
     draw_input(frame, app, input);
     draw_routes(frame, app, list);
@@ -161,11 +143,7 @@ fn help_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             ("Shift+↑↓", "Move favourite".into()),
             ("Esc", "Save and close".into()),
         ],
-        Focus::Input => vec![
-            ("Enter", "Find routes".into()),
-            ("Tab", "Complete system name".into()),
-            ("Esc", "Leave the input".into()),
-        ],
+        Focus::Input => vec![("Enter", "Find routes".into()), ("Tab", "Complete system name".into()), ("Esc", "Leave the input".into())],
         Focus::Detail => vec![
             ("↑↓", "Move".into()),
             ("PgUp/PgDn", "Page".into()),
@@ -203,14 +181,6 @@ fn help_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         line.push_span(Span::raw(label).gray());
     }
     lines
-}
-
-/// A ship shows its group, for example "Sin (Black Ops)". A group shows only its name.
-fn hull_label(h: router_core::ansiblex::HullClass) -> String {
-    match h.type_id {
-        Some(_) => format!("{} ({})", h.name, h.group),
-        None => h.name.clone(),
-    }
 }
 
 fn centered(area: Rect, width: u16, height: u16) -> Rect {
@@ -359,12 +329,8 @@ fn draw_settings(frame: &mut Frame, app: &mut App) {
                 SettingsRow::Capital => {
                     ("Alliance capital", rules.capital.map_or("none (jump bridges off)".into(), |n| app.uni.name(n).to_string()))
                 }
-                SettingsRow::MaxCap => {
-                    ("Max TJ per bridge jump", rules.max_cap.map_or("no limit".into(), |m| format!("{m} TJ")))
-                }
-                SettingsRow::Favourite(i) => {
-                    (if i == 0 { "Favourites" } else { "" }, app.uni.name(app.settings.favourites[i]).to_string())
-                }
+                SettingsRow::MaxCap => ("Max TJ per bridge jump", rules.max_cap.map_or("no limit".into(), |m| format!("{m} TJ"))),
+                SettingsRow::Favourite(i) => (if i == 0 { "Favourites" } else { "" }, app.uni.name(app.settings.favourites[i]).to_string()),
                 SettingsRow::NexumUrl => ("Nexum URL", app.nexum_value(*row)),
                 SettingsRow::NexumKey => ("Nexum key", app.nexum_value(*row)),
                 SettingsRow::NexumMap => ("Nexum map", app.nexum_value(*row)),

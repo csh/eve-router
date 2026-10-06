@@ -83,17 +83,10 @@ pub fn load(dir: &Path) -> Result<SdeData, String> {
             )
         },
     );
-    Ok(SdeData {
-        systems: systems?,
-        stargates: stargates?,
-        regions: regions?,
-        build: build_number(dir),
-    })
+    Ok(SdeData { systems: systems?, stargates: stargates?, regions: regions?, build: build_number(dir) })
 }
 
 /// The build number from `_sde.jsonl`. A missing file gives `None`.
 pub fn build_number(dir: &Path) -> Option<u32> {
-    read_jsonl::<SdeInfo>(&dir.join("_sde.jsonl"))
-        .ok()
-        .and_then(|v| v.first().map(|i| i.build_number))
+    read_jsonl::<SdeInfo>(&dir.join("_sde.jsonl")).ok().and_then(|v| v.first().map(|i| i.build_number))
 }

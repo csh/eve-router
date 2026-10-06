@@ -96,10 +96,8 @@ pub fn check_snapshot(manifest_dir: &Path, name: &str, text: &str) {
 pub fn serve(status: &str, body: &str, delay: Duration) -> (String, Receiver<String>) {
     let listener = TcpListener::bind("127.0.0.1:0").unwrap();
     let url = format!("http://{}", listener.local_addr().unwrap());
-    let response = format!(
-        "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-        body.len()
-    );
+    let response =
+        format!("HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}", body.len());
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         let Ok((mut stream, _)) = listener.accept() else { return };

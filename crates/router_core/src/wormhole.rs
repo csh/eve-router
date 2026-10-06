@@ -143,24 +143,19 @@ impl Wormhole {
     /// The other fields start as `None`.
     pub fn new(x: u32, y: u32, sig_x: Option<String>, sig_y: Option<String>, source: SourceId) -> Wormhole {
         let ((a, sig_a), (b, sig_b)) = if x <= y { ((x, sig_x), (y, sig_y)) } else { ((y, sig_y), (x, sig_x)) };
-        Wormhole {
-            a,
-            b,
-            size: None,
-            max_jump_kg: None,
-            mass: None,
-            expiry: None,
-            wh_type: None,
-            sig_a,
-            sig_b,
-            sources: vec![source],
-        }
+        Wormhole { a, b, size: None, max_jump_kg: None, mass: None, expiry: None, wh_type: None, sig_a, sig_b, sources: vec![source] }
     }
 
     /// The three letters of the signature in the system `id`, if `id` is an end and a scout
     /// gave the signature. A route uses the signature in the system that the jump leaves.
     pub fn sig_at(&self, id: u32) -> Option<String> {
-        let sig = if id == self.a { &self.sig_a } else if id == self.b { &self.sig_b } else { &None };
+        let sig = if id == self.a {
+            &self.sig_a
+        } else if id == self.b {
+            &self.sig_b
+        } else {
+            &None
+        };
         sig.as_deref().and_then(sig_letters)
     }
 
@@ -486,7 +481,8 @@ pub mod tests {
     #[test]
     fn merge_keeps_holes_with_other_signatures() {
         let first = Wormhole { sig_a: Some("ABC-123".into()), sig_b: Some("DEF-456".into()), ..hole(1, 2) };
-        let second = Wormhole { sig_a: Some("XYZ-789".into()), sig_b: Some("DEF-456".into()), sources: vec![SourceId::EveScout], ..hole(1, 2) };
+        let second =
+            Wormhole { sig_a: Some("XYZ-789".into()), sig_b: Some("DEF-456".into()), sources: vec![SourceId::EveScout], ..hole(1, 2) };
         let merged = merge(&[data(SourceId::Nexum, vec![first]), data(SourceId::EveScout, vec![second])], 0);
         assert_eq!(merged.len(), 2);
     }
@@ -495,7 +491,8 @@ pub mod tests {
     fn merge_compares_the_three_letters_of_known_ends() {
         // Nexum knows only the signature at a, as "abc". EVE-Scout knows both ends.
         let nexum = Wormhole { sig_a: Some("abc".into()), ..hole(1, 2) };
-        let scout = Wormhole { sig_a: Some("ABC-123".into()), sig_b: Some("DEF-456".into()), sources: vec![SourceId::EveScout], ..hole(1, 2) };
+        let scout =
+            Wormhole { sig_a: Some("ABC-123".into()), sig_b: Some("DEF-456".into()), sources: vec![SourceId::EveScout], ..hole(1, 2) };
         let merged = merge(&[data(SourceId::Nexum, vec![nexum]), data(SourceId::EveScout, vec![scout.clone()])], 0);
         assert_eq!(merged.len(), 1);
         // The first source keeps its value. The second source fills the unknown end.

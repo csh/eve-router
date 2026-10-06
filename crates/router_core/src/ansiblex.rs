@@ -115,6 +115,16 @@ pub fn find_hull(name: &str) -> Option<HullClass> {
         .or_else(|| t.groups.iter().find(|h| h.name.eq_ignore_ascii_case(name) || h.key().eq_ignore_ascii_case(name)))
 }
 
+/// The hull picker rows: "none", then each ship whose name or group contains `filter`.
+pub fn hull_rows(filter: &str) -> Vec<Option<HullClass>> {
+    let filter = filter.to_lowercase();
+    std::iter::once(None)
+        .chain(
+            table().ships.iter().filter(|h| h.name.to_lowercase().contains(&filter) || h.group.to_lowercase().contains(&filter)).map(Some),
+        )
+        .collect()
+}
+
 /// The zone and the cost multiplier for a distance from the capital.
 pub fn zone(ly: f64) -> (u8, f32) {
     match ly {
@@ -182,11 +192,7 @@ mod tests {
 
     fn rules(hull: Option<&str>, max_cap: Option<f32>) -> BridgeRules {
         let uni = universe();
-        BridgeRules {
-            capital: uni.exact("JK-Q77"),
-            hull: hull.map(|h| find_hull(h).unwrap()),
-            max_cap,
-        }
+        BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| find_hull(h).unwrap()), max_cap }
     }
 
     #[test]
@@ -222,17 +228,46 @@ mod tests {
 
     /// The table from the blog post, in TJ. The SDE values must match it.
     const BLOG: &[(&str, f32)] = &[
-        ("Capsule", 1.0), ("Exhumer", 1.0), ("Expedition Frigate", 1.0), ("Freighter", 1.0),
-        ("Hauler", 1.0), ("Jump Freighter", 1.0), ("Mining Barge", 1.0), ("Prototype Exploration Ship", 1.0),
-        ("Shuttle", 1.0), ("Special Edition Yachts", 1.0), ("Corvette", 1.0), ("Frigate", 4.0),
-        ("Covert Ops", 5.0), ("Destroyer", 6.0), ("Assault Frigate", 7.0), ("Blockade Runner", 7.0),
-        ("Deep Space Transport", 7.0), ("Interceptor", 8.0), ("Interdictor", 8.5), ("Command Destroyer", 9.0),
-        ("Electronic Attack Ship", 9.0), ("Logistics Frigate", 9.0), ("Tactical Destroyer", 9.0),
-        ("Industrial Command Ship", 10.0), ("Cruiser", 10.0), ("Heavy Interdiction Cruiser", 10.5),
-        ("Stealth Bomber", 11.0), ("Force Recon Ship", 11.5), ("Heavy Assault Cruiser", 11.5),
-        ("Combat Recon Ship", 11.5), ("Flag Cruiser", 12.0), ("Logistics", 12.5), ("Strategic Cruiser", 13.0),
-        ("Attack Battlecruiser", 14.0), ("Combat Battlecruiser", 14.5), ("Expedition Command Ship", 15.0),
-        ("Command Ship", 16.5), ("Battleship", 16.5), ("Black Ops", 18.0), ("Marauder", 19.0),
+        ("Capsule", 1.0),
+        ("Exhumer", 1.0),
+        ("Expedition Frigate", 1.0),
+        ("Freighter", 1.0),
+        ("Hauler", 1.0),
+        ("Jump Freighter", 1.0),
+        ("Mining Barge", 1.0),
+        ("Prototype Exploration Ship", 1.0),
+        ("Shuttle", 1.0),
+        ("Special Edition Yachts", 1.0),
+        ("Corvette", 1.0),
+        ("Frigate", 4.0),
+        ("Covert Ops", 5.0),
+        ("Destroyer", 6.0),
+        ("Assault Frigate", 7.0),
+        ("Blockade Runner", 7.0),
+        ("Deep Space Transport", 7.0),
+        ("Interceptor", 8.0),
+        ("Interdictor", 8.5),
+        ("Command Destroyer", 9.0),
+        ("Electronic Attack Ship", 9.0),
+        ("Logistics Frigate", 9.0),
+        ("Tactical Destroyer", 9.0),
+        ("Industrial Command Ship", 10.0),
+        ("Cruiser", 10.0),
+        ("Heavy Interdiction Cruiser", 10.5),
+        ("Stealth Bomber", 11.0),
+        ("Force Recon Ship", 11.5),
+        ("Heavy Assault Cruiser", 11.5),
+        ("Combat Recon Ship", 11.5),
+        ("Flag Cruiser", 12.0),
+        ("Logistics", 12.5),
+        ("Strategic Cruiser", 13.0),
+        ("Attack Battlecruiser", 14.0),
+        ("Combat Battlecruiser", 14.5),
+        ("Expedition Command Ship", 15.0),
+        ("Command Ship", 16.5),
+        ("Battleship", 16.5),
+        ("Black Ops", 18.0),
+        ("Marauder", 19.0),
         ("Capital Industrial Ship", 19.0),
     ];
 
@@ -247,13 +282,9 @@ mod tests {
 
     #[test]
     fn sde_bans() {
-        let mut banned: Vec<&str> =
-            table().groups.iter().filter(|h| h.base_tj.is_none()).map(|h| h.name.as_str()).collect();
+        let mut banned: Vec<&str> = table().groups.iter().filter(|h| h.base_tj.is_none()).map(|h| h.name.as_str()).collect();
         banned.sort();
-        assert_eq!(
-            banned,
-            ["Carrier", "Command Carrier", "Dreadnought", "Force Auxiliary", "Lancer Dreadnought", "Supercarrier", "Titan"]
-        );
+        assert_eq!(banned, ["Carrier", "Command Carrier", "Dreadnought", "Force Auxiliary", "Lancer Dreadnought", "Supercarrier", "Titan"]);
         // The Rorqual can use a bridge, but the Avatar cannot.
         assert_eq!(find_hull("Rorqual").unwrap().base_tj, Some(19.0));
         assert!(find_hull("Avatar").unwrap().ban.is_some());

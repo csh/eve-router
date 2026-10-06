@@ -5,10 +5,10 @@
 //! from the end of the build zip, and fetches only the entries it needs with HTTP
 //! range requests. This downloads about 1.8 MB instead of the full 99 MB zip.
 
+use crate::ships;
 use flate2::Crc;
 use flate2::read::DeflateDecoder;
 use rayon::prelude::*;
-use crate::ships;
 use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
@@ -27,9 +27,16 @@ const BASE_URL: &str = "https://developers.eveonline.com/static-data/tranquility
 pub enum Outcome {
     Skipped,
     UpToDate,
-    Updated { from: Option<u32>, to: u32, bytes: u64 },
+    Updated {
+        from: Option<u32>,
+        to: u32,
+        bytes: u64,
+    },
     /// The check failed, but a local SDE exists. The router uses it.
-    Offline { local: u32, error: String },
+    Offline {
+        local: u32,
+        error: String,
+    },
 }
 
 impl Outcome {
@@ -45,9 +52,7 @@ impl Outcome {
                     None => format!("Downloaded SDE build {to} ({mb:.1} MB) to {}", dir.display()),
                 })
             }
-            Outcome::Offline { local, error } => {
-                Some(format!("Cannot check for a new SDE. Using local build {local}. Cause: {error}"))
-            }
+            Outcome::Offline { local, error } => Some(format!("Cannot check for a new SDE. Using local build {local}. Cause: {error}")),
             Outcome::Skipped | Outcome::UpToDate => None,
         }
     }
@@ -95,11 +100,7 @@ fn agent() -> ureq::Agent {
 
 fn latest_build(agent: &ureq::Agent) -> Result<u32, String> {
     let url = format!("{BASE_URL}/latest.jsonl");
-    let text = agent
-        .get(&url)
-        .call()
-        .and_then(|mut r| r.body_mut().read_to_string())
-        .map_err(|e| format!("{url}: {e}"))?;
+    let text = agent.get(&url).call().and_then(|mut r| r.body_mut().read_to_string()).map_err(|e| format!("{url}: {e}"))?;
     text.lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find(|v| v["_key"] == "sde")
@@ -130,12 +131,7 @@ impl RangeSource for HttpSource {
 
     fn read(&self, start: u64, len: u64) -> Result<Vec<u8>, String> {
         let range = format!("bytes={start}-{}", start + len - 1);
-        let mut resp = self
-            .agent
-            .get(&self.url)
-            .header("Range", &range)
-            .call()
-            .map_err(|e| format!("{}: {e}", self.url))?;
+        let mut resp = self.agent.get(&self.url).header("Range", &range).call().map_err(|e| format!("{}: {e}", self.url))?;
         // 206 Partial Content. A 200 is the full 99 MB zip, so stop.
         if resp.status().as_u16() != 206 {
             return Err(format!("{}: the server ignored the range request ({})", self.url, resp.status()));
@@ -251,10 +247,8 @@ pub(crate) fn download(src: &dyn RangeSource, dir: &Path) -> Result<u64, String>
         .map(|&f| entries.iter().find(|e| e.name == f).ok_or(format!("{f} is not in the SDE zip")))
         .collect::<Result<_, _>>()?;
     // The entries are independent, so fetch them at the same time.
-    let mut files: HashMap<&str, Vec<u8>> = wanted
-        .par_iter()
-        .map(|e| extract(src, e).map(|data| (e.name.as_str(), data)))
-        .collect::<Result<_, _>>()?;
+    let mut files: HashMap<&str, Vec<u8>> =
+        wanted.par_iter().map(|e| extract(src, e).map(|data| (e.name.as_str(), data))).collect::<Result<_, _>>()?;
 
     let build = files.get("_sde.jsonl").and_then(|d| build_from(d));
     let source = |name| files.get(name).map(Vec::as_slice).unwrap_or_default();
@@ -308,8 +302,7 @@ mod tests {
         let dir = std::env::temp_dir().join("eve-router-test-sde-update");
         let _ = fs::remove_dir_all(&dir);
         download(&FIXTURE.to_vec(), &dir).unwrap();
-        let mut names: Vec<String> =
-            fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
+        let mut names: Vec<String> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         names.sort();
         assert_eq!(
             names,

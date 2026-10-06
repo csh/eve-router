@@ -163,7 +163,8 @@ mod tests {
 
     /// The J377 only. The other types in the fixture are not known, so they use the ship size.
     fn types() -> WormholeTypes {
-        let j377 = WormholeType { code: "J377".into(), max_jump_kg: 62_000_000.0, max_life_h: 16.0, total_mass_kg: None, target_class: None };
+        let j377 =
+            WormholeType { code: "J377".into(), max_jump_kg: 62_000_000.0, max_life_h: 16.0, total_mass_kg: None, target_class: None };
         WormholeTypes { build: None, types: vec![j377] }
     }
 

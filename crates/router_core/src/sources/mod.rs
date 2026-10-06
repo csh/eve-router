@@ -68,12 +68,7 @@ pub fn get_with(agent: &ureq::Agent, url: &str, key: Option<&str>) -> Result<Str
         request = request.header("Authorization", &format!("Bearer {key}"));
     }
     match request.call() {
-        Ok(mut resp) => resp
-            .body_mut()
-            .with_config()
-            .limit(MAX_BODY)
-            .read_to_string()
-            .map_err(|e| FetchError::Offline(e.to_string())),
+        Ok(mut resp) => resp.body_mut().with_config().limit(MAX_BODY).read_to_string().map_err(|e| FetchError::Offline(e.to_string())),
         Err(ureq::Error::StatusCode(401 | 403)) => Err(FetchError::Auth),
         Err(ureq::Error::StatusCode(404)) => Err(FetchError::NotFound),
         Err(e) => Err(FetchError::Offline(e.to_string())),
@@ -85,8 +80,7 @@ pub fn get_with(agent: &ureq::Agent, url: &str, key: Option<&str>) -> Result<Str
 /// cache directory, use a `cache` directory next to the config file.
 pub fn cache_path(source: SourceId, cfg_path: &Path) -> PathBuf {
     let name = format!("{}.json", source.file_stem());
-    dirs::cache_dir()
-        .map_or_else(|| cfg_path.with_file_name("cache").join(&name), |dir| dir.join(crate::config::APP_DIR).join(&name))
+    dirs::cache_dir().map_or_else(|| cfg_path.with_file_name("cache").join(&name), |dir| dir.join(crate::config::APP_DIR).join(&name))
 }
 
 /// Read a cache file. A missing, corrupt or old-format file gives `None`.
@@ -155,11 +149,9 @@ mod tests {
 
     #[test]
     fn status_codes_give_fetch_errors() {
-        for (status, expected) in [
-            ("401 Unauthorized", FetchError::Auth),
-            ("403 Forbidden", FetchError::Auth),
-            ("404 Not Found", FetchError::NotFound),
-        ] {
+        for (status, expected) in
+            [("401 Unauthorized", FetchError::Auth), ("403 Forbidden", FetchError::Auth), ("404 Not Found", FetchError::NotFound)]
+        {
             let (url, _) = serve(status, "{}", Duration::ZERO);
             assert_eq!(get(&url, Some("k"), TIMEOUT), Err(expected), "{status}");
         }
@@ -177,7 +169,10 @@ mod tests {
     fn map_list_and_bad_json() {
         let (url, request) = serve("200 OK", MAPS, Duration::ZERO);
         let maps = nexum::fetch_maps(&nexum(&url), TIMEOUT).unwrap();
-        assert_eq!(maps, vec![nexum::MapInfo { id: "m1".into(), name: "Home".into() }, nexum::MapInfo { id: "m2".into(), name: "Scanning".into() }]);
+        assert_eq!(
+            maps,
+            vec![nexum::MapInfo { id: "m1".into(), name: "Home".into() }, nexum::MapInfo { id: "m2".into(), name: "Scanning".into() }]
+        );
         assert!(request.recv().unwrap().starts_with("GET /api/v1/maps HTTP/1.1"));
         let (url, _) = serve("200 OK", "not json", Duration::ZERO);
         assert!(matches!(nexum::fetch_maps(&nexum(&url), TIMEOUT), Err(FetchError::Offline(_))));

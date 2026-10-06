@@ -113,6 +113,18 @@ pub struct Config {
     pub eve_scout: Hubs,
 }
 
+/// The Nexum URL from a text field. An empty text gives no URL. The URL loses a final "/".
+pub fn parse_nexum_url(text: &str) -> Result<Option<String>, String> {
+    let value = text.trim();
+    if value.is_empty() {
+        Ok(None)
+    } else if value.starts_with("https://") || value.starts_with("http://") {
+        Ok(Some(value.trim_end_matches('/').to_string()))
+    } else {
+        Err(format!("\"{value}\" is not a URL. Give a URL that starts with https://."))
+    }
+}
+
 impl Config {
     /// Read the file. A missing file gives the default config.
     pub fn load(path: &Path) -> Result<Config, String> {
@@ -167,7 +179,11 @@ mod tests {
             mode: Some(Mode::PreferHighsec),
             optimize: true,
             top: Some(3),
-            nexum: NexumConfig { url: Some("https://nexum.example".into()), key: Some(ApiKey("nxm_key".into())), map_id: Some("m1".into()) },
+            nexum: NexumConfig {
+                url: Some("https://nexum.example".into()),
+                key: Some(ApiKey("nxm_key".into())),
+                map_id: Some("m1".into()),
+            },
             eve_scout: Hubs { thera: false, turnur: true },
         };
         let text = serde_json::to_string_pretty(&cfg).unwrap();
@@ -244,6 +260,13 @@ mod tests {
             assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         }
         fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn nexum_url_text() {
+        assert_eq!(parse_nexum_url(""), Ok(None));
+        assert_eq!(parse_nexum_url(" https://nexum.example/ "), Ok(Some("https://nexum.example".into())));
+        assert!(parse_nexum_url("ftp://x").unwrap_err().contains("is not a URL"));
     }
 
     #[test]

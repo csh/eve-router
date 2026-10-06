@@ -8,10 +8,12 @@ name = "eve-router-egui"
 path = "src/main.rs"
 
 [dependencies]
-eframe = "0.36.2"
+eframe = { version = "0.36.2", default-features = false, features = ["glow", "default_fonts", "accesskit", "links", "wayland", "x11"] }
 egui = "0.36.2"
+egui_extras = "0.36.2"
 mimalloc.workspace = true
 petgraph.workspace = true
+rayon.workspace = true
 router_core.workspace = true
 
 [dev-dependencies]

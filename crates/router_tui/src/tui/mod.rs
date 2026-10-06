@@ -11,14 +11,7 @@ use router_core::settings::Settings;
 use router_core::universe::Universe;
 use std::path::PathBuf;
 
-pub fn run(
-    uni: &Universe,
-    settings: Settings,
-    cfg: Config,
-    cfg_path: PathBuf,
-    input: String,
-    shortcuts: Shortcuts,
-) -> Result<(), String> {
+pub fn run(uni: &Universe, settings: Settings, cfg: Config, cfg_path: PathBuf, input: String, shortcuts: Shortcuts) -> Result<(), String> {
     let mut app = App::new(uni, settings, cfg, cfg_path, input, shortcuts);
     let mut terminal = ratatui::init();
     let result = (|| -> std::io::Result<()> {
@@ -45,11 +38,11 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use router_core::ansiblex::{BridgeRules, find_hull};
-    use router_core::route::Mode;
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
+    use router_core::ansiblex::{BridgeRules, find_hull};
+    use router_core::route::Mode;
 
     #[test]
     fn draws_and_handles_keys() {
@@ -66,7 +59,14 @@ mod tests {
             min_life: 0,
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
         };
-        let mut app = App::new(&uni, settings, Config::default(), std::env::temp_dir().join("eve-router-test.json"), "Jita > UALX-3".into(), Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default()));
+        let mut app = App::new(
+            &uni,
+            settings,
+            Config::default(),
+            std::env::temp_dir().join("eve-router-test.json"),
+            "Jita > UALX-3".into(),
+            Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default()),
+        );
         assert_eq!(app.routes.len(), 3, "{}", app.status);
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         let keys = [
@@ -148,8 +148,10 @@ mod tests {
         let rows: Vec<String> = (area.top()..area.bottom())
             .map(|y| (area.left()..area.right()).map(|x| buffer[(x, y)].symbol()).collect::<String>().trim_end().to_string())
             .collect();
-        rows.join("
-") + "
+        rows.join(
+            "
+",
+        ) + "
 "
     }
 
@@ -195,9 +197,9 @@ mod tests {
 
     #[test]
     fn hub_counts_and_switches() {
+        use ratatui::style::Color;
         use router_core::test_support::hole;
         use router_core::wormhole::{THERA, TURNUR};
-        use ratatui::style::Color;
         let mut uni = Universe::from_sde(router_core::sde::load(&router_core::test_support::sde_dir()).unwrap());
         uni.add_wormholes(&[hole(30000142, THERA), hole(30002187, THERA), hole(TURNUR, 30002053)]);
         let settings = Settings {

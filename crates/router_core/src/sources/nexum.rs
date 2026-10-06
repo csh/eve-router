@@ -142,7 +142,8 @@ pub fn fetch_sigs(cfg: &NexumConfig, ids: &[String], timeout: Duration) -> (Syst
             scope.spawn(|| {
                 while let Some(id) = ids.get(next.fetch_add(1, Ordering::Relaxed)) {
                     let url = format!("{map}/systems/{id}/signatures");
-                    let sigs = sources::get_with(&agent, &url, Some(&key.0)).ok().and_then(|t| serde_json::from_str::<Vec<NexumSig>>(&t).ok());
+                    let sigs =
+                        sources::get_with(&agent, &url, Some(&key.0)).ok().and_then(|t| serde_json::from_str::<Vec<NexumSig>>(&t).ok());
                     results.lock().unwrap().push((id.clone(), sigs));
                 }
             });
@@ -271,7 +272,13 @@ fn end_sig(link: Option<&str>, from: &str, to: Option<&str>, sigs: &SystemSigs, 
 /// Convert a Nexum map. `known` says if an EVE system ID is in the SDE.
 /// `sigs` gives the signatures of each system. A map file has none.
 /// The converter never reads or changes the graph.
-pub fn convert(map: &NexumMap, sigs: &SystemSigs, known: impl Fn(u32) -> bool, types: &WormholeTypes, fetched_at: u64) -> (SourceData, NexumReport) {
+pub fn convert(
+    map: &NexumMap,
+    sigs: &SystemSigs,
+    known: impl Fn(u32) -> bool,
+    types: &WormholeTypes,
+    fetched_at: u64,
+) -> (SourceData, NexumReport) {
     let mut report = NexumReport::default();
     let names: HashMap<&str, &str> = map.systems.iter().filter_map(|s| Some((s.id.as_str(), s.name.as_deref()?))).collect();
     // The number of wormhole connections between each two systems.
@@ -356,7 +363,13 @@ pub enum Pending {
     /// A cache that is less than 5 minutes old. The router sends no request.
     Cache(SourceData),
     /// A fetch on a thread. The cache is the fallback for a failure.
-    Fetch { thread: JoinHandle<Result<Fetched, FetchError>>, started: u64, origin: Option<String>, cache: Option<SourceData>, cache_path: PathBuf },
+    Fetch {
+        thread: JoinHandle<Result<Fetched, FetchError>>,
+        started: u64,
+        origin: Option<String>,
+        cache: Option<SourceData>,
+        cache_path: PathBuf,
+    },
 }
 
 /// The result of the fetch thread: the map, and the signatures of its wormhole ends.
@@ -518,10 +531,7 @@ mod tests {
         assert_eq!(data.fetched_at, FETCHED);
         // typed, k162, critical, eol, badtime.
         assert_eq!(data.holes.len(), 5);
-        assert_eq!(
-            report,
-            NexumReport { placeholders: 1, unknown: vec![39_999_999], missing_end: 1, broken: 1, expired: 2, bad_time: 1 }
-        );
+        assert_eq!(report, NexumReport { placeholders: 1, unknown: vec![39_999_999], missing_end: 1, broken: 1, expired: 2, bad_time: 1 });
         assert_eq!(report.skipped(), 4);
         // No jumpgate, gate or cyno connection: Perimeter-Amarr, Jita-Perimeter and Jita-Hek are not wormholes.
         for (a, b) in [(30000144, 30002187), (30000142, 30000144), (30000142, 30002053)] {
@@ -641,7 +651,12 @@ mod tests {
     fn failed_fetch_uses_an_old_cache() {
         let (url, _) = serve("401 Unauthorized", "{}", Duration::ZERO);
         let path = temp("eve-router-test-stale");
-        let old = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 3600, origin: Some(format!("{url}/api/v1/maps/m1")), holes: Vec::new() };
+        let old = SourceData {
+            source: SourceId::Nexum,
+            fetched_at: FETCHED - 3600,
+            origin: Some(format!("{url}/api/v1/maps/m1")),
+            holes: Vec::new(),
+        };
         crate::sources::write_cache(&path, &old).unwrap();
         let load = finish(start(&cfg(&url), path, FETCHED), |_| true, &types());
         assert_eq!(load.data, Some(old));
@@ -654,7 +669,12 @@ mod tests {
         let (url, request) = serve("200 OK", &body, Duration::ZERO);
         let path = temp("eve-router-test-other-map");
         // A fresh cache, but for map m2.
-        let other = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 60, origin: Some(format!("{url}/api/v1/maps/m2")), holes: Vec::new() };
+        let other = SourceData {
+            source: SourceId::Nexum,
+            fetched_at: FETCHED - 60,
+            origin: Some(format!("{url}/api/v1/maps/m2")),
+            holes: Vec::new(),
+        };
         crate::sources::write_cache(&path, &other).unwrap();
         let pending = start(&cfg(&url), path, FETCHED);
         assert!(matches!(pending, Pending::Fetch { .. }));
@@ -669,7 +689,12 @@ mod tests {
     fn failed_fetch_ignores_a_cache_of_another_map() {
         let (url, _) = serve("404 Not Found", "{}", Duration::ZERO);
         let path = temp("eve-router-test-other-map-fail");
-        let other = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 3600, origin: Some(format!("{url}/api/v1/maps/m2")), holes: Vec::new() };
+        let other = SourceData {
+            source: SourceId::Nexum,
+            fetched_at: FETCHED - 3600,
+            origin: Some(format!("{url}/api/v1/maps/m2")),
+            holes: Vec::new(),
+        };
         crate::sources::write_cache(&path, &other).unwrap();
         let load = finish(start(&cfg(&url), path, FETCHED), |_| true, &types());
         assert_eq!(load.data, None);

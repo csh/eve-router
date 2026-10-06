@@ -1,15 +1,18 @@
 //! The TUI state and the key handling.
 
-use router_core::ansiblex::{HullClass, table};
-use router_core::config::{ApiKey, Config};
-use router_core::sources::{self, nexum::{self, MapInfo}};
-use router_core::labels::Shortcuts;
-use router_core::route::{Mode, Route};
-use router_core::universe::Universe;
-use router_core::settings::{Settings, resolve_all, split_systems};
+use petgraph::graph::NodeIndex;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
-use petgraph::graph::NodeIndex;
+use router_core::ansiblex::{HullClass, hull_rows};
+use router_core::config::{self, ApiKey, Config};
+use router_core::labels::Shortcuts;
+use router_core::route::{Mode, Route};
+use router_core::settings::{Settings, parse_max_cap, resolve_all, split_systems};
+use router_core::sources::{
+    self,
+    nexum::{self, MapInfo},
+};
+use router_core::universe::Universe;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
@@ -49,10 +52,19 @@ pub enum Popup {
     /// Row i is `Mode::ALL[i]`. The last row is "optimize order".
     Mode(ListState),
     /// The rows are `hull_rows(filter)`.
-    Hull { filter: String, state: ListState },
-    Prompt { kind: PromptKind, text: String },
+    Hull {
+        filter: String,
+        state: ListState,
+    },
+    Prompt {
+        kind: PromptKind,
+        text: String,
+    },
     /// The Nexum map list. Row i is `maps[i]`.
-    Maps { maps: Vec<MapInfo>, state: ListState },
+    Maps {
+        maps: Vec<MapInfo>,
+        state: ListState,
+    },
     /// "Loading maps…", while the map list fetch runs.
     Loading,
     /// A message. Any key closes it.
@@ -91,14 +103,7 @@ pub struct App<'a> {
 }
 
 impl<'a> App<'a> {
-    pub fn new(
-        uni: &'a Universe,
-        settings: Settings,
-        cfg: Config,
-        cfg_path: PathBuf,
-        input: String,
-        shortcuts: Shortcuts,
-    ) -> Self {
+    pub fn new(uni: &'a Universe, settings: Settings, cfg: Config, cfg_path: PathBuf, input: String, shortcuts: Shortcuts) -> Self {
         let mut app = App {
             uni,
             settings,
@@ -247,9 +252,9 @@ impl<'a> App<'a> {
         if names.len() > 1 {
             self.status = format!("{} matches: {}", names.len(), names.iter().take(8).copied().collect::<Vec<_>>().join(", "));
         }
-        let common = names.iter().fold(first.len(), |len, n| {
-            first.chars().zip(n.chars()).take_while(|(a, b)| a.eq_ignore_ascii_case(b)).count().min(len)
-        });
+        let common = names
+            .iter()
+            .fold(first.len(), |len, n| first.chars().zip(n.chars()).take_while(|(a, b)| a.eq_ignore_ascii_case(b)).count().min(len));
         Some(first.chars().take(common).collect())
     }
 
@@ -554,31 +559,26 @@ impl<'a> App<'a> {
                     return Some(Popup::Prompt { kind, text });
                 }
             },
-            PromptKind::NexumUrl if value.is_empty() => {
-                self.cfg.nexum.url = None;
-                self.nexum_saved();
-                return None;
-            }
-            PromptKind::NexumUrl if value.starts_with("https://") || value.starts_with("http://") => {
-                self.cfg.nexum.url = Some(value.trim_end_matches('/').to_string());
-                self.nexum_saved();
-                return None;
-            }
-            PromptKind::NexumUrl => {
-                self.status = format!("\"{value}\" is not a URL. Give a URL that starts with https://.");
-                return Some(Popup::Prompt { kind, text });
-            }
+            PromptKind::NexumUrl => match config::parse_nexum_url(value) {
+                Ok(url) => {
+                    self.cfg.nexum.url = url;
+                    self.nexum_saved();
+                    return None;
+                }
+                Err(e) => {
+                    self.status = e;
+                    return Some(Popup::Prompt { kind, text });
+                }
+            },
             PromptKind::NexumKey => {
                 self.cfg.nexum.key = (!value.is_empty()).then(|| ApiKey(value.to_string()));
                 self.nexum_saved();
                 return None;
             }
-            PromptKind::MaxCap if value.is_empty() => self.settings.rules.max_cap = None,
-            PromptKind::MaxCap => match value.parse::<f32>() {
-                Ok(tj) if (0.0..=table().gate_capacitor_tj).contains(&tj) => self.settings.rules.max_cap = Some(tj),
-                _ => {
-                    let max = table().gate_capacitor_tj;
-                    self.status = format!("\"{value}\" is not a TJ value. Give a number from 0 to {max}, or leave it empty for no limit.");
+            PromptKind::MaxCap => match parse_max_cap(value) {
+                Ok(max_cap) => self.settings.rules.max_cap = max_cap,
+                Err(e) => {
+                    self.status = e;
                     return Some(Popup::Prompt { kind, text });
                 }
             },
@@ -635,31 +635,9 @@ impl<'a> App<'a> {
 
     /// Copy the settings to the config, and write the config file.
     fn write_config(&mut self) -> Result<(), String> {
-        let rules = &self.settings.rules;
-        self.cfg.capital = rules.capital.map(|n| self.uni.name(n).to_string());
-        self.cfg.hull = rules.hull.map(|h| h.name.clone());
-        self.cfg.max_cap_tj = rules.max_cap;
-        self.cfg.mode = Some(self.settings.mode);
-        self.cfg.optimize = self.settings.optimize;
-        self.cfg.top = Some(self.settings.top);
-        self.cfg.eve_scout = self.settings.hubs;
-        self.cfg.favourites = Some(self.settings.favourites.iter().map(|&n| self.uni.name(n).to_string()).collect());
+        self.settings.store(self.uni, &mut self.cfg);
         self.cfg.save(&self.cfg_path)
     }
-}
-
-/// The hull picker rows: "none", then each ship whose name or group contains `filter`.
-pub fn hull_rows(filter: &str) -> Vec<Option<HullClass>> {
-    let filter = filter.to_lowercase();
-    std::iter::once(None)
-        .chain(
-            table()
-                .ships
-                .iter()
-                .filter(|h| h.name.to_lowercase().contains(&filter) || h.group.to_lowercase().contains(&filter))
-                .map(Some),
-        )
-        .collect()
 }
 
 #[cfg(test)]

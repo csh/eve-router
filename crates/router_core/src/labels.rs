@@ -1,10 +1,10 @@
 //! The text of the route summaries, the route steps and the Shortcuts box, for each user interface.
 
-use crate::ansiblex::BridgeRules;
+use crate::ansiblex::{BridgeRules, HullClass};
 use crate::overlay::OverlayReport;
 use crate::route::Route;
 use crate::sources::{evescout, nexum};
-use crate::universe::{Link, Universe};
+use crate::universe::{Link, Universe, display_sec};
 use crate::wormhole::{MassStatus, SourceId, THERA, TURNUR, Wormhole, expiry_text};
 use petgraph::graph::EdgeIndex;
 
@@ -50,6 +50,35 @@ impl Shortcuts {
     }
 }
 
+/// The in-game security colors, as `0xRRGGBB`.
+pub fn sec_rgb(security: f64) -> u32 {
+    match (display_sec(security) * 10.0).round() as i32 {
+        10.. => 0x2FEFEF,
+        9 => 0x48F0C0,
+        8 => 0x00EF47,
+        7 => 0x00F000,
+        6 => 0x8FEF2F,
+        5 => 0xEFEF00,
+        4 => 0xD77700,
+        3 => 0xF06000,
+        2 => 0xF04800,
+        1 => 0xD73000,
+        _ => 0xF00000,
+    }
+}
+
+pub fn on_off(on: bool) -> &'static str {
+    if on { "on" } else { "off" }
+}
+
+/// A ship shows its group, for example "Sin (Black Ops)". A group shows only its name.
+pub fn hull_label(h: HullClass) -> String {
+    match h.type_id {
+        Some(_) => format!("{} ({})", h.name, h.group),
+        None => h.name.clone(),
+    }
+}
+
 /// "1 jump" or "N jumps".
 pub fn jumps_label(jumps: usize) -> String {
     if jumps == 1 { "1 jump".into() } else { format!("{jumps} jumps") }
@@ -70,6 +99,22 @@ pub fn route_extras(route: &Route) -> String {
         parts.push(format!("{tj} TJ"));
     }
     if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
+}
+
+/// The text of route number `index` (from 0), as `--print` writes it: the summary line, then
+/// one line for each step. The text has no final line break.
+pub fn route_text(uni: &Universe, rules: &BridgeRules, index: usize, route: &Route, now: u64) -> String {
+    let mut lines = vec![format!("#{} {}{}", index + 1, jumps_label(route.jumps), route_extras(route))];
+    for (step, &node) in route.path.nodes.iter().enumerate() {
+        let sys = uni.system(node);
+        let via = match step.checked_sub(1).map(|s| route.path.edges[s]) {
+            Some(e) => link_label(uni, rules, e, now),
+            None => String::new(),
+        };
+        let stop = route.stop_at(step).map(|s| s.label()).unwrap_or_default();
+        lines.push(format!("  {:>3} {stop:<11} {:<20} {:>4.1} {:<20} {via}", step, sys.name, display_sec(sys.security), sys.region));
+    }
+    lines.join("\n")
 }
 
 /// How a route enters a system: a gate, a wormhole or a bridge.
