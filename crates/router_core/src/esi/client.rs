@@ -17,6 +17,9 @@ pub const IMAGES_URL: &str = "https://images.evetech.net";
 pub const COMPATIBILITY_DATE: &str = "2025-08-26";
 /// The timeout of one ESI request.
 pub const TIMEOUT: Duration = Duration::from_secs(10);
+
+/// The longest wait after a 420 or 429. A larger header value is not real, and it can overflow `Instant`.
+pub const MAX_RETRY: Duration = Duration::from_secs(3600);
 /// The largest ESI response body. The router reads only small objects.
 const MAX_BODY: u64 = 64 * 1024;
 
@@ -170,7 +173,7 @@ fn check_status(response: &ureq::http::Response<ureq::Body>) -> Result<Option<u3
             let retry_after = header(response, "retry-after")
                 .or_else(|| header(response, "x-esi-error-limit-reset"))
                 .and_then(|v| v.trim().parse().ok())
-                .map(Duration::from_secs);
+                .map(|secs| Duration::from_secs(secs).min(MAX_RETRY));
             Err(EsiError::Limited { retry_after })
         }
         code @ 500..=599 => Err(EsiError::Offline(format!("status {code}"))),
@@ -236,6 +239,11 @@ mod tests {
         assert_eq!(
             check("429 Too Many Requests", &[("Retry-After", "5")]),
             EsiError::Limited { retry_after: Some(Duration::from_secs(5)) }
+        );
+        // A huge header value waits at most one hour, so `Instant` does not overflow.
+        assert_eq!(
+            check("429 Too Many Requests", &[("Retry-After", "18446744073709551615")]),
+            EsiError::Limited { retry_after: Some(MAX_RETRY) }
         );
         assert!(matches!(check("503 Service Unavailable", &[]), EsiError::Offline(_)));
         assert_eq!(check("404 Not Found", &[]), EsiError::Status(404));

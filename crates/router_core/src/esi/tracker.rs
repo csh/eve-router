@@ -136,6 +136,7 @@ pub enum Event {
 pub struct Tracker {
     tx: Sender<Command>,
     pub events: Receiver<Event>,
+    thread: std::thread::JoinHandle<()>,
 }
 
 impl Tracker {
@@ -143,12 +144,17 @@ impl Tracker {
     pub fn start(api: impl Api, intervals: Intervals, wake: impl Fn() + Send + 'static) -> Tracker {
         let (tx, commands) = mpsc::channel();
         let (events_tx, events) = mpsc::channel();
-        std::thread::spawn(move || Worker::new(api, intervals, events_tx, wake).run(commands));
-        Tracker { tx, events }
+        let thread = std::thread::spawn(move || Worker::new(api, intervals, events_tx, wake).run(commands));
+        Tracker { tx, events, thread }
     }
 
     pub fn send(&self, command: Command) {
         let _ = self.tx.send(command);
+    }
+
+    /// True if the thread stopped. The thread runs until the `Tracker` drops, so a stop is a panic.
+    pub fn stopped(&self) -> bool {
+        self.thread.is_finished()
     }
 }
 
@@ -462,6 +468,8 @@ pub(crate) mod fake {
         /// The waypoint call fails at this index.
         pub fail_waypoint_at: Option<usize>,
         pub waypoints: Vec<(u32, bool)>,
+        /// `refresh` panics, as a worker bug does.
+        pub panic: bool,
     }
 
     pub(crate) fn fetched<T>(value: T, errors_left: Option<u32>) -> Fetched<T> {
@@ -472,6 +480,10 @@ pub(crate) mod fake {
         fn refresh(&self, token: &RefreshToken) -> Result<Tokens, LoginError> {
             let mut s = self.0.lock().unwrap();
             s.calls.push(format!("refresh {}", token.secret()));
+            if s.panic {
+                drop(s);
+                panic!("test panic in refresh");
+            }
             if s.refresh_rejected {
                 return Err(LoginError::Rejected("invalid_grant".into()));
             }
@@ -536,6 +548,18 @@ mod tests {
         let tracker = Tracker::start(fake.clone(), fast(), || {});
         tracker.send(Command::Add { id: 1, refresh: RefreshToken::new("r".into()) });
         tracker
+    }
+
+    #[test]
+    fn a_worker_panic_shows_as_stopped() {
+        let fake = Fake::default();
+        fake.0.lock().unwrap().panic = true;
+        let tracker = start(&fake);
+        let end = Instant::now() + Duration::from_secs(5);
+        while !tracker.stopped() {
+            assert!(Instant::now() < end, "the worker did not stop");
+            std::thread::sleep(Duration::from_millis(10));
+        }
     }
 
     #[test]

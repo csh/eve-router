@@ -134,6 +134,8 @@ pub struct Pilots {
     pub limited: bool,
     /// Status lines for the UI. The UI takes them with `std::mem::take`.
     pub notices: Vec<String>,
+    /// True after `update` gave the `TRACKER_STOPPED` notice.
+    tracker_stopped: bool,
     /// The hull changed during an active route. The routes in the planner are for the old hull.
     replan: bool,
     active_path: PathBuf,
@@ -186,6 +188,7 @@ impl Pilots {
             resume: None,
             limited: false,
             notices: Vec::new(),
+            tracker_stopped: false,
             replan: false,
             active_path,
             wake,
@@ -343,6 +346,7 @@ impl Pilots {
 
     /// The status text when each logged-in pilot is offline.
     pub const NO_SENDER: &str = "No pilot is online. Waypoints need the game client running.";
+    pub const TRACKER_STOPPED: &str = "Pilot tracking stopped after an internal error. Restart the router to track pilots again.";
 
     /// The pilots that can take a route: a valid login, and not offline. An unknown online state stays.
     pub fn senders(&self) -> Vec<PilotView> {
@@ -456,6 +460,11 @@ impl Pilots {
         changed |= !events.is_empty();
         for event in events {
             self.event(event);
+        }
+        if !self.tracker_stopped && self.tracker.as_ref().is_some_and(Tracker::stopped) {
+            self.tracker_stopped = true;
+            self.notices.push(Self::TRACKER_STOPPED.into());
+            changed = true;
         }
         changed
     }
@@ -678,6 +687,22 @@ mod tests {
         let mut accounts = Accounts::with_store(None, Box::new(MemoryStore::default())).unwrap();
         accounts.store(&tokens(1, "Alice")).unwrap();
         Pilots::for_tests(accounts, fake.clone(), dir.join("active-route.json"))
+    }
+
+    #[test]
+    fn a_stopped_tracker_gives_one_notice() {
+        let fake = Fake::default();
+        fake.0.lock().unwrap().panic = true;
+        let mut p = pilots("eve-router-test-tracker-stopped", &fake);
+        let end = Instant::now() + Duration::from_secs(5);
+        while !p.notices.iter().any(|n| n == Pilots::TRACKER_STOPPED) {
+            assert!(Instant::now() < end, "no notice");
+            p.update();
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        p.notices.clear();
+        p.update();
+        assert!(p.notices.is_empty());
     }
 
     fn route(systems: &[u32], manual: Option<u32>) -> ActiveRoute {
