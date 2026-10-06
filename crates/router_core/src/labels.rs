@@ -1,6 +1,7 @@
 //! The text of the route summaries, the route steps and the Shortcuts box, for each user interface.
 
-use crate::ansiblex::{BridgeRules, HullClass};
+use crate::ansiblex::{BridgeRules, HullClass, hull_by_type};
+use crate::esi::client::Ship;
 use crate::overlay::OverlayReport;
 use crate::route::Route;
 use crate::sources::{evescout, nexum};
@@ -80,6 +81,40 @@ pub fn hull_label(h: HullClass) -> String {
 }
 
 /// "1 jump" or "N jumps".
+/// The ship of a pilot, for the pilot rows. For example `Apocalypse · "apoc"`.
+pub struct ShipText {
+    /// The ship type. The ship name, for a type that is not in `ships.json`.
+    pub kind: String,
+    /// The name that the player gave the ship. `None` for a default name.
+    pub name: Option<String>,
+    /// True if the ship cannot use a jump bridge.
+    pub no_bridges: bool,
+}
+
+pub fn ship_text(ship: &Ship, character: &str) -> ShipText {
+    let Some(hull) = hull_by_type(ship.ship_type_id) else {
+        return ShipText { kind: ship.ship_name.clone(), name: None, no_bridges: false };
+    };
+    let name = ship.ship_name.trim().to_lowercase();
+    let kind = hull.name.to_lowercase();
+    // EVE names a new ship after its type and its pilot, for example "Capsule - Cyrene Hawthorne".
+    let default = name.is_empty() || name == kind || (name.contains(&kind) && name.contains(&character.to_lowercase()));
+    ShipText { kind: hull.name.clone(), name: (!default).then(|| ship.ship_name.trim().to_string()), no_bridges: hull.base_tj.is_none() }
+}
+
+impl std::fmt::Display for ShipText {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{}", self.kind)?;
+        if let Some(name) = &self.name {
+            write!(f, " · \"{name}\"")?;
+        }
+        if self.no_bridges {
+            write!(f, " · no bridges")?;
+        }
+        Ok(())
+    }
+}
+
 pub fn jumps_label(jumps: usize) -> String {
     if jumps == 1 { "1 jump".into() } else { format!("{jumps} jumps") }
 }
@@ -154,6 +189,27 @@ pub fn wormhole_label(w: &Wormhole, from: u32, now: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ship_text_shows_the_type_first() {
+        use crate::ansiblex::find_hull;
+        use crate::esi::client::Ship;
+        let ship = |name: &str, type_id: u32| Ship { ship_type_id: type_id, ship_item_id: 1, ship_name: name.into() };
+        let apoc = find_hull("Apocalypse").unwrap().type_id.unwrap();
+        // A name from the player shows after the type.
+        assert_eq!(ship_text(&ship("apoc", apoc), "smrkn").to_string(), "Apocalypse · \"apoc\"");
+        // A default name does not show. EVE uses both forms.
+        assert_eq!(ship_text(&ship("Capsule - Cyrene Hawthorne", 670), "Cyrene Hawthorne").to_string(), "Capsule");
+        assert_eq!(ship_text(&ship("smrkn's Apocalypse", apoc), "smrkn").to_string(), "Apocalypse");
+        assert_eq!(ship_text(&ship("Apocalypse", apoc), "smrkn").to_string(), "Apocalypse");
+        // A ship that cannot use bridges says so.
+        let avatar = find_hull("Avatar").unwrap().type_id.unwrap();
+        assert_eq!(ship_text(&ship("Big", avatar), "smrkn").to_string(), "Avatar · \"Big\" · no bridges");
+        // A type that is not in ships.json shows the ship name only.
+        let unknown = ship_text(&ship("New hull", u32::MAX), "smrkn");
+        assert_eq!(unknown.to_string(), "New hull");
+        assert!(!unknown.no_bridges);
+    }
 
     #[test]
     fn wormhole_text() {

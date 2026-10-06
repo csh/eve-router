@@ -11,6 +11,7 @@ use egui_extras::{Column, TableBuilder};
 use router_core::esi::active::{ActiveRoute, Hop};
 use router_core::esi::client::{IMAGES_URL, portrait};
 use router_core::esi::pilots::{PilotView, StartPlan};
+use router_core::labels::ship_text;
 use router_core::route::Stop;
 use router_core::universe::display_sec;
 use std::collections::HashMap;
@@ -283,6 +284,7 @@ impl PilotsUi {
                     ui.vertical(|ui| {
                         ui.label(RichText::new(&row.name).family(theme::bold()).color(Color32::WHITE));
                         status_text(ui, s, row);
+                        ship_row(ui, row);
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("Remove").clicked() {
@@ -392,6 +394,7 @@ impl PilotsUi {
                             ui.vertical(|ui| {
                                 ui.label(RichText::new(&pilot.name).color(Color32::WHITE));
                                 status_text(ui, s, &pilot);
+                                ship_row(ui, &pilot);
                             });
                         });
                     }
@@ -720,7 +723,7 @@ impl PilotsUi {
                         ui.label(RichText::new(&sys.name).color(theme::sec_color(sys.security)));
                     });
                 }
-                let ship = pilot.live.ship.as_ref().map_or("ship unknown".to_string(), |sh| sh.ship_name.clone());
+                let ship = pilot.live.ship.as_ref().map_or("ship unknown".to_string(), |sh| ship_text(sh, &pilot.name).to_string());
                 let region = node.map_or("location unknown".to_string(), |n| s.uni.system(n).region.clone());
                 let mut hover = format!("{ship} · {region}");
                 if let Some(node) = node.filter(|_| s.pilots.active.is_none()) {
@@ -752,7 +755,7 @@ impl PilotsUi {
     }
 }
 
-/// "● Online · Jita · Venture". The word is always there, not only the color.
+/// "● Online · Jita". The word is always there, not only the color.
 fn status_text(ui: &mut Ui, s: &Session, pilot: &PilotView) {
     if pilot.live.expired {
         ui.label(RichText::new("Login expired").color(theme::WARN).small());
@@ -771,10 +774,23 @@ fn status_text(ui: &mut Ui, s: &Session, pilot: &PilotView) {
     if let Some(id) = pilot.live.system {
         text.push_str(&format!(" · {}", system_name(s, id)));
     }
-    if let Some(ship) = &pilot.live.ship {
-        text.push_str(&format!(" · {}", ship.ship_name));
-    }
     ui.label(RichText::new(text).color(dot).small());
+}
+
+/// `Apocalypse · "apoc"` under the status line. The type is bright, the name is dim.
+fn ship_row(ui: &mut Ui, pilot: &PilotView) {
+    let Some(ship) = &pilot.live.ship else { return };
+    let text = ship_text(ship, &pilot.name);
+    ui.horizontal(|ui| {
+        ui.spacing_mut().item_spacing.x = 0.0;
+        ui.label(RichText::new(&text.kind).color(theme::TEXT).small());
+        if let Some(name) = &text.name {
+            ui.label(RichText::new(format!(" · \"{name}\"")).color(theme::TEXT_DIM).small());
+        }
+        if text.no_bridges {
+            ui.label(RichText::new(" · no bridges").color(theme::WARN).small());
+        }
+    });
 }
 
 fn system_name(s: &Session, id: u32) -> String {

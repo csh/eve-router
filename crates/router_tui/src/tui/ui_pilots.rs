@@ -9,6 +9,7 @@ use ratatui::text::{Line, Span};
 use ratatui::widgets::{Block, Cell, Clear, Gauge, List, ListItem, Paragraph, Row, Table, Wrap};
 use router_core::esi::active::Hop;
 use router_core::esi::pilots::PilotView;
+use router_core::labels::ship_text;
 use router_core::universe::display_sec;
 
 /// At most this many pilots show in a row of the step table. More give "+n".
@@ -19,7 +20,7 @@ pub fn initials(name: &str) -> String {
     name.split_whitespace().filter_map(|w| w.chars().next()).take(2).collect::<String>().to_uppercase()
 }
 
-/// "● Online · Jita · Venture". The word is always there, not only the color.
+/// "● Online · Jita". The word is always there, not only the color.
 fn status_line(app: &App, row: &PilotView) -> Line<'static> {
     if row.live.expired {
         return Line::from("Login expired — Enter logs in again").yellow();
@@ -35,10 +36,12 @@ fn status_line(app: &App, row: &PilotView) -> Line<'static> {
     if let Some(system) = row.live.system {
         spans.push(Span::raw(format!(" · {}", app.system_name(system))));
     }
-    if let Some(ship) = &row.live.ship {
-        spans.push(Span::raw(format!(" · {}", ship.ship_name)).dark_gray());
-    }
     Line::from(spans)
+}
+
+/// `Apocalypse · "apoc"`, the line under the status line. An empty line while the ship is not known.
+fn ship_line(row: &PilotView) -> Line<'static> {
+    row.live.ship.as_ref().map_or_else(Line::default, |ship| Line::from(ship_text(ship, &row.name).to_string()).dark_gray())
 }
 
 /// The text of the banner line, and its color. The most urgent problem shows.
@@ -202,7 +205,7 @@ pub fn draw_popup(frame: &mut Frame, app: &mut App) {
                 .iter()
                 .map(|r| {
                     let name = if r.active { format!("▶ {}", r.name) } else { r.name.clone() };
-                    ListItem::new(vec![Line::from(name).bold(), status_line(app, r)])
+                    ListItem::new(vec![Line::from(name).bold(), status_line(app, r), ship_line(r)])
                 })
                 .collect();
             if items.is_empty() {
@@ -210,7 +213,7 @@ pub fn draw_popup(frame: &mut Frame, app: &mut App) {
             }
             let store = if app.pilots.accounts.as_ref().is_some_and(|a| a.is_session_only()) { " · session only" } else { "" };
             let title = format!(" Characters ({}){store} ", rows.len());
-            let area = centered(frame.area(), 64, (items.len() as u16 * 2).min(20) + 4);
+            let area = centered(frame.area(), 64, (items.len() as u16 * 3).min(21) + 4);
             let [list_area, help] = Layout::vertical([Constraint::Min(1), Constraint::Length(1)]).areas(area);
             let list = List::new(items)
                 .block(Block::bordered().title(title).border_style(Style::new().cyan()))
@@ -261,9 +264,9 @@ pub fn draw_popup(frame: &mut Frame, app: &mut App) {
             let items: Vec<ListItem> = ids
                 .iter()
                 .filter_map(|id| rows.iter().find(|r| r.id == *id))
-                .map(|r| ListItem::new(vec![Line::from(r.name.clone()).bold(), status_line(app, r)]))
+                .map(|r| ListItem::new(vec![Line::from(r.name.clone()).bold(), status_line(app, r), ship_line(r)]))
                 .collect();
-            let area = centered(frame.area(), 64, (items.len() as u16 * 2).min(20) + 2);
+            let area = centered(frame.area(), 64, (items.len() as u16 * 3).min(21) + 2);
             let list = List::new(items)
                 .block(Block::bordered().title(format!(" Send route #{} to… ", *route + 1)).border_style(Style::new().cyan()))
                 .highlight_style(Style::new().reversed())
