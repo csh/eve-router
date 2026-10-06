@@ -172,7 +172,7 @@ impl PilotsUi {
             // The active route stays as it is. The pilot chooses when to re-route.
             HullSync::Hull if s.pilots.active.is_some() => {
                 let kind = s.settings.rules.hull.map_or("an unknown ship".into(), |h| h.name.clone());
-                s.status = format!("Ship changed to {kind}. Re-route to plan for it.");
+                s.status = format!("Ship changed to {kind}. The routes update when this route ends.");
                 s.save_quietly();
             }
             HullSync::Hull => {

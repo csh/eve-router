@@ -118,6 +118,8 @@ pub struct Pilots {
     pub limited: bool,
     /// Status lines for the UI. The UI takes them with `std::mem::take`.
     pub notices: Vec<String>,
+    /// The hull changed during an active route. The routes in the planner are for the old hull.
+    replan: bool,
     active_path: PathBuf,
     wake: Wake,
 }
@@ -168,6 +170,7 @@ impl Pilots {
             resume: None,
             limited: false,
             notices: Vec::new(),
+            replan: false,
             active_path,
             wake,
         };
@@ -298,7 +301,8 @@ impl Pilots {
     /// Set the hull from the live ship of the pilot in `settings.hull_source`.
     /// Without a keyring (no token store, or "Session only"), the source stays: the keyring can
     /// come back at the next start.
-    pub fn sync_hull(&self, settings: &mut Settings) -> HullSync {
+    /// A hull change during an active route gives `Hull`, and one more `Hull` when the route ends.
+    pub fn sync_hull(&mut self, settings: &mut Settings) -> HullSync {
         let HullSource::Pilot(id) = settings.hull_source else { return HullSync::None };
         let Some(accounts) = &self.accounts else { return HullSync::None };
         if !accounts.characters.iter().any(|c| c.id == id) {
@@ -310,7 +314,15 @@ impl Pilots {
             return HullSync::Source;
         }
         let ship_type = self.live.get(&id).and_then(|l| l.ship.as_ref()).map(|s| s.ship_type_id);
-        if settings.follow(ship_type) { HullSync::Hull } else { HullSync::None }
+        if settings.follow(ship_type) {
+            self.replan |= self.active.is_some();
+            return HullSync::Hull;
+        }
+        if self.replan && self.active.is_none() {
+            self.replan = false;
+            return HullSync::Hull;
+        }
+        HullSync::None
     }
 
     /// The status text when each logged-in pilot is offline.
@@ -694,6 +706,26 @@ mod tests {
     }
 
     #[test]
+    fn sync_hull_replans_when_the_active_route_ends() {
+        use crate::settings::HullSource;
+        use crate::test_support::{overlay_universe, settings};
+        let uni = overlay_universe();
+        let fake = Fake::default();
+        let mut p = pilots("eve-router-test-pilots-sync-active", &fake);
+        until(&mut p, |p| p.live.get(&1).is_some_and(|l| l.ship.is_some()));
+        let mut s = settings(&uni, Some("Sin"));
+        s.hull_source = HullSource::Pilot(1);
+        // The ship changes during a route: the route stays.
+        p.active = Some(route(&[10, 20], None));
+        assert_eq!(p.sync_hull(&mut s), HullSync::Hull);
+        assert_eq!(p.sync_hull(&mut s), HullSync::None);
+        // The route ends: the routes in the planner are for the old hull, so plan again one time.
+        p.active = None;
+        assert_eq!(p.sync_hull(&mut s), HullSync::Hull);
+        assert_eq!(p.sync_hull(&mut s), HullSync::None);
+    }
+
+    #[test]
     fn sync_hull_drops_a_removed_pilot() {
         use crate::settings::HullSource;
         use crate::test_support::{overlay_universe, settings};
@@ -704,7 +736,7 @@ mod tests {
         // A store with a list file, as with a keyring.
         let mut accounts = Accounts::with_store(Some(dir.join("characters.json")), Box::new(MemoryStore::default())).unwrap();
         accounts.store(&tokens(1, "Alice")).unwrap();
-        let p = Pilots::for_tests(accounts, Fake::default(), dir.join("active-route.json"));
+        let mut p = Pilots::for_tests(accounts, Fake::default(), dir.join("active-route.json"));
         let mut s = settings(&uni, Some("Sin"));
         // A character that is not stored: the source becomes manual, and the hull stays.
         s.hull_source = HullSource::Pilot(99);
@@ -718,7 +750,7 @@ mod tests {
         use crate::settings::HullSource;
         use crate::test_support::{overlay_universe, settings};
         let uni = overlay_universe();
-        let p = Pilots::offline(std::env::temp_dir().join("eve-router-test-pilots-sync-off").join("active-route.json"));
+        let mut p = Pilots::offline(std::env::temp_dir().join("eve-router-test-pilots-sync-off").join("active-route.json"));
         let mut s = settings(&uni, Some("Sin"));
         s.hull_source = HullSource::Pilot(1);
         assert_eq!(p.sync_hull(&mut s), HullSync::None);
