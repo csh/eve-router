@@ -229,6 +229,38 @@ mod tests {
         router_core::assert_snapshot!("active_screen", text);
     }
 
+    #[test]
+    fn active_screen_shows_a_pilot_one_time_on_a_loop_route() {
+        use router_core::esi::active::ActiveRoute;
+        let mut uni = Universe::from_sde(router_core::sde::load(&router_core::test_support::sde_dir()).unwrap());
+        router_core::overlay::load_bridges(&mut uni, &router_core::test_support::fixture("ansiblex.txt")).unwrap();
+        let settings = Settings {
+            mode: Mode::Shortest,
+            optimize: false,
+            top: 1,
+            wormholes: true,
+            hubs: Default::default(),
+            bridges: true,
+            rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
+            hull_source: router_core::settings::HullSource::Manual,
+            min_life: 0,
+            favourites: vec![uni.exact("Jita").unwrap()],
+        };
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
+        let cfg_path = std::env::temp_dir().join("eve-router-test-loop-pilot.json");
+        // A round trip: UALX-3 is the start and the destination.
+        let mut app = App::new(&uni, settings, Config::default(), cfg_path, "UALX-3 > Y-ORBJ > UALX-3".into(), shortcuts);
+        let ualx = uni.system(uni.exact("UALX-3").unwrap()).id;
+        app.pilots.add_test_pilot(7, "Alice Ander", ualx);
+        let route = ActiveRoute::new(&uni, &app.settings.rules, &app.routes[0], 1, 7, "Alice Ander", app.now);
+        assert_eq!(route.steps.first().map(|s| s.system), route.steps.last().map(|s| s.system));
+        app.pilots.active = Some(route);
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let text = screen_text(terminal.backend().buffer());
+        assert_eq!(text.matches(" AA ").count(), 1, "{text}");
+    }
+
     /// The foreground color of the first cell of the screen row that starts with `text`.
     fn row_color(buffer: &ratatui::buffer::Buffer, text: &str) -> Option<ratatui::style::Color> {
         let area = buffer.area;

@@ -624,6 +624,24 @@ impl Pilots {
     }
 }
 
+/// A stored character with a live location, for the tests of the front ends. No tracker runs.
+#[cfg(any(test, feature = "test-support"))]
+impl Pilots {
+    pub fn add_test_pilot(&mut self, id: u64, name: &str, system: u32) {
+        let accounts = self.accounts.get_or_insert_with(Accounts::session_only);
+        let character =
+            Character { id, name: name.into(), scopes: super::SCOPES.iter().map(|s| oauth2::Scope::new(s.to_string())).collect() };
+        let tokens = Tokens {
+            character,
+            access: oauth2::AccessToken::new("a".into()),
+            refresh: oauth2::RefreshToken::new("r".into()),
+            expires_at: u64::MAX,
+        };
+        accounts.store(&tokens).unwrap();
+        self.live.insert(id, PilotState { system: Some(system), online: Some(true), ..PilotState::default() });
+    }
+}
+
 /// `Pilots` with a test `Api` and short poll intervals, for the tests of the front ends.
 #[cfg(any(test, feature = "test-support"))]
 impl Pilots {
