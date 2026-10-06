@@ -1,6 +1,7 @@
 //! Drawing.
 
 use super::app::{App, Focus, Popup, PromptKind, SettingsRow};
+use super::ui_pilots;
 use ratatui::Frame;
 use ratatui::layout::{Constraint, Flex, Layout, Rect};
 use ratatui::style::{Color, Modifier, Style, Stylize};
@@ -17,16 +18,21 @@ pub fn sec_color(security: f64) -> Color {
 }
 
 /// The background of a stop row in the route table.
-const STOP_BG: Color = Color::Indexed(236);
+pub(super) const STOP_BG: Color = Color::Indexed(236);
 
 pub fn draw(frame: &mut Frame, app: &mut App) {
     let [main, status, help] = Layout::vertical([Constraint::Min(10), Constraint::Length(1), Constraint::Length(2)]).areas(frame.area());
     let [left, sidebar] = Layout::horizontal([Constraint::Min(40), Constraint::Length(24)]).areas(main);
     let [input, list, detail] = Layout::vertical([Constraint::Length(3), Constraint::Percentage(30), Constraint::Min(5)]).areas(left);
 
-    draw_input(frame, app, input);
-    draw_routes(frame, app, list);
-    draw_detail(frame, app, detail);
+    // The active route hides the planner: the input and the route list.
+    if app.pilots.active.is_some() {
+        ui_pilots::draw_active(frame, app, left);
+    } else {
+        draw_input(frame, app, input);
+        draw_routes(frame, app, list);
+        draw_detail(frame, app, detail);
+    }
     // The "Shortcuts" box goes above the hubs, and only when an overlay loaded a connection.
     if app.shortcuts.wormholes + app.shortcuts.bridges > 0 {
         let lines = shortcut_lines(app);
@@ -44,6 +50,14 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         draw_settings(frame, app);
     }
 
+    if app.pilots.pending.is_some() {
+        ui_pilots::draw_sending(frame, app);
+        return;
+    }
+    if app.popup.as_ref().is_some_and(ui_pilots::is_pilot_popup) {
+        ui_pilots::draw_popup(frame, app);
+        return;
+    }
     match &mut app.popup {
         Some(Popup::Mode(state)) => {
             let area = centered(frame.area(), 56, (Mode::ALL.len() as u16 + 1) * 2 + 2);
@@ -119,10 +133,10 @@ pub fn draw(frame: &mut Frame, app: &mut App) {
         Some(Popup::Message(text)) => {
             let area = centered(frame.area(), 60, 4);
             frame.render_widget(Clear, area);
-            let block = Block::bordered().title(" Nexum (any key closes) ");
+            let block = Block::bordered().title(" Message (any key closes) ");
             frame.render_widget(Paragraph::new(text.as_str()).wrap(ratatui::widgets::Wrap { trim: true }).block(block), area);
         }
-        None => {}
+        _ => {}
     }
 }
 
@@ -134,7 +148,11 @@ fn help_lines(app: &App, width: u16) -> Vec<Line<'static>> {
         Some(_) => "off (no capital)".to_string(),
         None => on_off(s.bridges).to_string(),
     };
+    let active = app.pilots.active.as_ref();
     let hints: Vec<(&str, String)> = match app.focus {
+        _ if app.settings_page.is_some() && active.is_some() => {
+            vec![("↑↓", "Select".into()), ("a", "Add favourite".into()), ("d", "Remove favourite".into()), ("Esc", "Save and close".into())]
+        }
         _ if app.settings_page.is_some() => vec![
             ("↑↓", "Select".into()),
             ("Enter", "Edit".into()),
@@ -143,12 +161,22 @@ fn help_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             ("Shift+↑↓", "Move favourite".into()),
             ("Esc", "Save and close".into()),
         ],
+        // Only the keys that work while a route is active.
+        _ if active.is_some() => vec![
+            ("x", "Stop route".into()),
+            ("↑↓", "Scroll".into()),
+            ("n/p", "Next/prev stop".into()),
+            ("c", "Characters".into()),
+            ("s", "Settings".into()),
+            ("q", "Quit".into()),
+        ],
         Focus::Input => vec![("Enter", "Find routes".into()), ("Tab", "Complete system name".into()), ("Esc", "Leave the input".into())],
         Focus::Detail => vec![
             ("↑↓", "Move".into()),
             ("PgUp/PgDn", "Page".into()),
             ("Home/End", "Start/Destination".into()),
             ("n/p", "Next/previous stop".into()),
+            ("g", "Start route".into()),
             ("Esc", "Back to routes".into()),
         ],
         Focus::Routes => vec![
@@ -160,6 +188,8 @@ fn help_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             ("j", format!("Jump bridges: {bridges}")),
             ("h", format!("Hull: {}", s.rules.hull.map_or("none".into(), hull_label))),
             ("+/-", format!("Routes: {}", s.top)),
+            ("g", "Start route".into()),
+            ("c", format!("Characters ({})", app.pilots.characters().len())),
             ("s", "Settings".into()),
             ("q", "Quit".into()),
         ],
@@ -183,7 +213,7 @@ fn help_lines(app: &App, width: u16) -> Vec<Line<'static>> {
     lines
 }
 
-fn centered(area: Rect, width: u16, height: u16) -> Rect {
+pub(super) fn centered(area: Rect, width: u16, height: u16) -> Rect {
     let [area] = Layout::horizontal([Constraint::Length(width)]).flex(Flex::Center).areas(area);
     let [area] = Layout::vertical([Constraint::Length(height)]).flex(Flex::Center).areas(area);
     area

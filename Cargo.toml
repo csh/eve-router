@@ -17,3 +17,18 @@ mimalloc = "0.1.52"
 
 [profile.release]
 lto = "thin"
+
+# The CI build and tests: the dev profile with line tables only, so the build cache stays small
+# and a test failure still gives a backtrace with lines. No incremental files: CI builds once.
+[profile.ci]
+inherits = "dev"
+debug = "line-tables-only"
+incremental = false
+
+# The binaries of a GitHub release: full LTO and one codegen unit for the smallest and fastest
+# binary. The symbols go, because a release has no debugger.
+[profile.dist]
+inherits = "release"
+lto = "fat"
+codegen-units = 1
+strip = true

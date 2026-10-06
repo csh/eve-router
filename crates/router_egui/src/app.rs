@@ -4,6 +4,8 @@ use crate::theme;
 use crate::view::View;
 use petgraph::graph::NodeIndex;
 use router_core::config::{self, Config};
+use router_core::esi::active::active_path;
+use router_core::esi::pilots::Pilots;
 use router_core::labels::Shortcuts;
 use router_core::route::{Route, Stop};
 use router_core::settings::{Settings, split_systems};
@@ -11,6 +13,7 @@ use router_core::sources::nexum::MapInfo;
 use router_core::startup;
 use router_core::universe::Universe;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
 use std::time::{Duration, Instant};
 
@@ -38,7 +41,7 @@ impl RouterApp {
         theme::set_font(&ctx);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(load());
+            let _ = tx.send(load(ctx.clone()));
             ctx.request_repaint();
         });
         RouterApp { state: State::Loading(rx), last_frame: None }
@@ -64,7 +67,7 @@ impl RouterApp {
 
 /// The same load as the TUI, with the config file and the default SDE directory. The arguments
 /// of the command line are the first waypoints, for example `eve-router-egui Jita "New Caldari"`.
-fn load() -> Result<Session, String> {
+fn load(ctx: egui::Context) -> Result<Session, String> {
     let cfg_path = config::default_path();
     let cfg = Config::load(&cfg_path)?;
     let pending = startup::begin(&cfg, &cfg_path);
@@ -73,8 +76,10 @@ fn load() -> Result<Session, String> {
     let loaded = startup::finish(pending, &sde_dir, None, |outcome| startup_lines.extend(outcome.message(&sde_dir)))?;
     let shortcuts = Shortcuts::new(&loaded.uni, &loaded.report, &loaded.wh, &loaded.scout);
     let settings = Settings::from_config(&cfg, &loaded.uni)?;
-    let mut session = Session::new(loaded.uni, settings, cfg, cfg_path, shortcuts);
+    let mut session = Session::new(loaded.uni, settings, cfg, cfg_path.clone(), shortcuts);
     session.startup_lines = startup_lines;
+    // A tracker event or a login result repaints the window.
+    session.pilots = Pilots::open(&cfg_path, Arc::new(move || ctx.request_repaint()));
     // The command line can give the start, the midpoints and the destination, as for the TUI.
     let systems: Vec<String> = std::env::args().skip(1).collect();
     if !systems.is_empty() {
@@ -110,6 +115,8 @@ pub struct Session {
     pub status: String,
     /// The last Nexum map list, for the map name in the settings.
     pub map_names: Vec<MapInfo>,
+    /// The logins, the tracking and the active route.
+    pub pilots: Pilots,
 }
 
 impl Session {
@@ -118,7 +125,7 @@ impl Session {
             uni,
             settings,
             cfg,
-            cfg_path,
+            cfg_path: cfg_path.clone(),
             shortcuts,
             startup_lines: Vec::new(),
             waypoints: Vec::new(),
@@ -131,6 +138,7 @@ impl Session {
             clock: router_core::wormhole::now,
             status: String::new(),
             map_names: Vec::new(),
+            pilots: Pilots::offline(active_path(&cfg_path)),
         };
         session.recompute();
         if let Some(warning) = session.shortcuts.warning.clone() {

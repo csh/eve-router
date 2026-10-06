@@ -1,10 +1,13 @@
 //! The TUI state and the key handling.
 
+use super::pilots::{LOCKED, route_setting};
 use petgraph::graph::NodeIndex;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
 use router_core::ansiblex::{HullClass, hull_rows};
 use router_core::config::{self, ApiKey, Config};
+use router_core::esi::active::{ActiveRoute, active_path};
+use router_core::esi::pilots::{Pilots, StartPlan};
 use router_core::labels::Shortcuts;
 use router_core::route::{Mode, Route};
 use router_core::settings::{Settings, parse_max_cap, resolve_all, split_systems};
@@ -69,6 +72,29 @@ pub enum Popup {
     Loading,
     /// A message. Any key closes it.
     Message(String),
+    /// The character list. Row i is `pilots.characters()[i]`.
+    Characters(ListState),
+    /// "Session only?", when the system has no keyring.
+    SessionOnly,
+    /// The login: the URL, and a field for the redirected URL.
+    Login {
+        paste: String,
+    },
+    /// The character for a route start. Row i is `ids[i]`.
+    Pick {
+        route: usize,
+        ids: Vec<u64>,
+        state: ListState,
+    },
+    /// "Send route #n to <name>?"
+    Confirm(Box<StartPlan>),
+    RemovePilot(u64),
+    StopRoute,
+    Quit,
+    /// "Resume route #n?" at the start, for the active route of the last run.
+    Resume,
+    /// The new route from the current system, after "Re-route from here".
+    Reroute(Box<ActiveRoute>),
 }
 
 pub struct App<'a> {
@@ -100,6 +126,12 @@ pub struct App<'a> {
     pub load_maps_pending: bool,
     /// The last map list, for the map name on the settings page.
     pub map_names: Vec<MapInfo>,
+    /// The logins, the tracking and the active route.
+    pub pilots: Pilots,
+    /// The route to start after the current login.
+    pub start_after_login: Option<usize>,
+    /// The progress of the active route at the last draw, to scroll the table to a new step.
+    pub last_progress: Option<usize>,
 }
 
 impl<'a> App<'a> {
@@ -108,7 +140,7 @@ impl<'a> App<'a> {
             uni,
             settings,
             cfg,
-            cfg_path,
+            cfg_path: cfg_path.clone(),
             focus: if input.is_empty() { Focus::Input } else { Focus::Routes },
             input,
             popup: None,
@@ -126,6 +158,9 @@ impl<'a> App<'a> {
             quit: false,
             load_maps_pending: false,
             map_names: Vec::new(),
+            pilots: Pilots::offline(active_path(&cfg_path)),
+            start_after_login: None,
+            last_progress: None,
         };
         app.recompute();
         if let Some(warning) = &app.shortcuts.warning {
@@ -194,12 +229,21 @@ impl<'a> App<'a> {
             self.quit = true;
             return;
         }
+        // A first send of a route runs or failed. Only its keys work.
+        if self.pilots.pending.is_some() {
+            self.on_sending_key(key);
+            return;
+        }
         if let Some(popup) = self.popup.take() {
             self.popup = self.on_popup_key(popup, key);
             return;
         }
         if self.settings_page.is_some() {
             self.on_settings_key(key);
+            return;
+        }
+        if self.pilots.active.is_some() {
+            self.on_active_key(key);
             return;
         }
         match self.focus {
@@ -310,6 +354,8 @@ impl<'a> App<'a> {
                 self.popup = Some(Popup::Hull { filter: String::new(), state });
             }
             KeyCode::Char('s') => self.settings_page = Some(ListState::default().with_selected(Some(0))),
+            KeyCode::Char('g') => self.start_route(),
+            KeyCode::Char('c') => self.open_characters(),
             _ => {}
         }
     }
@@ -329,6 +375,10 @@ impl<'a> App<'a> {
             }
             KeyCode::Char('q') => {
                 self.quit = true;
+                return;
+            }
+            KeyCode::Char('g') => {
+                self.start_route();
                 return;
             }
             KeyCode::Up => current.saturating_sub(1),
@@ -360,6 +410,11 @@ impl<'a> App<'a> {
         };
         let index = state.selected().unwrap_or(0).min(rows.len() - 1);
         let shift = key.modifiers.contains(KeyModifiers::SHIFT);
+        // While a route is active, only the favourites can change.
+        if self.pilots.active.is_some() && key.code == KeyCode::Enter && route_setting(rows[index]) {
+            self.status = LOCKED.into();
+            return;
+        }
         let favs = &mut self.settings.favourites;
         match (key.code, rows[index]) {
             (KeyCode::Esc | KeyCode::Char('s') | KeyCode::Char('q'), _) => {
@@ -507,6 +562,16 @@ impl<'a> App<'a> {
             },
             Popup::Loading => Some(Popup::Loading),
             Popup::Message(_) => None,
+            Popup::Characters(_)
+            | Popup::SessionOnly
+            | Popup::Login { .. }
+            | Popup::Pick { .. }
+            | Popup::Confirm(_)
+            | Popup::RemovePilot(_)
+            | Popup::StopRoute
+            | Popup::Quit
+            | Popup::Resume
+            | Popup::Reroute(_) => self.on_pilot_popup_key(popup, key),
             Popup::Prompt { kind, mut text } => match key.code {
                 KeyCode::Esc => None,
                 KeyCode::Enter => self.apply_prompt(kind, text),
@@ -641,14 +706,14 @@ impl<'a> App<'a> {
 }
 
 #[cfg(test)]
-mod tests {
+pub(crate) mod tests {
     use super::*;
     use router_core::ansiblex::BridgeRules;
     use router_core::config::ApiKey;
     use router_core::route::Mode;
     use router_core::test_support::{serve, universe};
 
-    fn app(name: &str, cfg: Config) -> App<'static> {
+    pub(crate) fn app(name: &str, cfg: Config) -> App<'static> {
         let settings = Settings {
             mode: Mode::Shortest,
             optimize: false,

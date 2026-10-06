@@ -1,0 +1,52 @@
+# Format, lint, test and audit each push to main and each pull request.
+# The release workflow also calls this workflow before it builds.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  lint:
+    name: Format and clippy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      # rust-toolchain.toml sets the channel.
+      - run: rustup toolchain install && rustup component add rustfmt clippy
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: lint
+      - run: cargo fmt --all --check
+      - run: cargo clippy --workspace --all-targets --locked --profile ci -- -D warnings
+
+  test:
+    name: Test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: test
+      # The tests use the map files in sde/ and local test servers. They need no network.
+      - run: cargo test --workspace --locked --profile ci
+
+  deny:
+    name: Advisories, licenses and sources
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: EmbarkStudios/cargo-deny-action@v2

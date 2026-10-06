@@ -1,0 +1,43 @@
+# `cargo deny check` examines the RustSec advisories, the licenses and the crate sources.
+# Every license here is compatible with AGPL-3.0 and with MIT OR Apache-2.0.
+
+[advisories]
+# A crate that is unmaintained or yanked also fails the check.
+unmaintained = "all"
+yanked = "deny"
+
+[licenses]
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDLA-Permissive-2.0",
+    "ISC",
+    "MPL-2.0",
+    "Unicode-3.0",
+    "Unlicense",
+    "Zlib",
+]
+confidence-threshold = 0.9
+
+# The default egui fonts. These are font files, not linked code.
+[[licenses.exceptions]]
+crate = "epaint_default_fonts"
+allow = ["OFL-1.1", "Ubuntu-font-1.0"]
+
+# The workspace crates have no license yet. They are not on crates.io.
+[licenses.private]
+ignore = true
+
+[bans]
+multiple-versions = "allow"
+wildcards = "deny"
+# The workspace crates use path dependencies with no version.
+allow-wildcard-paths = true
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"

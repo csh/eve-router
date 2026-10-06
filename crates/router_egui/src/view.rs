@@ -2,6 +2,7 @@
 //! planner), the route list, the route table, the sidebar and the status line.
 
 use crate::app::Session;
+use crate::pilots_view::{PilotsUi, avatar_row, pilots_in};
 use crate::search::{Pick, SearchBox};
 use crate::settings_window::{self, Popup, SettingsForm};
 use crate::theme::{self, panel};
@@ -60,6 +61,8 @@ pub struct View {
     /// The Nexum map list fetch, while it runs.
     pub maps: Option<Receiver<Result<Vec<MapInfo>, FetchError>>>,
     status_timer: StatusTimer,
+    /// The login, the route start, the active route and the avatars.
+    pilots: PilotsUi,
 }
 
 /// A change to the waypoints, from a click in the route planner.
@@ -78,11 +81,13 @@ impl View {
             settings: None,
             maps: None,
             status_timer: StatusTimer::default(),
+            pilots: PilotsUi::default(),
         }
     }
 
     pub fn show(&mut self, ui: &mut Ui, s: &mut Session) {
         self.poll_maps(s);
+        self.pilots.update(ui.ctx(), s);
         // The status text and the startup lines clear after `STATUS_TIME`.
         let text = std::iter::once(&s.status).chain(&s.startup_lines).filter(|t| !t.is_empty()).cloned().collect::<Vec<_>>().join(" · ");
         match self.status_timer.update(&text, Instant::now()) {
@@ -98,8 +103,9 @@ impl View {
             if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::F)) {
                 self.search.focus(ui);
             }
-            // The arrow keys select a route while no text field has the focus.
-            if ui.memory(|m| m.focused().is_none()) && !s.routes.is_empty() {
+            // The arrow keys select a route while no text field has the focus. While a route is
+            // active, the route list is hidden.
+            if ui.memory(|m| m.focused().is_none()) && !s.routes.is_empty() && s.pilots.active.is_none() {
                 let (up, down) = ui.input(|i| (i.key_pressed(Key::ArrowUp), i.key_pressed(Key::ArrowDown)));
                 if up && s.selected > 0 {
                     s.selected -= 1;
@@ -116,18 +122,24 @@ impl View {
         egui::Panel::top("top-bar").frame(bar).show(ui, |ui| self.top_bar(ui, s));
         egui::Panel::bottom("status-bar").frame(bar).show(ui, |ui| status_bar(ui, s));
         let side = Frame::new().fill(theme::BG).inner_margin(Margin { left: 0, right: 10, top: 10, bottom: 10 });
-        egui::Panel::right("sidebar").resizable(false).exact_size(280.0).frame(side).show(ui, |ui| sidebar(ui, s));
+        egui::Panel::right("sidebar").resizable(false).exact_size(280.0).frame(side).show(ui, |ui| sidebar(ui, s, &mut self.pilots));
         let central = Frame::new().fill(theme::BG).inner_margin(Margin::same(10));
         egui::CentralPanel::default().frame(central).show(ui, |ui| {
+            // The active route hides the planner and the route list.
+            if s.pilots.active.is_some() {
+                self.pilots.active_view(ui, s);
+                return;
+            }
             self.planner(ui, s);
             ui.add_space(8.0);
             let routes_height = (ui.available_height() * 0.3).clamp(90.0, 220.0);
             ui.allocate_ui(vec2(ui.available_width(), routes_height), |ui| route_list(ui, s));
             ui.add_space(8.0);
-            route_table(ui, s);
+            route_table(ui, s, &mut self.pilots);
         });
 
         settings_window::show(ui, self, s);
+        self.pilots.windows(ui, s);
     }
 
     /// Take the result of the Nexum map list fetch, if the thread sent it.
@@ -164,7 +176,13 @@ impl View {
                 if ui.button("⚙ Settings").clicked() {
                     self.settings = Some(SettingsForm::new(s));
                 }
+                self.pilots.characters_button(ui, s);
                 ui.separator();
+                // While a route is active, the controls that change the route are off.
+                let locked = s.pilots.active.is_some();
+                if locked {
+                    ui.disable();
+                }
 
                 // The number of routes.
                 if ui.add_enabled(true, Button::new("+")).clicked() {
@@ -377,7 +395,7 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
     });
 }
 
-fn route_table(ui: &mut Ui, s: &mut Session) {
+fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     let Some(route) = s.selected_route() else {
         panel(ui, "Route", "", true, |_| {});
         return;
@@ -386,7 +404,16 @@ fn route_table(ui: &mut Ui, s: &mut Session) {
     let info = format!("{}{}", jumps_label(route.jumps), route_extras(route));
     let mut clicked = None;
     let mut copy = false;
+    let characters = s.pilots.characters();
+    // The Pilots column shows only when a character is logged in.
+    let show_pilots = !characters.is_empty();
+    let mut start = false;
     let header = |ui: &mut Ui| {
+        let has_pilot = characters.iter().any(|c| !c.live.expired);
+        let text = if has_pilot { format!("Start route #{}", s.selected + 1) } else { "Log in to start".into() };
+        let button = Button::new(RichText::new(text).size(11.0).color(Color32::WHITE)).fill(theme::ACCENT.gamma_multiply(0.35)).small();
+        start = ui.add(button).on_hover_text("Send the waypoints of this route to a character in the game").clicked();
+        ui.add_space(6.0);
         let button = Button::new(RichText::new("Copy route").size(11.0)).small();
         copy = ui.add(button).on_hover_text("Copy the route as text, in the format of --print").clicked();
         ui.add_space(6.0);
@@ -395,20 +422,25 @@ fn route_table(ui: &mut Ui, s: &mut Session) {
     theme::panel_with(ui, &title, header, true, |ui| {
         let uni = &s.uni;
         let header = |ui: &mut Ui, text: &str| _ = ui.label(theme::header_text(text));
-        TableBuilder::new(ui)
+        let mut table = TableBuilder::new(ui)
             .id_salt("route-table")
             .striped(false)
             .sense(Sense::click())
             .cell_layout(Layout::left_to_right(Align::Center))
             .column(Column::exact(36.0))
             .column(Column::exact(110.0))
-            .column(Column::initial(150.0).at_least(90.0).resizable(true))
+            .column(Column::initial(150.0).at_least(90.0).resizable(true));
+        if show_pilots {
+            table = table.column(Column::initial(190.0).at_least(70.0).resizable(true).clip(true));
+        }
+        table
             .column(Column::exact(48.0))
             .column(Column::initial(170.0).at_least(90.0).resizable(true))
             .column(Column::remainder().at_least(120.0))
             .auto_shrink(false)
             .header(20.0, |mut row| {
-                for text in ["#", "Stop", "System", "Sec", "Region", "Via"] {
+                let pilots_header = show_pilots.then_some("Pilots");
+                for text in ["#", "Stop", "System"].into_iter().chain(pilots_header).chain(["Sec", "Region", "Via"]) {
                     row.col(|ui| header(ui, text));
                 }
             })
@@ -440,6 +472,9 @@ fn route_table(ui: &mut Ui, s: &mut Session) {
                         }
                     });
                     row.col(|ui| _ = ui.add(Label::new(name).truncate()));
+                    if show_pilots {
+                        row.col(|ui| avatar_row(ui, &mut pilots.portraits, &pilots_in(&characters, sys.id)));
+                    }
                     row.col(|ui| {
                         _ = ui.label(RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)))
                     });
@@ -454,13 +489,16 @@ fn route_table(ui: &mut Ui, s: &mut Session) {
     if clicked.is_some() {
         s.selected_step = clicked;
     }
+    if start {
+        pilots.begin_start(s, s.selected);
+    }
     if copy && let Some(route) = s.selected_route() {
         ui.ctx().copy_text(route_text(&s.uni, &s.settings.rules, s.selected, route, s.now));
         s.status = format!("Route #{} copied to the clipboard", s.selected + 1);
     }
 }
 
-fn sidebar(ui: &mut Ui, s: &mut Session) {
+fn sidebar(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     // The "Shortcuts" box shows only when an overlay loaded a connection.
     let sc = &s.shortcuts;
     if sc.wormholes + sc.bridges > 0 {
@@ -492,7 +530,9 @@ fn sidebar(ui: &mut Ui, s: &mut Session) {
 
     let info = s.waypoints.first().map_or(String::new(), |&n| format!("from {}", s.uni.name(n)));
     let mut add = None;
-    panel(ui, "Shortest route", &info, true, |ui| {
+    // With pilots, the Pilots panel goes below, so this panel does not fill the sidebar.
+    let fill = s.pilots.characters().is_empty();
+    panel(ui, "Shortest route", &info, fill, |ui| {
         if s.settings.favourites.is_empty() {
             ui.label(RichText::new("No favourites. Add one in the settings, or right-click a search result.").color(theme::TEXT_DIM));
             return;
@@ -525,6 +565,10 @@ fn sidebar(ui: &mut Ui, s: &mut Session) {
     });
     if let Some(node) = add {
         s.add_waypoint(node);
+    }
+    if !fill {
+        ui.add_space(8.0);
+        pilots.sidebar_panel(ui, s);
     }
 }
 

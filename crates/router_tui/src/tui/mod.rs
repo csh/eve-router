@@ -1,18 +1,26 @@
 //! The terminal UI.
 
 mod app;
+mod pilots;
 mod ui;
+mod ui_pilots;
 
 use app::App;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use router_core::config::Config;
+use router_core::esi::pilots::Pilots;
 use router_core::labels::Shortcuts;
 use router_core::settings::Settings;
 use router_core::universe::Universe;
 use std::path::PathBuf;
+use std::sync::Arc;
+use std::time::Duration;
 
 pub fn run(uni: &Universe, settings: Settings, cfg: Config, cfg_path: PathBuf, input: String, shortcuts: Shortcuts) -> Result<(), String> {
-    let mut app = App::new(uni, settings, cfg, cfg_path, input, shortcuts);
+    let mut app = App::new(uni, settings, cfg, cfg_path.clone(), input, shortcuts);
+    // The TUI reads the tracker each 250 ms, so it needs no wake.
+    app.pilots = Pilots::open(&cfg_path, Arc::new(|| {}));
+    app.on_open();
     let mut terminal = ratatui::init();
     let result = (|| -> std::io::Result<()> {
         while !app.quit {
@@ -22,12 +30,15 @@ pub fn run(uni: &Universe, settings: Settings, cfg: Config, cfg_path: PathBuf, i
                 app.load_maps();
                 continue;
             }
-            if let Event::Key(key) = event::read()? {
+            // Wait for a key at most 250 ms, then read the tracker and the login.
+            if event::poll(Duration::from_millis(250))?
+                && let Event::Key(key) = event::read()?
                 // Windows also sends key release events.
-                if key.kind == KeyEventKind::Press {
-                    app.on_key(key);
-                }
+                && key.kind == KeyEventKind::Press
+            {
+                app.on_key(key);
             }
+            app.tick();
         }
         Ok(())
     })();
@@ -182,6 +193,37 @@ mod tests {
         let start = text[..end].trim_end_matches(|c: char| c.is_ascii_digit() || c == '.').len();
         let text = format!("{}# ms {}{}", &text[..start], "─".repeat(end - start - 1), &text[end + 4..]);
         router_core::assert_snapshot!("start_screen", text);
+    }
+
+    /// The active route: the planner is hidden, and the table shows the progress.
+    #[test]
+    fn active_screen_snapshot() {
+        use router_core::esi::active::ActiveRoute;
+        let mut uni = Universe::from_sde(router_core::sde::load(&router_core::test_support::sde_dir()).unwrap());
+        router_core::overlay::load_bridges(&mut uni, &router_core::test_support::fixture("ansiblex.txt")).unwrap();
+        let settings = Settings {
+            mode: Mode::Shortest,
+            optimize: false,
+            top: 1,
+            wormholes: true,
+            hubs: Default::default(),
+            bridges: true,
+            rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
+            min_life: 0,
+            favourites: vec![uni.exact("Jita").unwrap()],
+        };
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
+        let cfg_path = std::env::temp_dir().join("eve-router-test-active-snapshot.json");
+        let mut app = App::new(&uni, settings, Config::default(), cfg_path, "Jita > UALX-3".into(), shortcuts);
+        let mut route = ActiveRoute::new(&uni, &app.settings.rules, &app.routes[0], 1, 7, "Alice Ander", app.now);
+        route.progress = 3;
+        app.pilots.active = Some(route);
+        app.tick();
+        let mut terminal = Terminal::new(TestBackend::new(120, 30)).unwrap();
+        terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
+        let text = screen_text(terminal.backend().buffer());
+        assert!(!text.contains("Route: Jita"), "the planner input is hidden");
+        router_core::assert_snapshot!("active_screen", text);
     }
 
     /// The foreground color of the first cell of the screen row that starts with `text`.

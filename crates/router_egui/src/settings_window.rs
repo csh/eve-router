@@ -52,12 +52,12 @@ impl SettingsForm {
     }
 }
 
-fn modal_frame() -> Frame {
+pub(crate) fn modal_frame() -> Frame {
     Frame::new().fill(theme::PANEL).stroke(Stroke::new(1.0, theme::ACCENT)).inner_margin(Margin::same(14))
 }
 
 /// The title of a modal window, with an accent line below it.
-fn title(ui: &mut Ui, text: &str) {
+pub(crate) fn title(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text.to_uppercase()).family(theme::bold()).color(theme::ACCENT).extra_letter_spacing(2.0));
     let rect = ui.available_rect_before_wrap();
     ui.painter().line_segment([rect.left_top(), rect.left_top() + vec2(rect.width(), 0.0)], Stroke::new(1.0, theme::LINE));
@@ -140,49 +140,65 @@ fn label(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).color(theme::TEXT_DIM));
 }
 
+/// The hover text of a control that a route start locks.
+pub const LOCKED: &str = "Locked while route is active — stop the route to change this";
+
 fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool) -> Option<Action> {
     let mut action = None;
     ui.set_width(560.0);
     title(ui, "Settings");
+    // While a route is active, only the favourites can change.
+    let locked = s.pilots.active.is_some();
+    if locked {
+        ui.label(RichText::new("Routing settings are locked while a route is active. Favourites stay editable.").color(theme::WARN));
+    }
     ScrollArea::vertical().max_height(ui.ctx().content_rect().height() - 160.0).show(ui, |ui| {
         egui::Grid::new("settings-grid").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
             // The alliance capital.
             label(ui, "Alliance capital");
-            ui.vertical(|ui| {
-                ui.horizontal(|ui| {
-                    let text = s.settings.rules.capital.map_or("none (jump bridges off)".into(), |n| s.uni.name(n).to_string());
-                    ui.label(RichText::new(text).color(Color32::WHITE));
-                    if s.settings.rules.capital.is_some() && ui.small_button("Clear").clicked() {
-                        s.settings.rules.capital = None;
+            ui.add_enabled_ui(!locked, |ui| {
+                ui.vertical(|ui| {
+                    ui.horizontal(|ui| {
+                        let text = s.settings.rules.capital.map_or("none (jump bridges off)".into(), |n| s.uni.name(n).to_string());
+                        ui.label(RichText::new(text).color(Color32::WHITE));
+                        if s.settings.rules.capital.is_some() && ui.small_button("Clear").clicked() {
+                            s.settings.rules.capital = None;
+                            s.recompute();
+                            s.save();
+                        }
+                    });
+                    if let Some((_, node)) = form.capital.show(ui, &s.uni, 300.0, "Search system…", &[]) {
+                        s.settings.rules.capital = Some(node);
                         s.recompute();
                         s.save();
                     }
-                });
-                if let Some((_, node)) = form.capital.show(ui, &s.uni, 300.0, "Search system…", &[]) {
-                    s.settings.rules.capital = Some(node);
-                    s.recompute();
-                    s.save();
-                }
-            });
+                })
+            })
+            .response
+            .on_disabled_hover_text(LOCKED);
             ui.end_row();
 
             // The max TJ for one bridge jump.
             label(ui, "Max TJ per bridge jump");
-            ui.horizontal(|ui| {
-                let response = ui.add(TextEdit::singleline(&mut form.max_cap).hint_text("no limit").desired_width(120.0));
-                let enter = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                if ui.button("Apply").clicked() || enter {
-                    match parse_max_cap(&form.max_cap) {
-                        Ok(max_cap) => {
-                            s.settings.rules.max_cap = max_cap;
-                            form.error = None;
-                            s.recompute();
-                            s.save();
+            ui.add_enabled_ui(!locked, |ui| {
+                ui.horizontal(|ui| {
+                    let response = ui.add(TextEdit::singleline(&mut form.max_cap).hint_text("no limit").desired_width(120.0));
+                    let enter = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
+                    if ui.button("Apply").clicked() || enter {
+                        match parse_max_cap(&form.max_cap) {
+                            Ok(max_cap) => {
+                                s.settings.rules.max_cap = max_cap;
+                                form.error = None;
+                                s.recompute();
+                                s.save();
+                            }
+                            Err(e) => form.error = Some(e),
                         }
-                        Err(e) => form.error = Some(e),
                     }
-                }
-            });
+                })
+            })
+            .response
+            .on_disabled_hover_text(LOCKED);
             ui.end_row();
 
             // The favourites, in the order of the sidebar.
@@ -223,78 +239,94 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
 
             // Nexum: the URL, the key and the map. A change applies at the next start.
             label(ui, "Nexum URL");
-            ui.horizontal(|ui| {
-                ui.add(TextEdit::singleline(&mut form.url).hint_text("https://nexum.example").desired_width(300.0));
-                if ui.button("Save").clicked() {
-                    match config::parse_nexum_url(&form.url) {
-                        Ok(url) => {
-                            s.cfg.nexum.url = url;
-                            form.error = None;
-                            s.nexum_saved();
+            ui.add_enabled_ui(!locked, |ui| {
+                ui.horizontal(|ui| {
+                    ui.add(TextEdit::singleline(&mut form.url).hint_text("https://nexum.example").desired_width(300.0));
+                    if ui.button("Save").clicked() {
+                        match config::parse_nexum_url(&form.url) {
+                            Ok(url) => {
+                                s.cfg.nexum.url = url;
+                                form.error = None;
+                                s.nexum_saved();
+                            }
+                            Err(e) => form.error = Some(e),
                         }
-                        Err(e) => form.error = Some(e),
                     }
-                }
-            });
+                })
+            })
+            .response
+            .on_disabled_hover_text(LOCKED);
             ui.end_row();
 
             label(ui, "Nexum key");
-            ui.vertical(|ui| {
-                let current = s.cfg.nexum.key.as_ref().map_or("none".into(), ApiKey::masked);
-                ui.label(RichText::new(current).color(theme::TEXT));
-                ui.horizontal(|ui| {
-                    ui.add(
-                        TextEdit::singleline(&mut form.key)
-                            .password(true)
-                            .hint_text("paste a key with the read scope")
-                            .desired_width(300.0),
-                    );
-                    if ui.add_enabled(!form.key.trim().is_empty(), Button::new("Save")).clicked() {
-                        s.cfg.nexum.key = Some(ApiKey(form.key.trim().to_string()));
-                        form.key.clear();
-                        s.nexum_saved();
-                    }
-                    if s.cfg.nexum.key.is_some() && ui.button("Clear").clicked() {
-                        s.cfg.nexum.key = None;
-                        s.nexum_saved();
-                    }
-                });
-            });
+            ui.add_enabled_ui(!locked, |ui| {
+                ui.vertical(|ui| {
+                    let current = s.cfg.nexum.key.as_ref().map_or("none".into(), ApiKey::masked);
+                    ui.label(RichText::new(current).color(theme::TEXT));
+                    ui.horizontal(|ui| {
+                        ui.add(
+                            TextEdit::singleline(&mut form.key)
+                                .password(true)
+                                .hint_text("paste a key with the read scope")
+                                .desired_width(300.0),
+                        );
+                        if ui.add_enabled(!form.key.trim().is_empty(), Button::new("Save")).clicked() {
+                            s.cfg.nexum.key = Some(ApiKey(form.key.trim().to_string()));
+                            form.key.clear();
+                            s.nexum_saved();
+                        }
+                        if s.cfg.nexum.key.is_some() && ui.button("Clear").clicked() {
+                            s.cfg.nexum.key = None;
+                            s.nexum_saved();
+                        }
+                    });
+                })
+            })
+            .response
+            .on_disabled_hover_text(LOCKED);
             ui.end_row();
 
             label(ui, "Nexum map");
-            ui.horizontal(|ui| {
-                let name = match &s.cfg.nexum.map_id {
-                    None => "none".into(),
-                    Some(id) => s.map_names.iter().find(|m| &m.id == id).map_or(id.clone(), |m| m.name.clone()),
-                };
-                ui.label(RichText::new(name).color(theme::TEXT));
-                if loading {
-                    ui.add(egui::Spinner::new().color(theme::ACCENT));
-                    ui.label(RichText::new("Loading maps…").color(theme::TEXT_DIM));
-                } else if ui.button("Choose map…").clicked() {
-                    if s.cfg.nexum.url.is_none() || s.cfg.nexum.key.is_none() {
-                        form.error = Some("Set the Nexum URL and key first".into());
-                    } else {
-                        action = Some(Action::LoadMaps);
+            ui.add_enabled_ui(!locked, |ui| {
+                ui.horizontal(|ui| {
+                    let name = match &s.cfg.nexum.map_id {
+                        None => "none".into(),
+                        Some(id) => s.map_names.iter().find(|m| &m.id == id).map_or(id.clone(), |m| m.name.clone()),
+                    };
+                    ui.label(RichText::new(name).color(theme::TEXT));
+                    if loading {
+                        ui.add(egui::Spinner::new().color(theme::ACCENT));
+                        ui.label(RichText::new("Loading maps…").color(theme::TEXT_DIM));
+                    } else if ui.button("Choose map…").clicked() {
+                        if s.cfg.nexum.url.is_none() || s.cfg.nexum.key.is_none() {
+                            form.error = Some("Set the Nexum URL and key first".into());
+                        } else {
+                            action = Some(Action::LoadMaps);
+                        }
                     }
-                }
-            });
+                })
+            })
+            .response
+            .on_disabled_hover_text(LOCKED);
             ui.end_row();
 
             // The EVE-Scout hub switches act at route time.
             label(ui, "EVE-Scout");
-            ui.horizontal(|ui| {
-                let hubs = &mut s.settings.hubs;
-                let thera_text = format!("Thera: {}", on_off(hubs.thera));
-                let thera = ui.checkbox(&mut hubs.thera, thera_text).changed();
-                let turnur_text = format!("Turnur: {}", on_off(hubs.turnur));
-                let turnur = ui.checkbox(&mut hubs.turnur, turnur_text).changed();
-                if thera || turnur {
-                    s.recompute();
-                    s.save();
-                }
-            });
+            ui.add_enabled_ui(!locked, |ui| {
+                ui.horizontal(|ui| {
+                    let hubs = &mut s.settings.hubs;
+                    let thera_text = format!("Thera: {}", on_off(hubs.thera));
+                    let thera = ui.checkbox(&mut hubs.thera, thera_text).changed();
+                    let turnur_text = format!("Turnur: {}", on_off(hubs.turnur));
+                    let turnur = ui.checkbox(&mut hubs.turnur, turnur_text).changed();
+                    if thera || turnur {
+                        s.recompute();
+                        s.save();
+                    }
+                })
+            })
+            .response
+            .on_disabled_hover_text(LOCKED);
             ui.end_row();
         });
     });
