@@ -131,7 +131,9 @@ impl RunOverrides {
         Self { file, run }
     }
 
-    /// Put back the file value of each flagged field that still has its flag value.
+    /// Put back the file value of each flagged field that still has its flag value. A change
+    /// back to the flag value counts as no change. The hull and the pilot are one field:
+    /// together they set the hull source.
     pub fn restore(&self, cfg: &mut Config) {
         fn keep<T: PartialEq + Clone>(slot: &mut T, file: &T, run: &T) {
             if slot == run && run != file {
@@ -140,8 +142,9 @@ impl RunOverrides {
         }
         let (f, r) = (&self.file, &self.run);
         keep(&mut cfg.capital, &f.capital, &r.capital);
-        keep(&mut cfg.hull, &f.hull, &r.hull);
-        keep(&mut cfg.pilot, &f.pilot, &r.pilot);
+        let mut hull = (cfg.hull.take(), cfg.pilot.take());
+        keep(&mut hull, &(f.hull.clone(), f.pilot), &(r.hull.clone(), r.pilot));
+        (cfg.hull, cfg.pilot) = hull;
         keep(&mut cfg.max_cap_tj, &f.max_cap_tj, &r.max_cap_tj);
         keep(&mut cfg.min_life_min, &f.min_life_min, &r.min_life_min);
         keep(&mut cfg.mode, &f.mode, &r.mode);
@@ -197,6 +200,18 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_overrides_keep_the_hull_and_pilot_together() {
+        // The file follows pilot 9. `--hull Paladin` gives a manual hull for this run.
+        let file = Config { hull: Some("Sin".into()), pilot: Some(9), ..Config::default() };
+        let run = Config { hull: Some("Paladin".into()), pilot: None, ..file.clone() };
+        let overrides = RunOverrides::new(file, run.clone());
+        // The user picks the manual hull Rorqual in the app: the pilot stays off.
+        let mut cfg = Config { hull: Some("Rorqual".into()), ..run };
+        overrides.restore(&mut cfg);
+        assert_eq!((cfg.hull.as_deref(), cfg.pilot), (Some("Rorqual"), None));
+    }
 
     #[test]
     fn run_overrides_last_one_run() {
