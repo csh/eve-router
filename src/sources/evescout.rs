@@ -90,19 +90,12 @@ pub fn convert(sigs: &[Signature], known: impl Fn(u32) -> bool, types: &Wormhole
             Some(t) => (Some(Size::from_jump_kg(t.max_jump_kg)), Some(t.max_jump_kg)),
             None => (s.max_ship_size.as_deref().and_then(parse_size), None),
         };
-        let (out_sig, in_sig) = (s.out_signature.clone(), s.in_signature.clone());
-        let (sig_a, sig_b) = if s.out_system_id <= in_id { (out_sig, in_sig) } else { (in_sig, out_sig) };
         holes.push(Wormhole {
-            a: s.out_system_id.min(in_id),
-            b: s.out_system_id.max(in_id),
             size,
             max_jump_kg,
-            mass: None,
             expiry,
             wh_type: wh_type.map(str::to_string),
-            sig_a,
-            sig_b,
-            sources: vec![SourceId::EveScout],
+            ..Wormhole::new(s.out_system_id, in_id, s.out_signature.clone(), s.in_signature.clone(), SourceId::EveScout)
         });
     }
     (SourceData { source: SourceId::EveScout, fetched_at, origin: None, holes }, report)

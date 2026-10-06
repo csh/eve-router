@@ -575,11 +575,10 @@ impl<'a> App<'a> {
 
     /// Save the config after a change to a Nexum row. A Nexum change applies at the next start.
     fn nexum_saved(&mut self) {
-        self.save();
-        if !self.status.starts_with("Saved") {
-            return;
-        }
-        self.status = "Nexum settings saved. Restart to load the new map.".into();
+        self.status = match self.write_config() {
+            Ok(()) => "Nexum settings saved. Restart to load the new map.".into(),
+            Err(e) => e,
+        };
     }
 
     /// Fetch the map list and open it. This blocks for up to 5 seconds, so the run loop draws
@@ -612,7 +611,16 @@ impl<'a> App<'a> {
         }
     }
 
+    /// Save the config, and show the result on the status line.
     fn save(&mut self) {
+        self.status = match self.write_config() {
+            Ok(()) => format!("Saved {}", self.cfg_path.display()),
+            Err(e) => e,
+        };
+    }
+
+    /// Copy the settings to the config, and write the config file.
+    fn write_config(&mut self) -> Result<(), String> {
         let rules = &self.settings.rules;
         self.cfg.capital = rules.capital.map(|n| self.uni.name(n).to_string());
         self.cfg.hull = rules.hull.map(|h| h.name.clone());
@@ -621,10 +629,7 @@ impl<'a> App<'a> {
         self.cfg.top = Some(self.settings.top);
         self.cfg.eve_scout = self.settings.hubs;
         self.cfg.favourites = Some(self.settings.favourites.iter().map(|&n| self.uni.name(n).to_string()).collect());
-        self.status = match self.cfg.save(&self.cfg_path) {
-            Ok(()) => format!("Saved {}", self.cfg_path.display()),
-            Err(e) => e,
-        };
+        self.cfg.save(&self.cfg_path)
     }
 }
 

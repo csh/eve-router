@@ -178,11 +178,13 @@ mod tests {
 
     #[test]
     fn nexum_key_is_masked() {
-        let mut cfg = Config::default();
-        cfg.nexum = NexumConfig {
-            url: Some("https://nexum.example".into()),
-            key: Some(ApiKey("nxm_TESTKEY_0000000000000000xyz".into())),
-            map_id: Some("m1".into()),
+        let mut cfg = Config {
+            nexum: NexumConfig {
+                url: Some("https://nexum.example".into()),
+                key: Some(ApiKey("nxm_TESTKEY_0000000000000000xyz".into())),
+                map_id: Some("m1".into()),
+            },
+            ..Config::default()
         };
         let debug = format!("{cfg:?}");
         assert!(!debug.contains("TESTKEY_0000"), "{debug}");

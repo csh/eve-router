@@ -150,6 +150,8 @@ fn u32_at(b: &[u8], i: usize) -> u32 {
 const EOCD_SIG: [u8; 4] = [0x50, 0x4b, 0x05, 0x06];
 const CENTRAL_SIG: u32 = 0x0201_4b50;
 const LOCAL_SIG: u32 = 0x0403_4b50;
+/// The largest buffer that `extract` reserves before it decompresses an entry.
+const MAX_RESERVE: usize = 256 * 1024 * 1024;
 
 /// Read the central directory. The end record is in the last 64 KiB + 22 bytes of the zip.
 fn read_directory(src: &dyn RangeSource) -> Result<Vec<Entry>, String> {
@@ -197,11 +199,7 @@ fn extract(src: &dyn RangeSource, entry: &Entry) -> Result<Vec<u8>, String> {
     let data = src.read(data_start, entry.compressed)?;
     let out = match entry.method {
         0 => data,
-        8 => {
-            let mut out = Vec::with_capacity(entry.size as usize);
-            DeflateDecoder::new(data.as_slice()).read_to_end(&mut out).map_err(|e| err(&e.to_string()))?;
-            out
-        }
+        8 => inflate(&data, entry.size).map_err(|e| err(&e.to_string()))?,
         m => return Err(err(&format!("compression method {m} is not supported"))),
     };
     let mut crc = Crc::new();
@@ -209,6 +207,16 @@ fn extract(src: &dyn RangeSource, entry: &Entry) -> Result<Vec<u8>, String> {
     if out.len() as u64 != entry.size || crc.sum() != entry.crc {
         return Err(err("size or CRC-32 does not match"));
     }
+    Ok(out)
+}
+
+/// Decompress deflate data. The size comes from the zip, so the function trusts it only as a
+/// limit. It stops at `size + 1` bytes, and reserves at most `MAX_RESERVE`. A bad entry then
+/// fails the size check in `extract`, and does not fill the memory first.
+fn inflate(data: &[u8], size: u64) -> std::io::Result<Vec<u8>> {
+    let capacity = usize::try_from(size).unwrap_or(usize::MAX).min(MAX_RESERVE);
+    let mut out = Vec::with_capacity(capacity);
+    DeflateDecoder::new(data).take(size.saturating_add(1)).read_to_end(&mut out)?;
     Ok(out)
 }
 
@@ -311,6 +319,18 @@ mod tests {
         let build = crate::sde::build_number(dir).unwrap();
         let source = HttpSource { agent: agent(), url: format!("{BASE_URL}/eve-online-static-data-{build}-jsonl.zip") };
         download(&source, dir).unwrap();
+    }
+
+    #[test]
+    fn inflate_stops_after_the_given_size() {
+        use flate2::{Compression, write::DeflateEncoder};
+        use std::io::Write;
+        let mut enc = DeflateEncoder::new(Vec::new(), Compression::default());
+        enc.write_all(&vec![0u8; 1024 * 1024]).unwrap();
+        let data = enc.finish().unwrap();
+        // The entry says 10 bytes, but the data gives 1 MiB. Read only one byte past the size.
+        assert_eq!(inflate(&data, 10).unwrap().len(), 11);
+        assert_eq!(inflate(&data, 1024 * 1024).unwrap().len(), 1024 * 1024);
     }
 
     #[test]

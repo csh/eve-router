@@ -45,14 +45,24 @@ impl FetchError {
     }
 }
 
-/// Send one GET request, with a bearer key if `key` is set, and return the body.
-/// The router never sends any other method to a source.
-pub fn get(url: &str, key: Option<&str>, timeout: Duration) -> Result<String, FetchError> {
-    let agent = ureq::Agent::config_builder()
+/// An HTTP agent with a timeout for each request. One agent keeps its connections open,
+/// so a batch of requests to one server uses one agent.
+pub fn agent(timeout: Duration) -> ureq::Agent {
+    ureq::Agent::config_builder()
         .timeout_global(Some(timeout))
         .user_agent(concat!("eve-router/", env!("CARGO_PKG_VERSION")))
         .build()
-        .new_agent();
+        .new_agent()
+}
+
+/// Send one GET request with a new agent. See `get_with`.
+pub fn get(url: &str, key: Option<&str>, timeout: Duration) -> Result<String, FetchError> {
+    get_with(&agent(timeout), url, key)
+}
+
+/// Send one GET request, with a bearer key if `key` is set, and return the body.
+/// The router never sends any other method to a source.
+pub fn get_with(agent: &ureq::Agent, url: &str, key: Option<&str>) -> Result<String, FetchError> {
     let mut request = agent.get(url);
     if let Some(key) = key {
         request = request.header("Authorization", &format!("Bearer {key}"));

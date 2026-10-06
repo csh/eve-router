@@ -138,6 +138,25 @@ pub fn sig_letters(sig: &str) -> Option<String> {
 }
 
 impl Wormhole {
+    /// A wormhole between the systems `x` and `y`, with the signature in each system.
+    /// The function puts the lower ID in `a`, so `merge` can match records from all sources.
+    /// The other fields start as `None`.
+    pub fn new(x: u32, y: u32, sig_x: Option<String>, sig_y: Option<String>, source: SourceId) -> Wormhole {
+        let ((a, sig_a), (b, sig_b)) = if x <= y { ((x, sig_x), (y, sig_y)) } else { ((y, sig_y), (x, sig_x)) };
+        Wormhole {
+            a,
+            b,
+            size: None,
+            max_jump_kg: None,
+            mass: None,
+            expiry: None,
+            wh_type: None,
+            sig_a,
+            sig_b,
+            sources: vec![source],
+        }
+    }
+
     /// The three letters of the signature in the system `id`, if `id` is an end and a scout
     /// gave the signature. A route uses the signature in the system that the jump leaves.
     pub fn sig_at(&self, id: u32) -> Option<String> {
@@ -323,18 +342,7 @@ pub mod tests {
 
     /// A wormhole between two systems, with no known values.
     pub fn hole(a: u32, b: u32) -> Wormhole {
-        Wormhole {
-            a: a.min(b),
-            b: a.max(b),
-            size: None,
-            max_jump_kg: None,
-            mass: None,
-            expiry: None,
-            wh_type: None,
-            sig_a: None,
-            sig_b: None,
-            sources: vec![SourceId::Nexum],
-        }
+        Wormhole::new(a, b, None, None, SourceId::Nexum)
     }
 
     #[test]
