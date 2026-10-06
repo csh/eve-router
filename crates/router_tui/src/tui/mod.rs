@@ -7,7 +7,7 @@ mod ui_pilots;
 
 use app::App;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
-use router_core::config::Config;
+use router_core::config::{Config, RunOverrides};
 use router_core::esi::pilots::Pilots;
 use router_core::labels::Shortcuts;
 use router_core::settings::Settings;
@@ -16,8 +16,17 @@ use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
-pub fn run(uni: &Universe, settings: Settings, cfg: Config, cfg_path: PathBuf, input: String, shortcuts: Shortcuts) -> Result<(), String> {
+pub fn run(
+    uni: &Universe,
+    settings: Settings,
+    cfg: Config,
+    cfg_path: PathBuf,
+    input: String,
+    shortcuts: Shortcuts,
+    overrides: RunOverrides,
+) -> Result<(), String> {
     let mut app = App::new(uni, settings, cfg, cfg_path.clone(), input, shortcuts);
+    app.overrides = overrides;
     // The TUI reads the tracker each 250 ms, so it needs no wake.
     app.pilots = Pilots::open(&cfg_path, Arc::new(|| {}));
     app.on_open();

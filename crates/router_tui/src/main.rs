@@ -1,7 +1,7 @@
 mod tui;
 
 use clap::Parser;
-use router_core::config::{self, Config};
+use router_core::config::{self, Config, RunOverrides};
 use router_core::labels::{Shortcuts, route_text};
 use router_core::route::Mode;
 use router_core::settings::{Settings, resolve_all, split_systems};
@@ -68,8 +68,9 @@ fn main() -> ExitCode {
 fn run() -> Result<(), String> {
     let cli = Cli::parse();
     let cfg_path = config::default_path();
-    let mut cfg = Config::load(&cfg_path)?;
-    // The CLI flags override the config file.
+    let file_cfg = Config::load(&cfg_path)?;
+    let mut cfg = file_cfg.clone();
+    // The CLI flags override the config file for this run. `RunOverrides` keeps them out of the file.
     cfg.capital = cli.capital.or(cfg.capital);
     // A hull on the command line is a manual hull for this run.
     if cli.hull.is_some() {
@@ -93,6 +94,10 @@ fn run() -> Result<(), String> {
         })?;
 
     let settings = Settings::from_config(&cfg, &uni)?;
+    // The flag values as a save writes them, so `restore` compares the same spellings.
+    let mut run_cfg = cfg.clone();
+    settings.store(&uni, &mut run_cfg);
+    let overrides = RunOverrides::new(file_cfg, run_cfg);
     let systems = split_systems(&cli.systems.join(","));
 
     if cli.print {
@@ -109,7 +114,7 @@ fn run() -> Result<(), String> {
         print_routes(&mut std::io::stdout().lock(), &uni, &settings, &systems, wormhole::now())
     } else {
         let shortcuts = Shortcuts::new(&uni, &report, &wh, &scout);
-        tui::run(&uni, settings, cfg, cfg_path, systems.join(" > "), shortcuts)
+        tui::run(&uni, settings, cfg, cfg_path, systems.join(" > "), shortcuts, overrides)
     }
 }
 

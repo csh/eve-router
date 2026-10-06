@@ -115,6 +115,41 @@ pub struct Config {
     pub eve_scout: Hubs,
 }
 
+/// The config before and after the CLI flags. A save puts back the file value of each field
+/// that a flag set, so a flag lasts one run. A field that the user changes in the app keeps the
+/// new value. A change back to the flag value counts as no change.
+#[derive(Default)]
+pub struct RunOverrides {
+    file: Config,
+    run: Config,
+}
+
+impl RunOverrides {
+    /// `file`: the config file as it loaded. `run`: the config with the flags, as
+    /// `Settings::store` writes it, so `restore` compares the same spellings.
+    pub fn new(file: Config, run: Config) -> Self {
+        Self { file, run }
+    }
+
+    /// Put back the file value of each flagged field that still has its flag value.
+    pub fn restore(&self, cfg: &mut Config) {
+        fn keep<T: PartialEq + Clone>(slot: &mut T, file: &T, run: &T) {
+            if slot == run && run != file {
+                slot.clone_from(file);
+            }
+        }
+        let (f, r) = (&self.file, &self.run);
+        keep(&mut cfg.capital, &f.capital, &r.capital);
+        keep(&mut cfg.hull, &f.hull, &r.hull);
+        keep(&mut cfg.pilot, &f.pilot, &r.pilot);
+        keep(&mut cfg.max_cap_tj, &f.max_cap_tj, &r.max_cap_tj);
+        keep(&mut cfg.min_life_min, &f.min_life_min, &r.min_life_min);
+        keep(&mut cfg.mode, &f.mode, &r.mode);
+        keep(&mut cfg.optimize, &f.optimize, &r.optimize);
+        keep(&mut cfg.top, &f.top, &r.top);
+    }
+}
+
 /// The Nexum URL from a text field. An empty text gives no URL. The URL loses a final "/".
 pub fn parse_nexum_url(text: &str) -> Result<Option<String>, String> {
     let value = text.trim();
@@ -162,6 +197,21 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn run_overrides_last_one_run() {
+        let file = Config { hull: Some("Sin".into()), pilot: Some(9), top: Some(3), ..Config::default() };
+        let run = Config { hull: Some("Paladin".into()), pilot: None, top: Some(5), ..file.clone() };
+        let overrides = RunOverrides::new(file, run.clone());
+        // No change in the app: the file values come back.
+        let mut cfg = run.clone();
+        overrides.restore(&mut cfg);
+        assert_eq!((cfg.hull.as_deref(), cfg.pilot, cfg.top), (Some("Sin"), Some(9), Some(3)));
+        // The user changed the route count in the app: the new value stays.
+        let mut cfg = Config { top: Some(7), ..run };
+        overrides.restore(&mut cfg);
+        assert_eq!((cfg.hull.as_deref(), cfg.top), (Some("Sin"), Some(7)));
+    }
 
     #[test]
     fn default_path_is_in_app_dir() {

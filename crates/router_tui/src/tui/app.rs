@@ -4,7 +4,7 @@ use super::pilots::{LOCKED, route_setting};
 use petgraph::graph::NodeIndex;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
-use router_core::config::{self, ApiKey, Config};
+use router_core::config::{self, ApiKey, Config, RunOverrides};
 use router_core::esi::active::{ActiveRoute, active_path};
 use router_core::esi::pilots::{PilotRow, Pilots, StartPlan};
 use router_core::labels::Shortcuts;
@@ -100,6 +100,8 @@ pub struct App<'a> {
     pub uni: &'a Universe,
     pub settings: Settings,
     cfg: Config,
+    /// The file values that the CLI flags replace for this run. `write_config` puts them back.
+    pub overrides: RunOverrides,
     cfg_path: PathBuf,
     pub input: String,
     pub focus: Focus,
@@ -139,6 +141,7 @@ impl<'a> App<'a> {
             uni,
             settings,
             cfg,
+            overrides: RunOverrides::default(),
             cfg_path: cfg_path.clone(),
             focus: if input.is_empty() { Focus::Input } else { Focus::Routes },
             input,
@@ -722,10 +725,13 @@ impl<'a> App<'a> {
         }
     }
 
-    /// Copy the settings to the config, and write the config file.
+    /// Copy the settings to the config, and write the config file. A CLI flag value does not go
+    /// into the file, unless the user changed that field.
     fn write_config(&mut self) -> Result<(), String> {
         self.settings.store(self.uni, &mut self.cfg);
-        self.cfg.save(&self.cfg_path)
+        let mut file = self.cfg.clone();
+        self.overrides.restore(&mut file);
+        file.save(&self.cfg_path)
     }
 }
 
@@ -734,6 +740,7 @@ pub(crate) mod tests {
     use super::*;
     use router_core::ansiblex::BridgeRules;
     use router_core::config::ApiKey;
+    use router_core::config::RunOverrides;
     use router_core::route::Mode;
     use router_core::test_support::{serve, universe};
 
@@ -779,6 +786,18 @@ pub(crate) mod tests {
         app.on_key(KeyEvent::from(KeyCode::Enter));
         assert_eq!(app.settings.hubs.thera, !thera);
         assert_eq!(app.status, "Config saved!");
+    }
+
+    #[test]
+    fn a_save_keeps_the_file_value_of_a_cli_flag() {
+        let file = Config { top: Some(3), ..Config::default() };
+        let run = Config { top: Some(5), ..Config::default() };
+        let mut app = app("cli-flags", run.clone());
+        app.settings.top = 5;
+        app.overrides = RunOverrides::new(file, run);
+        app.save();
+        let path = std::env::temp_dir().join("eve-router-test-cli-flags.json");
+        assert_eq!(Config::load(&path).unwrap().top, Some(3));
     }
 
     fn open_row(app: &mut App, row: SettingsRow) {
