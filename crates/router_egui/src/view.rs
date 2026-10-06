@@ -274,7 +274,7 @@ impl View {
             ui.horizontal(|ui| {
                 ui.label(theme::header_text("Pilot"));
                 let hint = "Plan for the ship of a character, or for a hull that you pick";
-                if ui.button(format!("{} ▾", pilot_label(&s.settings, &s.pilots))).on_hover_text(hint).clicked() {
+                if ui.button(pilot_label(&s.settings, &s.pilots)).on_hover_text(hint).clicked() {
                     self.popup = Some(Popup::Pilot { filter: String::new() });
                 }
             });
