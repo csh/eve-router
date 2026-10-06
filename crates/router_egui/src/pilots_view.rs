@@ -719,7 +719,7 @@ impl PilotsUi {
                         row.col(|ui| {
                             let (via, color) = match step.hop {
                                 Hop::Wormhole => (format!("{} — manual", step.via), theme::WORMHOLE),
-                                Hop::Bridge => (format!("{} — manual", step.via), theme::BRIDGE),
+                                Hop::Bridge => (step.via.clone(), theme::BRIDGE),
                                 _ => (step.via.clone(), theme::TEXT_DIM),
                             };
                             let via = via.replace('\u{2192}', "»");

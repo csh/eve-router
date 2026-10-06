@@ -655,7 +655,7 @@ mod tests {
                 hop: if i == 0 {
                     Hop::Start
                 } else if Some(system) == manual {
-                    Hop::Bridge
+                    Hop::Wormhole
                 } else {
                     Hop::Gate
                 },

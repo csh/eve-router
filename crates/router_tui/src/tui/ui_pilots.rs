@@ -119,7 +119,7 @@ pub fn draw_active(frame: &mut Frame, app: &mut App, area: Rect) {
         };
         let via = match step.hop {
             Hop::Wormhole => format!("{} — manual", step.via),
-            Hop::Bridge => format!("{} — manual", step.via),
+            Hop::Bridge => step.via.clone(),
             _ => step.via.clone(),
         };
         let via_style = match step.hop {

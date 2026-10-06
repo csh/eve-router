@@ -25,9 +25,9 @@ Every ESI request sends `X-Compatibility-Date`, and the router obeys the `Expire
 
 ### The waypoint limits
 
-The in-game autopilot follows gates only. It cannot use an Ansiblex or a wormhole. A waypoint in a system past such a hop gives a long gate detour, or no route at all. Thus the router sends the route in **segments**:
+The in-game autopilot follows gates. It takes an Ansiblex when the pilot is on the access list of the gate, so a bridge is a normal waypoint. It cannot take a wormhole. A waypoint in a system past a wormhole gives a long gate detour, or no route at all. Thus the router sends the route in **segments**:
 
-1. A segment ends at the next manual hop (Ansiblex or wormhole), or at the destination.
+1. A segment ends at the next manual hop (a wormhole), or at the destination.
 2. The router sends each system of the segment, so the autopilot follows the exact path. The first call has `clear_other_waypoints=true`. The others append in order.
 3. When the location poll shows that the pilot made the manual hop, the router sends the next segment.
 4. If a segment has more systems than the in-game waypoint cap, the router sends the stops of that segment only and shows a warning.

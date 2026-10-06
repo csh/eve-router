@@ -4,9 +4,10 @@
 //! waypoints and the app stay the same. The copy holds system IDs, not graph indices, because
 //! the graph can change between two runs (the wormholes load at each start).
 //!
-//! The in-game autopilot follows gates only. Thus the route goes to the game in segments. A
-//! segment ends before each manual hop (a wormhole or a jump bridge). When the pilot makes that
-//! hop, `observe` gives the waypoints of the next segment.
+//! The in-game autopilot follows gates, and it takes an Ansiblex when the pilot is on the access
+//! list of the gate. It cannot take a wormhole. Thus the route goes to the game in segments. A
+//! segment ends before each wormhole, the manual hop. When the pilot makes that hop, `observe`
+//! gives the waypoints of the next segment.
 
 use super::client::Location;
 use crate::ansiblex::BridgeRules;
@@ -36,15 +37,16 @@ pub enum Hop {
     /// The first step.
     Start,
     Gate,
-    /// A manual hop. The autopilot stops before it.
+    /// A manual hop. The autopilot stops before it: the pilot warps to the signature and jumps.
     Wormhole,
-    /// A manual hop. The autopilot stops before it.
+    /// An Ansiblex. The autopilot takes it when the pilot is on the access list of the gate.
     Bridge,
 }
 
 impl Hop {
+    /// True for a hop that the autopilot cannot make. Only a wormhole is manual.
     pub fn is_manual(self) -> bool {
-        matches!(self, Hop::Wormhole | Hop::Bridge)
+        self == Hop::Wormhole
     }
 }
 
@@ -289,14 +291,14 @@ mod tests {
     }
 
     #[test]
-    fn segments_split_at_manual_hops() {
-        // 1 gate 2 bridge 3 gate 4 wormhole 5 gate 6
+    fn segments_split_at_wormholes_only() {
+        // 1 gate 2 bridge 3 gate 4 wormhole 5 gate 6. The autopilot takes a bridge when the
+        // pilot is on its access list, so a bridge does not end a segment.
         let r = route(&[1, 2, 3, 4, 5, 6], &[(3, Hop::Bridge), (5, Hop::Wormhole)]);
-        assert_eq!(r.segment_waypoints(0), [2]);
-        assert_eq!(r.segment_waypoints(1), [4]);
-        assert_eq!(r.segment_waypoints(2), [6]);
-        assert_eq!(r.waypoint_count(), 3);
-        assert_eq!(r.manual_hops(), 2);
+        assert_eq!(r.segment_waypoints(0), [2, 3, 4]);
+        assert_eq!(r.segment_waypoints(1), [6]);
+        assert_eq!(r.waypoint_count(), 4);
+        assert_eq!(r.manual_hops(), 1);
     }
 
     #[test]
@@ -314,7 +316,7 @@ mod tests {
 
     #[test]
     fn manual_hop_gives_the_next_segment() {
-        let mut r = route(&[1, 2, 3, 4, 5], &[(3, Hop::Bridge)]);
+        let mut r = route(&[1, 2, 3, 4, 5], &[(3, Hop::Wormhole)]);
         assert_eq!(r.observe(&at(2)), Observation::Progress(1));
         assert_eq!(r.observe(&at(3)), Observation::NextSegment { step: 2, waypoints: vec![4, 5] });
         assert_eq!(r.sent_segment, 1);
@@ -372,7 +374,7 @@ mod tests {
         let route = &routes[0];
         let r = ActiveRoute::new(&uni, &s.rules, route, 1, 7, "Alice", FIXTURE_TIME);
         assert_eq!(r.jumps(), route.jumps);
-        assert_eq!(r.manual_hops(), route.bridges + route.wormholes);
+        assert_eq!(r.manual_hops(), route.wormholes);
         assert_eq!(r.steps[0].hop, Hop::Start);
         assert_eq!(r.steps[0].system, uni.system(nodes[0]).id);
         assert_eq!(r.stop_at(r.jumps()), Some(Stop::Destination));
