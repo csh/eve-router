@@ -241,14 +241,19 @@ fn expiry(c: &NexumConnection, types: &WormholeTypes, fetched_at: u64, report: &
     let base = if let Some(at) = time(&c.lifetime_expires_at) {
         Some(Expiry { at, exact: true })
     } else if let Some(eol) = time(&c.eol_at) {
-        Some(Expiry { at: eol + 4 * HOUR, exact: false })
+        Some(Expiry { at: eol.saturating_add(4 * HOUR), exact: false })
     } else {
         match c.wh_type.as_deref().and_then(|t| types.life_hours(t)) {
-            Some(hours) => time(&c.created_at).map(|created| Expiry { at: created + (hours * 3600.0) as u64, exact: false }),
+            Some(hours) => time(&c.created_at).map(|created| Expiry { at: created.saturating_add((hours * 3600.0) as u64), exact: false }),
             None => None,
         }
     };
-    let status = c.time_status.as_deref().and_then(status_hours).map(|h| Expiry { at: fetched_at + h * HOUR, exact: false });
+    // The server text gives any number, so the math saturates.
+    let status = c
+        .time_status
+        .as_deref()
+        .and_then(status_hours)
+        .map(|h| Expiry { at: fetched_at.saturating_add(h.saturating_mul(HOUR)), exact: false });
     earlier(base, status)
 }
 
@@ -580,6 +585,20 @@ mod tests {
         let bad = find(&data, 30000144, 31000005);
         assert_eq!(bad.size, Some(Size::Large));
         assert_eq!(bad.expiry, None);
+    }
+
+    #[test]
+    fn a_huge_time_status_does_not_overflow() {
+        let c: NexumConnection = serde_json::from_value(serde_json::json!({
+            "sourceId": "1",
+            "targetId": "2",
+            "connectionType": "wormhole",
+            "timeStatus": format!("lessThan{}h", u64::MAX),
+        }))
+        .unwrap();
+        let mut report = NexumReport::default();
+        let e = expiry(&c, &WormholeTypes::default(), 1_000, &mut report).unwrap();
+        assert_eq!(e.at, u64::MAX);
     }
 
     #[test]
