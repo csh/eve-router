@@ -104,7 +104,6 @@ pub fn load(dir: &Path) -> Result<WormholeTypes, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     const TYPES: &str = concat!(
         r#"{"_key": 30677, "groupID": 988, "name": {"en": "Wormhole B274"}, "published": false}"#, "\n",
@@ -140,7 +139,7 @@ mod tests {
 
     #[test]
     fn repo_table_matches_sde() {
-        let table = load(Path::new("sde")).unwrap();
+        let table = load(&crate::test_support::sde_dir()).unwrap();
         assert_eq!(table.types.len(), 99);
         assert_eq!(table.get("B274").unwrap().max_jump_kg, 375_000_000.0);
         // The SDE value, not the Nexum chart value (24 h).

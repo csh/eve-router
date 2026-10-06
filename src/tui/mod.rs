@@ -153,11 +153,11 @@ mod tests {
     use ratatui::Terminal;
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
-    use std::path::Path;
 
     #[test]
     fn wormhole_text() {
-        use crate::wormhole::{Expiry, MassStatus, Size, Wormhole, tests::hole};
+        use crate::test_support::hole;
+        use crate::wormhole::{Expiry, MassStatus, Size, Wormhole};
         let now = 1_000_000;
         let w = Wormhole {
             wh_type: Some("K162".into()),
@@ -180,8 +180,8 @@ mod tests {
 
     #[test]
     fn draws_and_handles_keys() {
-        let mut uni = Universe::from_sde(crate::sde::load(Path::new("sde")).unwrap());
-        crate::overlay::load_bridges(&mut uni, Path::new("tests/fixtures/ansiblex.txt")).unwrap();
+        let mut uni = Universe::from_sde(crate::sde::load(&crate::test_support::sde_dir()).unwrap());
+        crate::overlay::load_bridges(&mut uni, &crate::test_support::fixture("ansiblex.txt")).unwrap();
         let settings = Settings {
             mode: Mode::Shortest,
             optimize: false,
@@ -283,8 +283,8 @@ mod tests {
     /// The first screen, with routes, the sidebar and the Shortcuts box.
     #[test]
     fn start_screen_snapshot() {
-        let mut uni = Universe::from_sde(crate::sde::load(Path::new("sde")).unwrap());
-        crate::overlay::load_bridges(&mut uni, Path::new("tests/fixtures/ansiblex.txt")).unwrap();
+        let mut uni = Universe::from_sde(crate::sde::load(&crate::test_support::sde_dir()).unwrap());
+        crate::overlay::load_bridges(&mut uni, &crate::test_support::fixture("ansiblex.txt")).unwrap();
         let settings = Settings {
             mode: Mode::Shortest,
             optimize: false,
@@ -312,7 +312,7 @@ mod tests {
     #[test]
     fn shortcuts_warning_text() {
         use crate::sources::{evescout, nexum};
-        let uni = crate::universe::tests::universe();
+        let uni = crate::test_support::universe();
         let report = OverlayReport { bridges: 0, unknown: vec!["Nowhere".into()] };
         let mut wh = nexum::Load { warning: Some("Nexum offline, map from 14:02".into()), ..Default::default() };
         wh.report.unknown = vec![1, 2];
@@ -338,9 +338,10 @@ mod tests {
 
     #[test]
     fn hub_counts_and_switches() {
-        use crate::wormhole::{THERA, TURNUR, tests::hole};
+        use crate::test_support::hole;
+        use crate::wormhole::{THERA, TURNUR};
         use ratatui::style::Color;
-        let mut uni = Universe::from_sde(crate::sde::load(Path::new("sde")).unwrap());
+        let mut uni = Universe::from_sde(crate::sde::load(&crate::test_support::sde_dir()).unwrap());
         uni.add_wormholes(&[hole(30000142, THERA), hole(30002187, THERA), hole(TURNUR, 30002053)]);
         let settings = Settings {
             mode: Mode::Shortest,
@@ -394,7 +395,7 @@ mod tests {
 
     #[test]
     fn mode_popup_toggles_optimize_order() {
-        let uni = Universe::from_sde(crate::sde::load(Path::new("sde")).unwrap());
+        let uni = Universe::from_sde(crate::sde::load(&crate::test_support::sde_dir()).unwrap());
         let settings = Settings {
             mode: Mode::Shortest,
             optimize: false,

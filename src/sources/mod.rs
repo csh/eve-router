@@ -132,75 +132,10 @@ pub fn choose(source: SourceId, fetched: Result<SourceData, FetchError>, cache: 
 }
 
 #[cfg(test)]
-pub mod test_server {
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::sync::mpsc::{self, Receiver};
-    use std::time::Duration;
-
-    /// Serve one canned HTTP response on 127.0.0.1. Return the base URL, and a channel that
-    /// gives the request text.
-    pub fn serve(status: &str, body: &str, delay: Duration) -> (String, Receiver<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let response = format!(
-            "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        );
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            let Ok((mut stream, _)) = listener.accept() else { return };
-            let mut buf = [0u8; 8192];
-            let n = stream.read(&mut buf).unwrap_or(0);
-            let _ = tx.send(String::from_utf8_lossy(&buf[..n]).into_owned());
-            std::thread::sleep(delay);
-            let _ = stream.write_all(response.as_bytes());
-        });
-        (url, rx)
-    }
-}
-
-#[cfg(test)]
-pub mod test_routes {
-    use std::collections::HashMap;
-    use std::io::{Read, Write};
-    use std::net::TcpListener;
-    use std::sync::mpsc::{self, Receiver};
-
-    /// Serve canned 200 responses on 127.0.0.1, one for each path, until the test ends.
-    /// A path that is not in `routes` gets a 500. The channel gives each request text.
-    pub fn serve_routes(routes: HashMap<String, String>) -> (String, Receiver<String>) {
-        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
-        let url = format!("http://{}", listener.local_addr().unwrap());
-        let (tx, rx) = mpsc::channel();
-        std::thread::spawn(move || {
-            for mut stream in listener.incoming().flatten() {
-                let mut buf = [0u8; 8192];
-                let n = stream.read(&mut buf).unwrap_or(0);
-                let request = String::from_utf8_lossy(&buf[..n]).into_owned();
-                let path = request.split(' ').nth(1).unwrap_or("").to_string();
-                let (status, body) = match routes.get(&path) {
-                    Some(body) => ("200 OK", body.as_str()),
-                    None => ("500 Internal Server Error", "{}"),
-                };
-                let response = format!(
-                    "HTTP/1.1 {status}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-                    body.len()
-                );
-                let _ = tx.send(request);
-                let _ = stream.write_all(response.as_bytes());
-            }
-        });
-        (url, rx)
-    }
-}
-
-#[cfg(test)]
 mod tests {
-    use super::test_server::serve;
     use super::*;
     use crate::config::{ApiKey, NexumConfig};
-    use crate::wormhole::tests::hole;
+    use crate::test_support::{hole, serve};
     use std::time::Duration;
 
     const MAPS: &str = r#"{"maps":[{"id":"m1","name":"Home","isCorpMap":false},{"id":"m2","name":"Scanning"}]}"#;

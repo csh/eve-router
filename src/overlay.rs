@@ -53,14 +53,14 @@ pub fn add_bridges(uni: &mut Universe, text: &str) -> OverlayReport {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::universe::tests::universe;
+    use crate::test_support::{fixture, sde_dir, universe};
 
     #[test]
     fn smt_list_parses() {
-        let text = fs::read_to_string("tests/fixtures/ansiblex.txt").unwrap();
+        let text = fs::read_to_string(fixture("ansiblex.txt")).unwrap();
         let base = universe();
         // Work on a copy of the graph, because the shared test universe must stay unchanged.
-        let mut uni = Universe::from_sde(crate::sde::load(Path::new("sde")).unwrap());
+        let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
         let report = add_bridges(&mut uni, &text);
         assert!(report.unknown.is_empty(), "{:?}", report.unknown);
         let lines = text.lines().filter(|l| l.contains("-->") && !l.trim_start().starts_with('#')).count();

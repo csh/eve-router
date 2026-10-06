@@ -180,14 +180,7 @@ impl Universe {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-    use std::path::Path;
-    use std::sync::OnceLock;
-
-    /// The real SDE, loaded one time for all tests.
-    pub fn universe() -> &'static Universe {
-        static UNI: OnceLock<Universe> = OnceLock::new();
-        UNI.get_or_init(|| Universe::from_sde(crate::sde::load(Path::new("sde")).unwrap()))
-    }
+    use crate::test_support::{sde_dir, universe};
 
     #[test]
     fn stargate_edge_count() {
@@ -216,8 +209,9 @@ pub mod tests {
 
     #[test]
     fn hub_count_counts_wormhole_pairs() {
-        use crate::wormhole::{THERA, TURNUR, tests::hole};
-        let mut uni = Universe::from_sde(crate::sde::load(Path::new("sde")).unwrap());
+        use crate::test_support::hole;
+        use crate::wormhole::{THERA, TURNUR};
+        let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
         // Two Thera wormholes to Jita count as one pair, as in `shortcut_counts`.
         let holes = [hole(30000142, THERA), hole(30000142, THERA), hole(30002187, THERA)];
         assert_eq!(uni.add_wormholes(&holes), 3);

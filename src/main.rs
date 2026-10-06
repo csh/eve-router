@@ -283,17 +283,16 @@ fn print_routes(out: &mut impl Write, uni: &Universe, settings: &Settings, names
 #[cfg(test)]
 mod tests {
     use super::*;
-    use std::path::Path;
 
     /// 2026-10-05T12:00:00Z.
     const FIXTURE_TIME: u64 = 1_791_201_600;
 
     fn overlay_universe() -> Universe {
-        let mut uni = Universe::from_sde(sde::load(Path::new("sde")).unwrap());
-        overlay::load_bridges(&mut uni, Path::new("tests/fixtures/ansiblex.txt")).unwrap();
-        let text = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let mut uni = Universe::from_sde(sde::load(&test_support::sde_dir()).unwrap());
+        overlay::load_bridges(&mut uni, &test_support::fixture("ansiblex.txt")).unwrap();
+        let text = std::fs::read_to_string(test_support::fixture("nexum-api.json")).unwrap();
         let map = nexum::parse_map(&text).unwrap();
-        let types = wormhole_types::load(Path::new("sde")).unwrap();
+        let types = wormhole_types::load(&test_support::sde_dir()).unwrap();
         let (data, _) = nexum::convert(&map, &Default::default(), |id| uni.by_id.contains_key(&id), &types, FIXTURE_TIME);
         uni.add_wormholes(&wormhole::merge(&[data], FIXTURE_TIME));
         uni

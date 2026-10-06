@@ -443,14 +443,14 @@ mod tests {
     }
 
     fn fixture_with(sigs: &SystemSigs) -> (SourceData, NexumReport) {
-        let text = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let text = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
         let map = parse_map(&text).unwrap();
         // 39999999 is not a known system.
         convert(&map, sigs, |id| id != 39_999_999, &types(), FETCHED)
     }
 
     fn fixture_sigs() -> SystemSigs {
-        serde_json::from_str(&std::fs::read_to_string("tests/fixtures/nexum-sigs.json").unwrap()).unwrap()
+        serde_json::from_str(&std::fs::read_to_string(crate::test_support::fixture("nexum-sigs.json")).unwrap()).unwrap()
     }
 
     fn sig_pair(w: &Wormhole) -> (Option<&str>, Option<&str>) {
@@ -474,7 +474,7 @@ mod tests {
 
     #[test]
     fn two_connections_on_one_pair_get_no_name_match() {
-        let text = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let text = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
         let mut map = parse_map(&text).unwrap();
         // A second Perimeter to Thera connection. One "Thera" signature cannot belong to both.
         let i = map.connections.iter().position(|c| (c.source_id.as_str(), c.target_id.as_str()) == ("s-perimeter", "s-thera")).unwrap();
@@ -487,7 +487,7 @@ mod tests {
     #[test]
     fn empty_type_is_no_type() {
         // The API gives an empty text for a type that a scout did not set.
-        let text = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let text = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
         let mut map = parse_map(&text).unwrap();
         let i = map.connections.iter().position(|c| c.wh_type.as_deref() == Some("B274")).unwrap();
         map.connections[i].wh_type = Some(" ".into());
@@ -500,7 +500,7 @@ mod tests {
 
     #[test]
     fn signature_systems_are_the_wormhole_ends() {
-        let text = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let text = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
         let ids = sig_systems(&parse_map(&text).unwrap());
         // No placeholder, no broken connection, and no gate, jumpgate or cyno connection.
         let expected = ["s-amarr", "s-dodixie", "s-hek", "s-j134702", "s-jita", "s-perimeter", "s-rens", "s-thera", "s-unknown"];
@@ -586,7 +586,7 @@ mod tests {
     }
 
     use crate::config::{ApiKey, NexumConfig};
-    use crate::sources::test_server::serve;
+    use crate::test_support::serve;
     use std::collections::HashMap;
     use std::path::PathBuf;
     use std::time::Duration;
@@ -625,7 +625,7 @@ mod tests {
 
     #[test]
     fn fetch_converts_and_writes_the_cache() {
-        let body = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let body = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
         let (url, request) = serve("200 OK", &body, Duration::ZERO);
         let path = temp("eve-router-test-fetch");
         let load = finish(start(&cfg(&url), path.clone(), FETCHED), |id| id != 39_999_999, &types());
@@ -650,7 +650,7 @@ mod tests {
 
     #[test]
     fn cache_of_another_map_starts_a_fetch() {
-        let body = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let body = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
         let (url, request) = serve("200 OK", &body, Duration::ZERO);
         let path = temp("eve-router-test-other-map");
         // A fresh cache, but for map m2.
@@ -694,9 +694,9 @@ mod tests {
     /// The map, the fixture signatures, and an empty list for each other system except Dodixie.
     /// The Dodixie request gets a 500.
     fn sig_routes() -> HashMap<String, String> {
-        let map = std::fs::read_to_string("tests/fixtures/nexum-api.json").unwrap();
+        let map = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
         let mut routes = HashMap::from([("/api/v1/maps/m1".to_string(), map)]);
-        let text = std::fs::read_to_string("tests/fixtures/nexum-sigs.json").unwrap();
+        let text = std::fs::read_to_string(crate::test_support::fixture("nexum-sigs.json")).unwrap();
         let sigs: HashMap<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
         for id in ["s-amarr", "s-hek", "s-j134702", "s-jita", "s-perimeter", "s-rens", "s-thera", "s-unknown"] {
             let body = sigs.get(id).map_or("[]".to_string(), |v| v.to_string());
@@ -707,7 +707,7 @@ mod tests {
 
     #[test]
     fn fetch_gets_the_signatures() {
-        let (url, requests) = crate::sources::test_routes::serve_routes(sig_routes());
+        let (url, requests) = crate::test_support::serve_routes(sig_routes());
         let path = temp("eve-router-test-sigs");
         let load = finish(start(&cfg(&url), path.clone(), FETCHED), |id| id != 39_999_999, &types());
         // One map request, and one signature request for each of the 9 wormhole ends.

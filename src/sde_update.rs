@@ -336,7 +336,7 @@ mod tests {
     #[test]
     #[ignore]
     fn regenerate_repo_sde() {
-        let dir = Path::new("sde");
+        let dir = &crate::test_support::sde_dir();
         let build = crate::sde::build_number(dir).unwrap();
         let source = HttpSource { agent: agent(), url: format!("{BASE_URL}/eve-online-static-data-{build}-jsonl.zip") };
         download(&source, dir).unwrap();

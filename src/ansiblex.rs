@@ -101,7 +101,7 @@ pub fn init(sde_dir: &std::path::Path) -> Result<&'static HullTable, String> {
 pub fn table() -> &'static HullTable {
     // The tests read the repository SDE.
     #[cfg(test)]
-    init(std::path::Path::new("sde")).unwrap();
+    init(&crate::test_support::sde_dir()).unwrap();
     TABLE.get().expect("ansiblex::init must run before ansiblex::table")
 }
 
@@ -178,7 +178,7 @@ impl BridgeRules {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::universe::tests::universe;
+    use crate::test_support::universe;
 
     fn rules(hull: Option<&str>, max_cap: Option<f32>) -> BridgeRules {
         let uni = universe();

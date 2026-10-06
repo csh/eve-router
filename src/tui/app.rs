@@ -668,8 +668,7 @@ mod tests {
     use crate::ansiblex::BridgeRules;
     use crate::config::ApiKey;
     use crate::route::Mode;
-    use crate::sources::test_server::serve;
-    use crate::universe::tests::universe;
+    use crate::test_support::{serve, universe};
 
     fn app(name: &str, cfg: Config) -> App<'static> {
         let settings = Settings {

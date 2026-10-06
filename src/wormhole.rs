@@ -339,11 +339,7 @@ pub fn local_time(t: u64) -> String {
 #[cfg(test)]
 pub mod tests {
     use super::*;
-
-    /// A wormhole between two systems, with no known values.
-    pub fn hole(a: u32, b: u32) -> Wormhole {
-        Wormhole::new(a, b, None, None, SourceId::Nexum)
-    }
+    use crate::test_support::hole;
 
     #[test]
     fn hubs_allow_by_end() {

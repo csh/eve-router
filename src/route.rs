@@ -428,14 +428,14 @@ impl<'a> Router<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::universe::tests::universe;
+    use crate::test_support::{hole, sde_dir, universe};
 
     fn router(mode: Mode) -> Router<'static> {
         Router::new(universe(), mode, true, Hubs::default(), true, BridgeRules::default(), 0)
     }
 
     use crate::ansiblex::find_hull;
-    use crate::wormhole::{Expiry, Hubs, MassStatus, Size, THERA, TURNUR, Wormhole, tests::hole};
+    use crate::wormhole::{Expiry, Hubs, MassStatus, Size, THERA, TURNUR, Wormhole};
     use std::sync::OnceLock;
 
     /// The expiry of the Hek-Perimeter wormhole.
@@ -446,7 +446,7 @@ mod tests {
     fn holes_universe() -> &'static Universe {
         static UNI: OnceLock<Universe> = OnceLock::new();
         UNI.get_or_init(|| {
-            let mut uni = Universe::from_sde(crate::sde::load(std::path::Path::new("sde")).unwrap());
+            let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
             let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
             let holes = [
                 Wormhole { size: Some(Size::Medium), ..hole(id("Jita"), id("Amarr")) },

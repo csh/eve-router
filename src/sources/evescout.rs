@@ -153,7 +153,7 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::sources::test_server::serve;
+    use crate::test_support::serve;
     use crate::wormhole::{THERA, TURNUR};
     use crate::wormhole_types::WormholeType;
     use std::time::Duration;
@@ -168,7 +168,7 @@ mod tests {
     }
 
     fn fixture_text() -> String {
-        std::fs::read_to_string("tests/fixtures/eve-scout.json").unwrap()
+        std::fs::read_to_string(crate::test_support::fixture("eve-scout.json")).unwrap()
     }
 
     fn fixture(known: impl Fn(u32) -> bool, at: u64) -> (SourceData, EveScoutReport) {
