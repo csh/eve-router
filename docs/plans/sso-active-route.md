@@ -44,7 +44,7 @@ No UI code. Both front ends use it.
 
 | File | Contents |
 |---|---|
-| `esi/sso.rs` | PKCE (S256), the authorize URL, the loopback listener, the code exchange, the refresh, the revoke. JWT claims: `sub` = `CHARACTER:EVE:<id>`, `name`, `scp`. The router checks the signature against the SSO JWKS. |
+| `esi/sso.rs` | PKCE (S256), the authorize URL, the loopback listener, the code exchange, the refresh, the revoke. JWT claims: `sub` = `CHARACTER:EVE:<id>`, `name`, `scp`. The router checks the issuer, the audience, the expiry and the subject. It does not check the signature: it gets each token directly from the SSO token endpoint over TLS (OpenID Connect Core 3.1.3.7). |
 | `esi/store.rs` | The token store. See [Token storage](#token-storage). |
 | `esi/client.rs` | The ESI calls above. An access token refreshes 60 s before expiry. Uses `sources::agent`. |
 | `esi/tracker.rs` | A thread that polls location, ship and online for each character. It sends `TrackerEvent`s on an `mpsc` channel, like the Nexum map fetch. |
@@ -59,7 +59,9 @@ SSO details:
 - The login always shows the URL and a "Paste the redirected URL" field. This works over SSH and when the port is busy.
 - The login requests all four scopes. A character with a missing scope shows `Re-authorize`.
 
-New dependencies: `keyring` (OS keyring), `sha2` and `base64` (PKCE), `jsonwebtoken` (JWT check), `open` (browser), `image` (PNG decode for egui portraits).
+New dependencies: `keyring` (OS keyring), `getrandom`, `sha2` and `base64` (PKCE), `open` (browser), `image` (PNG decode for egui portraits).
+
+Each dependency must pass `cargo deny check` (see `deny.toml`): no open RustSec advisory, and a license that is compatible with AGPL-3.0 and with MIT OR Apache-2.0. For this reason the plan has no `jsonwebtoken`. Its RSA backend pulls in `rsa` 0.9, which has RUSTSEC-2023-0071 with no fixed version.
 
 ### Token storage
 

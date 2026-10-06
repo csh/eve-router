@@ -3,6 +3,7 @@
 
 pub mod ansiblex;
 pub mod config;
+pub mod esi;
 pub mod labels;
 pub mod overlay;
 pub mod route;
