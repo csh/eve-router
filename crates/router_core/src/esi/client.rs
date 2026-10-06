@@ -11,6 +11,8 @@ use std::fmt;
 use std::time::{Duration, SystemTime};
 
 pub const ESI_URL: &str = "https://esi.evetech.net";
+/// The image server. It needs no token.
+pub const IMAGES_URL: &str = "https://images.evetech.net";
 /// The ESI version that the router expects. ESI uses the newest version on or before this date.
 pub const COMPATIBILITY_DATE: &str = "2025-08-26";
 /// The timeout of one ESI request.
@@ -143,6 +145,17 @@ impl Esi {
     }
 }
 
+/// The portrait of a character (JPEG), from `IMAGES_URL` or a test server. `size` is a power of 2
+/// from 32 to 1024.
+pub fn portrait(base: &str, id: u64, size: u32) -> Result<Vec<u8>, EsiError> {
+    let url = format!("{}/characters/{id}/portrait?size={size}", base.trim_end_matches('/'));
+    let mut response = crate::sources::agent(TIMEOUT).get(&url).call().map_err(|e| match e {
+        ureq::Error::StatusCode(code) => EsiError::Status(code),
+        e => EsiError::Offline(e.to_string()),
+    })?;
+    response.body_mut().with_config().limit(MAX_BODY * 4).read_to_vec().map_err(|e| EsiError::Offline(e.to_string()))
+}
+
 fn header(response: &ureq::http::Response<ureq::Body>, name: &str) -> Option<String> {
     response.headers().get(name).and_then(|v| v.to_str().ok()).map(str::to_owned)
 }
@@ -226,6 +239,15 @@ mod tests {
         );
         assert!(matches!(check("503 Service Unavailable", &[]), EsiError::Offline(_)));
         assert_eq!(check("404 Not Found", &[]), EsiError::Status(404));
+    }
+
+    #[test]
+    fn portrait_bytes() {
+        let (url, rx) = serve("200 OK", "JPEG", Duration::ZERO);
+        assert_eq!(portrait(&url, 7, 64).unwrap(), b"JPEG");
+        assert!(rx.recv().unwrap().starts_with("GET /characters/7/portrait?size=64 HTTP/1.1"));
+        let (url, _) = serve("404 Not Found", "", Duration::ZERO);
+        assert_eq!(portrait(&url, 7, 64), Err(EsiError::Status(404)));
     }
 
     #[test]
