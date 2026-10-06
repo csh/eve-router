@@ -222,6 +222,9 @@ impl PilotsUi {
 
     /// The "Characters (n)" button of the top bar.
     pub fn characters_button(&mut self, ui: &mut Ui, s: &Session) {
+        if !s.pilots.shows_characters() {
+            return;
+        }
         let count = s.pilots.characters().len();
         if ui.button(format!("Characters ({count})")).clicked() {
             self.characters_open = true;

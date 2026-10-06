@@ -26,5 +26,5 @@
 │   21                 U-QVWD              -0.1                Catch               gate        ││                      │
 └──────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────┘
 
- x  Stop route    ↑↓  Scroll    n/p  Next/prev stop    c  Characters    s  Settings    q  Quit
+ x  Stop route    ↑↓  Scroll    n/p  Next/prev stop    s  Settings    q  Quit
 

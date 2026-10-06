@@ -177,6 +177,11 @@ impl Pilots {
         self.accounts.is_none().then(|| self.keyring_error.clone().unwrap_or_else(|| "No token store.".into()))
     }
 
+    /// True if the UI shows the characters: the router can log in, or a character is stored.
+    pub fn shows_characters(&self) -> bool {
+        self.client_id.is_some() || self.accounts.as_ref().is_some_and(|a| !a.characters.is_empty())
+    }
+
     /// Start a login, and open the URL in the browser. The UI also shows the URL for a copy.
     pub fn start_login(&mut self) -> Result<(), String> {
         if let Some(reason) = self.login_blocked() {
@@ -592,6 +597,16 @@ mod tests {
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("timeout");
+    }
+
+    #[test]
+    fn characters_show_with_a_client_id_or_a_character() {
+        let dir = std::env::temp_dir().join("eve-router-test-pilots-show");
+        // No client ID and no token store: nothing to show.
+        assert!(!Pilots::offline(dir.join("active-route.json")).shows_characters());
+        // `for_tests` sets a client ID.
+        let fake = Fake::default();
+        assert!(pilots("eve-router-test-pilots-show-2", &fake).shows_characters());
     }
 
     #[test]

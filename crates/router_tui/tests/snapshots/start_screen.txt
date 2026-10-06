@@ -37,4 +37,4 @@
 └──────────────────────────────────────────────────────────────────────────────────────────────┘└──────────────────────┘
 
  i  Edit route    ↑↓  Select route    Enter  Open route    m  Mode: Shortest    w  Wormholes: on    j  Jump bridges: on
- h  Hull: Black Ops    +/-  Routes: 3    g  Start route    c  Characters (0)    s  Settings    q  Quit
+ h  Hull: Black Ops    +/-  Routes: 3    g  Start route    s  Settings    q  Quit

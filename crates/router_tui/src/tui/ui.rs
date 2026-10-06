@@ -194,6 +194,9 @@ fn help_lines(app: &App, width: u16) -> Vec<Line<'static>> {
             ("q", "Quit".into()),
         ],
     };
+    let mut hints = hints;
+    // Without a client ID and a stored character, the characters have no data.
+    hints.retain(|(key, _)| *key != "c" || app.pilots.shows_characters());
     const GAP: &str = "   ";
     let mut lines = vec![Line::default()];
     for (key, label) in hints {
