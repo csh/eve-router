@@ -4,7 +4,7 @@ use super::pilots::{LOCKED, route_setting};
 use petgraph::graph::NodeIndex;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
-use router_core::ansiblex::{HullClass, hull_rows};
+use router_core::ansiblex::{HullClass, hull_rows, same_hull};
 use router_core::config::{self, ApiKey, Config};
 use router_core::esi::active::{ActiveRoute, active_path};
 use router_core::esi::pilots::{Pilots, StartPlan};
@@ -344,11 +344,7 @@ impl<'a> App<'a> {
             }
             KeyCode::Char('h') => {
                 let current = self.settings.rules.hull;
-                let same = |row: &Option<HullClass>| match (row, current) {
-                    (Some(a), Some(b)) => std::ptr::eq(*a, b),
-                    (None, None) => true,
-                    _ => false,
-                };
+                let same = |row: &Option<HullClass>| same_hull(*row, current);
                 let row = hull_rows("").iter().position(same).unwrap_or(0);
                 let state = ListState::default().with_selected(Some(row));
                 self.popup = Some(Popup::Hull { filter: String::new(), state });

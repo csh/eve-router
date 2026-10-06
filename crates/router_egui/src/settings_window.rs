@@ -5,7 +5,7 @@ use crate::search::SearchBox;
 use crate::theme;
 use crate::view::View;
 use egui::{Button, Color32, Frame, Id, Key, Margin, Modal, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, vec2};
-use router_core::ansiblex::hull_rows;
+use router_core::ansiblex::{hull_rows, same_hull};
 use router_core::config::{self, ApiKey};
 use router_core::labels::on_off;
 use router_core::settings::parse_max_cap;
@@ -415,11 +415,7 @@ fn hull_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
     ScrollArea::vertical().max_height(420.0).auto_shrink([false, true]).show(ui, |ui| {
         for row in &rows {
             let (rect, click) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
-            let current = match (row, s.settings.rules.hull) {
-                (Some(a), Some(b)) => std::ptr::eq(*a, b),
-                (None, None) => true,
-                _ => false,
-            };
+            let current = same_hull(*row, s.settings.rules.hull);
             if current {
                 ui.painter().rect_filled(rect, 0.0, theme::ROW_FILL);
                 theme::selection_bar(ui, rect);

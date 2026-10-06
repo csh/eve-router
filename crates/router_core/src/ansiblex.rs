@@ -115,6 +115,24 @@ pub fn find_hull(name: &str) -> Option<HullClass> {
         .or_else(|| t.groups.iter().find(|h| h.name.eq_ignore_ascii_case(name) || h.key().eq_ignore_ascii_case(name)))
 }
 
+/// The ship with this type ID. `None` for a type that is not in `ships.json`.
+pub fn hull_by_type(type_id: u32) -> Option<HullClass> {
+    table().ships.iter().find(|h| h.type_id == Some(type_id))
+}
+
+/// True if `a` and `b` are the same table entry, or both are "none".
+pub fn same_hull(a: Option<HullClass>, b: Option<HullClass>) -> bool {
+    match (a, b) {
+        (Some(a), Some(b)) => std::ptr::eq(a, b),
+        (a, b) => a.is_none() && b.is_none(),
+    }
+}
+
+/// True if a route for `planned` suits `ship`: the same ship, or `planned` is the group of `ship`.
+pub fn same_class(planned: HullClass, ship: HullClass) -> bool {
+    std::ptr::eq(planned, ship) || (planned.type_id.is_none() && planned.group == ship.group)
+}
+
 /// The hull picker rows: "none", then each ship whose name or group contains `filter`.
 pub fn hull_rows(filter: &str) -> Vec<Option<HullClass>> {
     let filter = filter.to_lowercase();
@@ -291,6 +309,30 @@ mod tests {
         // A ship name and a group key both work.
         assert_eq!(find_hull("sin").unwrap().base_tj, Some(18.0));
         assert_eq!(find_hull("heavy-assault-cruiser").unwrap().base_tj, Some(11.5));
+    }
+
+    #[test]
+    fn hull_by_type_id() {
+        let sin = find_hull("Sin").unwrap();
+        assert!(std::ptr::eq(hull_by_type(sin.type_id.unwrap()).unwrap(), sin));
+        assert_eq!(hull_by_type(670).unwrap().name, "Capsule");
+        assert!(hull_by_type(u32::MAX).is_none());
+    }
+
+    #[test]
+    fn hull_compare() {
+        let sin = find_hull("Sin").unwrap();
+        let black_ops = find_hull("black-ops").unwrap();
+        let rorqual = find_hull("Rorqual").unwrap();
+        assert!(same_hull(Some(sin), Some(sin)));
+        assert!(same_hull(None, None));
+        assert!(!same_hull(Some(sin), None));
+        assert!(!same_hull(Some(black_ops), Some(sin)));
+        // A planned group covers each ship of the group.
+        assert!(same_class(black_ops, sin));
+        assert!(same_class(sin, sin));
+        assert!(!same_class(rorqual, sin));
+        assert!(!same_class(sin, black_ops));
     }
 
     #[test]
