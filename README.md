@@ -80,6 +80,53 @@ The router does not use a wormhole when:
 
 The size check uses the hull mass from the SDE. Fitted modules, for example plates and propulsion modules, add mass. The check does not know about them. A wormhole of a known type uses the per-jump limit of that type. A K162 or a wormhole with no type uses the lowest limit of its size class. For EVE-Scout, the size class comes from the ship size of the entry. If you set no hull, the router does no size check.
 
+## EVE login and the active route
+
+The router can send a route to the in-game autopilot of your character, and then track your progress along the route.
+
+### Setup
+
+1. Make an application at [developers.eveonline.com](https://developers.eveonline.com/applications).
+2. Set the callback URL to `http://localhost:21404/callback`.
+3. Give the application these four scopes: `esi-ui.write_waypoint.v1`, `esi-location.read_location.v1`, `esi-location.read_ship_type.v1` and `esi-location.read_online.v1`.
+4. Set `EVE_ROUTER_CLIENT_ID` to the client ID of the application. The build reads it, and the same variable at run time overrides it.
+
+The repository holds no client ID. Without one, "Add character" is off and shows the reason.
+
+The login uses OAuth 2.0 with PKCE. The router listens on `127.0.0.1:21404` for the browser redirect. If that fails, for example over SSH, paste the redirected URL into the login window.
+
+### Tokens
+
+| Item | Where |
+|---|---|
+| Refresh token | The OS keyring: Windows Credential Manager, macOS Keychain, or the Secret Service on Linux |
+| Access token | Memory only |
+| Character list (ID, name, scopes) | `characters.json` next to `eve-router.json`. It holds no token |
+| Active route | `active-route.json` next to `eve-router.json` |
+
+If the system has no keyring, the router offers "Session only": the tokens stay in memory and go when the app closes. The router never writes a token to a file. "Remove" revokes the token at EVE SSO and deletes it.
+
+### Start a route
+
+- TUI: select a route, then press `g`. Press `c` for the character list.
+- GUI: push "Start route #n" in the route table header. Push "Characters (n)" in the top bar for the character list.
+
+With two or more characters, you choose one. The confirm step names the character before anything goes to the game. If the character is not on the route, the default is a route from its current system.
+
+The in-game autopilot follows gates only. Thus the router sends the route in segments. A segment ends before each jump bridge or wormhole, and the table marks these hops as "manual". After you take the hop, the router sends the next segment.
+
+### While a route is active
+
+- The planner is hidden. The table shows the progress, and the avatars or initials of your characters in each system.
+- The keys and the settings that change the route are locked, so the app and the in-game waypoints stay the same. The favourites stay editable.
+- After two location polls off the route, the router offers "Re-route from here".
+- "Stop route" stops the tracking. The in-game waypoints stay, because ESI cannot clear them.
+- If you close the app, the next start offers to resume the route.
+
+The tracker polls the location of the active pilot every 5 seconds, the other pilots every 30 seconds, and the online state every 60 seconds. It obeys the `Expires` header and slows down when the ESI error budget is low.
+
+A segment of more than 100 systems sends its stops only. The real in-game waypoint cap is not measured yet.
+
 ## Static data
 
 At startup, the app compares its local build with [the latest SDE build](https://developers.eveonline.com/docs/services/static-data/#automation). When a new build is available, HTTP range requests are used to download only the files required.
@@ -107,5 +154,9 @@ cargo test --workspace   # also router_egui
 Set `UPDATE_SNAPSHOTS=1` to write the snapshot files in `tests/snapshots/` of each crate again.
 
 The tests use the map files in `sde/` and the small fixtures in `crates/router_core/tests/fixtures/`. They do not need network access.
+
+`cargo deny check` examines the dependencies: the RustSec advisories, the licenses and the sources. See `deny.toml`.
+
+`cargo test -p router_core keyring_round_trip -- --ignored` writes and deletes one test token in the OS keyring.
 
 `cargo test regenerate_repo_sde -- --ignored` makes `sde/ships.json` and `sde/wormholes.json` again. It needs the network.
