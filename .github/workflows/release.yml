@@ -1,0 +1,88 @@
+# Build the TUI and the GUI for each platform when a tag v* goes up, and put the archives on the
+# GitHub release of that tag. The release goes out only after the CI workflow passes.
+#
+# The binaries get the client ID of the EVE developer app at build time from the repository
+# secret EVE_ROUTER_CLIENT_ID. Without the secret, the binaries build, but cannot log in until
+# the user sets EVE_ROUTER_CLIENT_ID at run time.
+name: Release
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  ci:
+    uses: ./.github/workflows/ci.yml
+
+  build:
+    name: Build (${{ matrix.target }})
+    needs: ci
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Ubuntu 22.04 gives an older glibc, so the binary also runs on older distributions.
+          - { target: x86_64-unknown-linux-gnu, os: ubuntu-22.04, archive: tar.gz }
+          - { target: x86_64-pc-windows-msvc, os: windows-latest, archive: zip }
+          - { target: aarch64-apple-darwin, os: macos-latest, archive: tar.gz }
+          - { target: x86_64-apple-darwin, os: macos-latest, archive: tar.gz }
+    runs-on: ${{ matrix.os }}
+    env:
+      EVE_ROUTER_CLIENT_ID: ${{ secrets.EVE_ROUTER_CLIENT_ID }}
+    steps:
+      - uses: actions/checkout@v4
+      - run: rustup toolchain install && rustup target add ${{ matrix.target }}
+      - uses: Swatinem/rust-cache@v2
+        with:
+          key: dist-${{ matrix.target }}
+      - run: cargo build --locked --profile dist --target ${{ matrix.target }} -p router_tui -p router_egui
+      - name: Package
+        shell: bash
+        run: |
+          name="eve-router-${GITHUB_REF_NAME}-${{ matrix.target }}"
+          bin="target/${{ matrix.target }}/dist"
+          ext=""
+          if [[ "${{ matrix.target }}" == *windows* ]]; then ext=".exe"; fi
+          mkdir -p "pkg/$name"
+          cp "$bin/eve-router$ext" "$bin/eve-router-egui$ext" README.md "pkg/$name/"
+          cd pkg
+          if [[ "${{ matrix.archive }}" == zip ]]; then
+            7z a "$name.zip" "$name"
+          else
+            tar czf "$name.tar.gz" "$name"
+          fi
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.target }}
+          path: pkg/eve-router-*.${{ matrix.archive }}
+          if-no-files-found: error
+
+  release:
+    name: Publish the release
+    needs: build
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS
+      # Make the release, or add the files to a release that already exists for the tag.
+      - name: Upload
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+            gh release upload "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --clobber
+          else
+            gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" --title "$GITHUB_REF_NAME" --generate-notes --verify-tag
+          fi

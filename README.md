@@ -155,6 +155,16 @@ Set `UPDATE_SNAPSHOTS=1` to write the snapshot files in `tests/snapshots/` of ea
 
 The tests use the map files in `sde/` and the small fixtures in `crates/router_core/tests/fixtures/`. They do not need network access.
 
+### CI and releases
+
+GitHub Actions runs `.github/workflows/ci.yml` for each pull request and each push to `main`. It runs rustfmt, clippy, the tests on Linux, Windows and macOS, and `cargo deny`. CI uses the `ci` profile: the dev profile with line tables only and no incremental files. Thus the build cache stays small.
+
+A tag `v*` starts `.github/workflows/release.yml`. First it runs the CI. Then it builds both binaries with the `dist` profile: full LTO, one codegen unit and no symbols. The targets are Linux x86-64, Windows x86-64, and macOS on Apple silicon and Intel. The archives and a `SHA256SUMS` file go on the GitHub release of the tag. To build the client ID into the binaries, set the repository secret `EVE_ROUTER_CLIENT_ID`.
+
+```sh
+git tag v0.1.0 && git push origin v0.1.0
+```
+
 `cargo deny check` examines the dependencies: the RustSec advisories, the licenses and the sources. See `deny.toml`.
 
 `cargo test -p router_core keyring_round_trip -- --ignored` writes and deletes one test token in the OS keyring.
