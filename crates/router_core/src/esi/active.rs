@@ -214,10 +214,14 @@ impl ActiveRoute {
         // back, and is not off the path.
         let ahead = (self.progress..self.steps.len()).find(|&i| self.steps[i].system == system);
         let behind = self.steps[..self.progress].iter().any(|s| s.system == system);
-        // A match ahead counts only when it is near, and when the skip does not cross a wormhole
-        // after the next step. A gate jump can reach a system that the route visits much later,
-        // for example on a round trip. Such a match is off the route, so no segment goes out.
-        let ahead = ahead.filter(|&i| i <= self.progress + MAX_SKIP && !(self.progress + 2..=i).any(|k| self.steps[k].hop.is_manual()));
+        // A match ahead counts only when it is near, and when the skip does not pass over a
+        // wormhole. A gate path can reach a system that the route reaches by a wormhole, or
+        // visits much later. Such a match is off the route, so no segment goes out. A wormhole
+        // step counts only from the system right before it.
+        let ahead = ahead.filter(|&i| {
+            let crosses = (self.progress + 1..=i).any(|k| self.steps[k].hop.is_manual() && !(k == i && i == self.progress + 1));
+            i <= self.progress + MAX_SKIP && !crosses
+        });
         let Some(step) = ahead else {
             if behind {
                 self.off_polls = 0;
@@ -382,10 +386,14 @@ mod tests {
     }
 
     #[test]
-    fn a_wormhole_and_a_gate_between_two_polls() {
-        // Step 1 (system 2) is a wormhole. From step 0, the pilot jumps it and one gate more.
+    fn a_skip_never_passes_over_a_wormhole() {
+        // ZD1-Z2 (1), a wormhole into UALX-3 (2), then a gate to Y-ORBJ (3). Y-ORBJ also has a gate
+        // path from ZD1-Z2, so a match on Y-ORBJ does not prove the wormhole jump.
         let mut r = route(&[1, 2, 3, 4], &[(2, Hop::Wormhole)]);
-        assert_eq!(r.observe(&at(3)), Observation::NextSegment { step: 2, waypoints: vec![3, 4] });
+        assert_eq!(r.observe(&at(3)), Observation::Same);
+        assert_eq!((r.progress, r.sent_segment), (0, 0));
+        // Only the far side of the wormhole, from the system before it, sends the next segment.
+        assert_eq!(r.observe(&at(2)), Observation::NextSegment { step: 1, waypoints: vec![3, 4] });
     }
 
     #[test]
