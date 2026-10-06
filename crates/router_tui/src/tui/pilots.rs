@@ -3,8 +3,7 @@
 use super::app::{App, Popup, SettingsRow};
 use ratatui::crossterm::event::{KeyCode, KeyEvent};
 use ratatui::widgets::ListState;
-use router_core::esi::active::ActiveRoute;
-use router_core::route::Route;
+use router_core::esi::pilots::StartPlan;
 
 /// The status text for a key that could change the route.
 pub const LOCKED: &str = "Locked while route is active — press x to stop";
@@ -19,16 +18,6 @@ pub fn route_locked(code: KeyCode) -> bool {
 /// while a route is active.
 pub fn route_setting(row: SettingsRow) -> bool {
     !matches!(row, SettingsRow::Favourite(_) | SettingsRow::AddFavourite)
-}
-
-/// The confirm step of a route start.
-pub struct Confirm {
-    pub planned: ActiveRoute,
-    /// The route from the current system of the pilot, when the pilot is not on the route.
-    pub from_here: Option<ActiveRoute>,
-    /// The name of the current system of the pilot, when the pilot is not on the route.
-    pub here: Option<String>,
-    pub online: Option<bool>,
 }
 
 impl App<'_> {
@@ -111,31 +100,13 @@ impl App<'_> {
         };
     }
 
-    /// The route from `from` through the given stops, with the current settings.
-    fn route_from(&self, from: u32, stops: &[u32]) -> Result<Route, String> {
-        let node = |id: &u32| self.uni.by_id.get(id).copied().ok_or_else(|| format!("System {id} is not on the map"));
-        let nodes = std::iter::once(&from).chain(stops).map(node).collect::<Result<Vec<_>, _>>()?;
-        let mut routes = self.settings.router(self.uni, router_core::wormhole::now()).routes(&nodes, 1)?;
-        if routes.is_empty() { Err("No route.".into()) } else { Ok(routes.remove(0)) }
-    }
-
     fn confirm(&mut self, index: usize, id: u64) -> Option<Popup> {
-        let route = &self.routes[index];
-        let name = self.pilot_name(id);
-        let now = router_core::wormhole::now();
-        let planned = ActiveRoute::new(self.uni, &self.settings.rules, route, index + 1, id, &name, now);
-        let live = self.pilots.live.get(&id).cloned().unwrap_or_default();
-        let mut confirm = Confirm { planned, from_here: None, here: None, online: live.online };
-        // The pilot is not on the route: offer the route from the current system.
-        if let Some(system) = live.system.filter(|s| !confirm.planned.steps.iter().any(|step| step.system == *s)) {
-            let stops: Vec<u32> = confirm.planned.stops.iter().skip(1).map(|&i| confirm.planned.steps[i].system).collect();
-            confirm.here = Some(self.system_name(system));
-            match self.route_from(system, &stops) {
-                Ok(r) => confirm.from_here = Some(ActiveRoute::new(self.uni, &self.settings.rules, &r, index + 1, id, &name, now)),
-                Err(e) => self.status = e,
-            }
+        let pilot = self.pilots.characters().into_iter().find(|c| c.id == id)?;
+        let plan = StartPlan::new(self.uni, &self.settings, &self.routes[index], index + 1, &pilot, router_core::wormhole::now());
+        if let Some(error) = &plan.error {
+            self.status.clone_from(error);
         }
-        Some(Popup::Confirm(Box::new(confirm)))
+        Some(Popup::Confirm(Box::new(plan)))
     }
 
     /// The keys while the first send of a route runs or failed.
@@ -212,20 +183,10 @@ impl App<'_> {
         self.detail.select(Some(target.min(last)));
     }
 
-    /// "Re-route from here": the route from the current system through the stops ahead.
+    /// "Re-route from here": the new route goes into a confirm popup.
     fn reroute(&mut self) -> Option<Popup> {
-        let active = self.pilots.active.as_ref()?;
-        let Some(system) = self.pilots.live.get(&active.character).and_then(|l| l.system) else {
-            self.status = "The location of the pilot is not known yet".into();
-            return None;
-        };
-        let stops: Vec<u32> = active.stops.iter().filter(|&&i| i > active.progress).map(|&i| active.steps[i].system).collect();
-        let (number, id, name) = (active.number, active.character, active.character_name.clone());
-        match self.route_from(system, &stops) {
-            Ok(route) => {
-                let now = router_core::wormhole::now();
-                Some(Popup::Reroute(Box::new(ActiveRoute::new(self.uni, &self.settings.rules, &route, number, id, &name, now))))
-            }
+        match self.pilots.reroute(self.uni, &self.settings, router_core::wormhole::now()) {
+            Ok(route) => Some(Popup::Reroute(Box::new(route))),
             Err(e) => {
                 self.status = e;
                 None
@@ -308,7 +269,7 @@ impl App<'_> {
                 KeyCode::Esc => None,
                 // Enter takes the default: the route from the current system, if there is one.
                 KeyCode::Enter => {
-                    let Confirm { planned, from_here, .. } = *confirm;
+                    let StartPlan { planned, from_here, .. } = *confirm;
                     self.pilots.start_route(from_here.unwrap_or(planned));
                     None
                 }
@@ -357,7 +318,7 @@ mod tests {
     use crate::tui::app::tests::app;
     use ratatui::crossterm::event::KeyModifiers;
     use router_core::config::Config;
-    use router_core::esi::active::{Hop, Step};
+    use router_core::esi::active::{ActiveRoute, Hop, Step};
 
     fn active(systems: &[u32]) -> ActiveRoute {
         let steps = systems

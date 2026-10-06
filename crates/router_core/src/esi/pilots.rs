@@ -11,6 +11,9 @@ use super::sso::{Login, LoginError, Sso, Tokens};
 use super::store::Accounts;
 use super::tracker::{Command, Event, Intervals, Live, Tracker};
 use super::{Character, client_id};
+use crate::route::Route;
+use crate::settings::Settings;
+use crate::universe::Universe;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
@@ -466,6 +469,61 @@ impl Pilots {
     }
 }
 
+/// The route from the system `from` through `stops` (system IDs), with the current settings.
+pub fn route_from(uni: &Universe, settings: &Settings, from: u32, stops: &[u32], now: u64) -> Result<Route, String> {
+    let node = |id: &u32| uni.by_id.get(id).copied().ok_or_else(|| format!("System {id} is not on the map"));
+    let nodes = std::iter::once(&from).chain(stops).map(node).collect::<Result<Vec<_>, _>>()?;
+    let mut routes = settings.router(uni, now).routes(&nodes, 1)?;
+    if routes.is_empty() { Err("No route.".into()) } else { Ok(routes.remove(0)) }
+}
+
+/// The confirm step of a route start.
+pub struct StartPlan {
+    /// The route as planned.
+    pub planned: ActiveRoute,
+    /// The route from the current system of the pilot, when the pilot is not on the route.
+    /// The UI offers it as the default.
+    pub from_here: Option<ActiveRoute>,
+    /// The current system of the pilot, when the pilot is not on the route.
+    pub here: Option<u32>,
+    pub online: Option<bool>,
+    /// Why `from_here` is missing, when the search failed.
+    pub error: Option<String>,
+}
+
+impl StartPlan {
+    /// `number` is the route number in the list, from 1.
+    pub fn new(uni: &Universe, settings: &Settings, route: &Route, number: usize, pilot: &PilotView, now: u64) -> StartPlan {
+        let planned = ActiveRoute::new(uni, &settings.rules, route, number, pilot.id, &pilot.name, now);
+        let mut plan = StartPlan { planned, from_here: None, here: None, online: pilot.live.online, error: None };
+        let Some(system) = pilot.live.system.filter(|s| !plan.planned.steps.iter().any(|step| step.system == *s)) else { return plan };
+        plan.here = Some(system);
+        let stops: Vec<u32> = plan.planned.stops.iter().skip(1).map(|&i| plan.planned.steps[i].system).collect();
+        match route_from(uni, settings, system, &stops, now) {
+            Ok(r) => plan.from_here = Some(ActiveRoute::new(uni, &settings.rules, &r, number, pilot.id, &pilot.name, now)),
+            Err(e) => plan.error = Some(e),
+        }
+        plan
+    }
+
+    /// The route that the default action sends.
+    pub fn default_route(&self) -> &ActiveRoute {
+        self.from_here.as_ref().unwrap_or(&self.planned)
+    }
+}
+
+impl Pilots {
+    /// "Re-route from here": the route from the current system of the active pilot through the
+    /// stops ahead. The UI shows its jump count, and sends it with `replace_route` on confirm.
+    pub fn reroute(&self, uni: &Universe, settings: &Settings, now: u64) -> Result<ActiveRoute, String> {
+        let active = self.active.as_ref().ok_or("No active route.")?;
+        let system = self.live.get(&active.character).and_then(|l| l.system).ok_or("The location of the pilot is not known yet.")?;
+        let stops: Vec<u32> = active.stops.iter().filter(|&&i| i > active.progress).map(|&i| active.steps[i].system).collect();
+        let route = route_from(uni, settings, system, &stops, now)?;
+        Ok(ActiveRoute::new(uni, &settings.rules, &route, active.number, active.character, &active.character_name, now))
+    }
+}
+
 /// `Pilots` with a test `Api` and short poll intervals, for the tests of the front ends.
 #[cfg(any(test, feature = "test-support"))]
 impl Pilots {
@@ -606,6 +664,28 @@ mod tests {
         p.resume = ActiveRoute::load(&p.active_path);
         p.discard_resume();
         assert!(p.resume.is_none() && ActiveRoute::load(&p.active_path).is_none());
+    }
+
+    #[test]
+    fn start_plan_offers_the_route_from_here() {
+        use crate::test_support::{FIXTURE_TIME, overlay_universe, settings};
+        let uni = overlay_universe();
+        let s = settings(&uni, None);
+        let nodes = [uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()];
+        let route = &s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).unwrap()[0];
+        let rens = uni.system(uni.exact("Rens").unwrap()).id;
+        let mut pilot = PilotView { id: 7, name: "Alice".into(), live: PilotState::default(), needs_reauth: false, active: false };
+        // No location yet: the planned route only.
+        let plan = StartPlan::new(&uni, &s, route, 1, &pilot, FIXTURE_TIME);
+        assert!(plan.from_here.is_none() && plan.here.is_none());
+        // The pilot is in Rens, not on the route.
+        pilot.live.system = Some(rens);
+        let plan = StartPlan::new(&uni, &s, route, 1, &pilot, FIXTURE_TIME);
+        assert_eq!(plan.here, Some(rens));
+        let from_here = plan.from_here.as_ref().unwrap();
+        assert_eq!(from_here.steps[0].system, rens);
+        assert_eq!(from_here.steps.last().map(|s| s.system), plan.planned.steps.last().map(|s| s.system));
+        assert_eq!(plan.default_route(), from_here);
     }
 
     #[test]

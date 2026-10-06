@@ -1,13 +1,13 @@
 //! The TUI state and the key handling.
 
-use super::pilots::{Confirm, LOCKED, route_setting};
+use super::pilots::{LOCKED, route_setting};
 use petgraph::graph::NodeIndex;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
 use router_core::ansiblex::{HullClass, hull_rows};
 use router_core::config::{self, ApiKey, Config};
 use router_core::esi::active::{ActiveRoute, active_path};
-use router_core::esi::pilots::Pilots;
+use router_core::esi::pilots::{Pilots, StartPlan};
 use router_core::labels::Shortcuts;
 use router_core::route::{Mode, Route};
 use router_core::settings::{Settings, parse_max_cap, resolve_all, split_systems};
@@ -87,7 +87,7 @@ pub enum Popup {
         state: ListState,
     },
     /// "Send route #n to <name>?"
-    Confirm(Box<Confirm>),
+    Confirm(Box<StartPlan>),
     RemovePilot(u64),
     StopRoute,
     Quit,

@@ -281,7 +281,8 @@ pub fn draw_popup(frame: &mut Frame, app: &mut App) {
                 route.waypoint_count(),
                 if manual == 1 { "" } else { "s" }
             ))];
-            if let Some(here) = &confirm.here {
+            let here = confirm.here.map(|id| app.system_name(id));
+            if let Some(here) = &here {
                 lines.push(Line::default());
                 lines.push(Line::from(format!("{name} is in {here}, not on this route.")).yellow());
             }
@@ -289,7 +290,7 @@ pub fn draw_popup(frame: &mut Frame, app: &mut App) {
                 lines.push(Line::default());
                 lines.push(Line::from(format!("{name} appears offline. Waypoints need the game client running.")).yellow());
             }
-            let keys = match (&confirm.here, &confirm.from_here) {
+            let keys = match (&here, &confirm.from_here) {
                 (Some(here), Some(_)) => format!("Enter Route from {here}   a Send as planned   Esc Cancel"),
                 _ if confirm.online == Some(false) => "Enter Send anyway   Esc Cancel".into(),
                 _ => "Enter Send   Esc Cancel".into(),
