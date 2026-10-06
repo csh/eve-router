@@ -250,8 +250,16 @@ impl ActiveRoute {
     }
 
     /// Read the file. A missing or bad file gives `None`: the route is gone, and the planner shows.
+    /// A file with an index past the steps is bad: `observe` and the tables index with it.
     pub fn load(path: &Path) -> Option<ActiveRoute> {
-        serde_json::from_str(&fs::read_to_string(path).ok()?).ok()
+        let route: ActiveRoute = serde_json::from_str(&fs::read_to_string(path).ok()?).ok()?;
+        route.is_valid().then_some(route)
+    }
+
+    /// True if the progress and each stop are inside the steps.
+    fn is_valid(&self) -> bool {
+        let len = self.steps.len();
+        self.progress < len && self.stops.iter().all(|&s| s < len)
     }
 
     /// Write a temporary file, then rename it, so a reader never sees half a file.
@@ -445,6 +453,27 @@ mod tests {
         ActiveRoute::clear(&path).unwrap();
         ActiveRoute::clear(&path).unwrap();
         assert_eq!(ActiveRoute::load(&path), None);
+    }
+
+    #[test]
+    fn load_rejects_an_index_past_the_steps() {
+        let dir = std::env::temp_dir().join("eve-router-test-active-bad");
+        let _ = fs::remove_dir_all(&dir);
+        let path = active_path(&dir.join("eve-router.json"));
+        route(&[1, 2, 3], &[]).save(&path).unwrap();
+        let edit = |key: &str, value: serde_json::Value| {
+            let mut json: serde_json::Value = serde_json::from_str(&fs::read_to_string(&path).unwrap()).unwrap();
+            json[key] = value;
+            fs::write(&path, json.to_string()).unwrap();
+        };
+        edit("progress", 9.into());
+        assert_eq!(ActiveRoute::load(&path), None);
+        edit("progress", 0.into());
+        edit("stops", serde_json::json!([0, 9]));
+        assert_eq!(ActiveRoute::load(&path), None);
+        edit("stops", serde_json::json!([0, 2]));
+        assert!(ActiveRoute::load(&path).is_some());
+        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
