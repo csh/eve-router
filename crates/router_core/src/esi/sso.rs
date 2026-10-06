@@ -1,20 +1,28 @@
-//! EVE SSO: OAuth 2.0 with PKCE, for a native app with no client secret.
+//! EVE SSO: OAuth 2.0 with PKCE, for a native app with no client secret. The `oauth2` crate makes
+//! the PKCE pair, the state, the authorize URL and the token requests.
 //!
 //! A login has three steps:
-//! 1. `Login::start` makes the PKCE pair and the URL, and listens on `127.0.0.1:21404`.
+//! 1. `Sso::start_login` gives the URL, and listens on `127.0.0.1:21404`.
 //! 2. The browser sends the code to the listener. Or the user pastes the redirected URL, and
 //!    `Login::paste` reads the code from it. Both paths work at the same time.
-//! 3. `exchange` sends the code and the PKCE verifier to SSO, and gets the tokens.
+//! 3. `Sso::exchange` sends the code and the PKCE verifier to SSO, and gets the tokens.
 //!
-//! The router does not check the JWT signature. It gets each token directly from the SSO token
-//! endpoint over TLS, so TLS proves where the token came from (OpenID Connect Core 3.1.3.7).
-//! The router still checks the issuer, the audience, the expiry and the subject.
+//! EVE SSO gives no OpenID Connect ID token. The character is in the claims of the access token,
+//! a JWT. The router does not check the JWT signature: it gets each token directly from the SSO
+//! token endpoint over TLS, so TLS proves where the token came from. The router still checks the
+//! issuer, the audience, the expiry and the subject.
 
 use super::{Character, SCOPES, Secret};
 use base64::Engine;
-use base64::engine::general_purpose::{URL_SAFE_NO_PAD, URL_SAFE_NO_PAD_INDIFFERENT};
+use base64::engine::general_purpose::URL_SAFE_NO_PAD_INDIFFERENT;
+use oauth2::basic::BasicClient;
+use oauth2::url::Url;
+use oauth2::{
+    AuthType, AuthUrl, AuthorizationCode, ClientId, CsrfToken, EndpointNotSet, EndpointSet, ErrorResponseType, HttpRequest, HttpResponse,
+    PkceCodeChallenge, PkceCodeVerifier, RedirectUrl, RefreshToken, RequestTokenError, RevocationUrl, Scope, StandardErrorResponse,
+    StandardRevocableToken, SyncHttpClient, TokenResponse, TokenUrl,
+};
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use std::fmt;
 use std::io::{self, Read, Write};
 use std::net::{Ipv4Addr, SocketAddr, TcpListener, TcpStream};
@@ -38,6 +46,8 @@ const AUDIENCE: &str = "EVE Online";
 const SUBJECT_PREFIX: &str = "CHARACTER:EVE:";
 /// The timeout of one SSO request.
 pub const TIMEOUT: Duration = Duration::from_secs(10);
+/// The largest SSO response body.
+const MAX_BODY: u64 = 64 * 1024;
 /// The largest HTTP request that the listener reads.
 const MAX_REQUEST: usize = 8 * 1024;
 
@@ -54,14 +64,12 @@ pub enum LoginError {
     StateMismatch,
     /// The text has no `code`.
     NoCode,
-    /// SSO refused the code or the refresh token (400 or 401). The character must log in again.
-    Rejected,
-    /// A timeout, a network error, a 5xx status or bad JSON.
+    /// SSO refused the code or the refresh token. The character must log in again.
+    Rejected(String),
+    /// A timeout, a network error, a 5xx status or a bad response.
     Offline(String),
     /// The token is not valid: a wrong issuer, audience or subject, or an expired token.
     BadToken(String),
-    /// The system random source failed.
-    NoRandom(String),
 }
 
 impl fmt::Display for LoginError {
@@ -70,117 +78,157 @@ impl fmt::Display for LoginError {
             LoginError::Denied(e) => write!(f, "EVE SSO did not give access ({e}). Start the login again."),
             LoginError::StateMismatch => f.write_str("This URL is not from the current login. Use the URL from the newest login tab."),
             LoginError::NoCode => f.write_str("The URL has no login code. Paste the full URL from the address bar."),
-            LoginError::Rejected => f.write_str("EVE SSO refused the login. Log in again."),
+            LoginError::Rejected(e) => write!(f, "EVE SSO refused the login ({e}). Log in again."),
             LoginError::Offline(e) => write!(f, "EVE SSO is not reachable: {e}"),
             LoginError::BadToken(e) => write!(f, "EVE SSO sent a token that is not valid: {e}"),
-            LoginError::NoRandom(e) => write!(f, "The system random source failed: {e}"),
         }
     }
 }
 
 impl std::error::Error for LoginError {}
 
-/// The PKCE pair (RFC 7636). The verifier stays in the router. The challenge goes in the URL.
-#[derive(Debug, PartialEq)]
-pub struct Pkce {
-    pub verifier: String,
-    pub challenge: String,
-}
-
-impl Pkce {
-    /// The verifier is the 32 bytes in base64url. The challenge is the SHA-256 of the verifier.
-    pub fn from_bytes(bytes: &[u8; 32]) -> Pkce {
-        let verifier = URL_SAFE_NO_PAD.encode(bytes);
-        let challenge = URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()));
-        Pkce { verifier, challenge }
-    }
-}
-
-/// 32 random bytes from the operating system.
-fn random_bytes() -> Result<[u8; 32], LoginError> {
-    let mut bytes = [0u8; 32];
-    getrandom::fill(&mut bytes).map_err(|e| LoginError::NoRandom(e.to_string()))?;
-    Ok(bytes)
-}
-
-/// The URL that starts the login in the browser.
-pub fn authorize_url(client_id: &str, state: &str, challenge: &str) -> String {
-    let params = [
-        ("response_type", "code"),
-        ("redirect_uri", &redirect_uri()),
-        ("client_id", client_id),
-        ("scope", &SCOPES.join(" ")),
-        ("state", state),
-        ("code_challenge", challenge),
-        ("code_challenge_method", "S256"),
-    ];
-    let query: Vec<String> = params.iter().map(|(k, v)| format!("{k}={}", encode(v))).collect();
-    format!("{AUTHORIZE_URL}?{}", query.join("&"))
-}
-
-/// Percent-encode all but the unreserved characters of RFC 3986.
-fn encode(text: &str) -> String {
-    let mut out = String::with_capacity(text.len());
-    for byte in text.bytes() {
-        match byte {
-            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'-' | b'.' | b'_' | b'~' => out.push(byte as char),
-            _ => out.push_str(&format!("%{byte:02X}")),
+/// The token requests and the revoke request have different error response types.
+impl<T: ErrorResponseType + fmt::Display + 'static> From<RequestTokenError<ureq::Error, StandardErrorResponse<T>>> for LoginError {
+    fn from(e: RequestTokenError<ureq::Error, StandardErrorResponse<T>>) -> Self {
+        type E<T> = RequestTokenError<ureq::Error, StandardErrorResponse<T>>;
+        match e {
+            E::ServerResponse(r) => LoginError::Rejected(r.error().to_string()),
+            E::Request(e) => LoginError::Offline(e.to_string()),
+            E::Parse(e, _) => LoginError::Offline(format!("bad response: {e}")),
+            E::Other(e) => LoginError::Offline(e),
         }
     }
-    out
 }
 
-/// Decode a query value: "%XX" gives a byte, and "+" gives a space. A bad escape stays as text.
-fn decode(text: &str) -> String {
-    let bytes = text.as_bytes();
-    let mut out = Vec::with_capacity(bytes.len());
-    let mut i = 0;
-    while i < bytes.len() {
-        match bytes[i] {
-            b'+' => out.push(b' '),
-            b'%' if i + 2 < bytes.len() => match text.get(i + 1..i + 3).and_then(|hex| u8::from_str_radix(hex, 16).ok()) {
-                Some(byte) => {
-                    out.push(byte);
-                    i += 2;
-                }
-                None => out.push(b'%'),
-            },
-            byte => out.push(byte),
-        }
-        i += 1;
+/// The HTTP client for `oauth2`, on the ureq agent of the router.
+struct Http(ureq::Agent);
+
+impl Http {
+    fn new() -> Http {
+        let config = ureq::Agent::config_builder()
+            .timeout_global(Some(TIMEOUT))
+            .user_agent(concat!("eve-router/", env!("CARGO_PKG_VERSION")))
+            // `oauth2` reads the error body of a 4xx response.
+            .http_status_as_error(false)
+            // A redirect from the token endpoint is not followed.
+            .max_redirects(0)
+            .build();
+        Http(config.new_agent())
     }
-    String::from_utf8_lossy(&out).into_owned()
+}
+
+impl SyncHttpClient for Http {
+    type Error = ureq::Error;
+
+    fn call(&self, request: HttpRequest) -> Result<HttpResponse, ureq::Error> {
+        let mut response = self.0.run(request)?;
+        let body = response.body_mut().with_config().limit(MAX_BODY).read_to_vec()?;
+        let (parts, _) = response.into_parts();
+        Ok(HttpResponse::from_parts(parts, body))
+    }
+}
+
+type EveClient = BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointSet, EndpointSet>;
+
+/// The EVE SSO client of one developer app.
+pub struct Sso {
+    client: EveClient,
+    http: Http,
+    client_id: String,
+}
+
+impl Sso {
+    pub fn new(client_id: &str) -> Sso {
+        Self::with_urls(client_id, AUTHORIZE_URL, TOKEN_URL, REVOKE_URL, &redirect_uri())
+    }
+
+    /// The SSO URLs are constants, so a parse error is a bug.
+    fn with_urls(client_id: &str, authorize: &str, token: &str, revoke: &str, redirect: &str) -> Sso {
+        let client = BasicClient::new(ClientId::new(client_id.to_owned()))
+            .set_auth_uri(AuthUrl::new(authorize.to_owned()).expect("authorize URL"))
+            .set_token_uri(TokenUrl::new(token.to_owned()).expect("token URL"))
+            .set_revocation_url(RevocationUrl::new(revoke.to_owned()).expect("revoke URL"))
+            .set_redirect_uri(RedirectUrl::new(redirect.to_owned()).expect("redirect URL"))
+            // A native app has no secret. The client ID goes in the form body.
+            .set_auth_type(AuthType::RequestBody);
+        Sso { client, http: Http::new(), client_id: client_id.to_owned() }
+    }
+
+    /// Make the PKCE pair and the state, and listen on the callback port. A listener failure
+    /// does not stop the login: the user can paste the redirected URL.
+    pub fn start_login(&self) -> Login {
+        self.start_login_on(CALLBACK_PORT)
+    }
+
+    fn start_login_on(&self, port: u16) -> Login {
+        let (challenge, verifier) = PkceCodeChallenge::new_random_sha256();
+        let (url, state) = self
+            .client
+            .authorize_url(CsrfToken::new_random)
+            .add_scopes(SCOPES.iter().map(|s| Scope::new((*s).to_owned())))
+            .set_pkce_challenge(challenge)
+            .url();
+        let listener = Listener::bind(port, state.secret().clone()).map_err(|e| match e.kind() {
+            io::ErrorKind::AddrInUse => format!("Port {port} is in use. Paste the redirected URL instead."),
+            _ => format!("Cannot listen on port {port}: {e}. Paste the redirected URL instead."),
+        });
+        Login { url: url.into(), state, verifier, listener }
+    }
+
+    /// Send the code and the verifier, and get the tokens.
+    pub fn exchange(&self, code: &str, verifier: PkceCodeVerifier) -> Result<Tokens, LoginError> {
+        let response =
+            self.client.exchange_code(AuthorizationCode::new(code.to_owned())).set_pkce_verifier(verifier).request(&self.http)?;
+        self.tokens(&response, None, now())
+    }
+
+    /// Get a new access token with the refresh token. If SSO gives no new refresh token, the old
+    /// one stays valid.
+    pub fn refresh(&self, refresh: &Secret) -> Result<Tokens, LoginError> {
+        let token = RefreshToken::new(refresh.expose().to_owned());
+        let response = self.client.exchange_refresh_token(&token).request(&self.http)?;
+        self.tokens(&response, Some(refresh), now())
+    }
+
+    /// Revoke a refresh token at SSO. After this, the token gives no access.
+    pub fn revoke(&self, refresh: &Secret) -> Result<(), LoginError> {
+        let token = StandardRevocableToken::RefreshToken(RefreshToken::new(refresh.expose().to_owned()));
+        let request = self.client.revoke_token(token).map_err(|e| LoginError::Offline(e.to_string()))?;
+        request.request(&self.http).map_err(LoginError::from)
+    }
+
+    fn tokens(&self, response: &impl TokenResponse, old_refresh: Option<&Secret>, now: u64) -> Result<Tokens, LoginError> {
+        let access = response.access_token().secret();
+        let character = read_claims(access, &self.client_id, now)?;
+        let refresh = match (response.refresh_token(), old_refresh) {
+            (Some(token), _) => Secret::new(token.secret().clone()),
+            (None, Some(old)) => old.clone(),
+            (None, None) => return Err(LoginError::BadToken("no refresh token".into())),
+        };
+        let expires_in = response.expires_in().map_or(0, |d| d.as_secs());
+        Ok(Tokens { character, access: Secret::new(access.clone()), refresh, expires_at: now + expires_in })
+    }
 }
 
 /// Read the code from a callback URL, a callback request target or a bare query string.
 /// The URL must have the `state` of this login.
 pub fn parse_callback(text: &str, state: &str) -> Result<String, LoginError> {
     let text = text.trim();
-    let text = text.split('#').next().unwrap_or_default();
     let query = match text.split_once('?') {
         Some((_, query)) => query,
         None if text.contains('=') => text,
         None => return Err(LoginError::NoCode),
     };
-    let mut code = None;
-    let mut got_state = None;
-    let mut error = None;
-    for pair in query.split('&') {
-        let (key, value) = pair.split_once('=').unwrap_or((pair, ""));
-        match key {
-            "code" => code = Some(decode(value)),
-            "state" => got_state = Some(decode(value)),
-            "error" => error = Some(decode(value)),
-            _ => {}
-        }
-    }
-    if got_state.as_deref() != Some(state) {
+    // Any base gives the same query pairs.
+    let url = Url::parse(&format!("http://localhost/?{query}")).map_err(|_| LoginError::NoCode)?;
+    let param = |name: &str| url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.into_owned());
+    if param("state").as_deref() != Some(state) {
         return Err(LoginError::StateMismatch);
     }
-    if let Some(error) = error {
+    if let Some(error) = param("error") {
         return Err(LoginError::Denied(error));
     }
-    code.filter(|c| !c.is_empty()).ok_or(LoginError::NoCode)
+    param("code").filter(|c| !c.is_empty()).ok_or(LoginError::NoCode)
 }
 
 /// The loopback listener. A thread accepts connections until a request gives a code or an
@@ -209,7 +257,6 @@ impl Listener {
                             return;
                         }
                     }
-                    Err(e) if e.kind() == io::ErrorKind::WouldBlock => std::thread::sleep(Duration::from_millis(50)),
                     Err(_) => std::thread::sleep(Duration::from_millis(50)),
                 }
             }
@@ -288,29 +335,12 @@ fn respond(stream: &mut TcpStream, status: &str, message: &str) {
 pub struct Login {
     /// Open this URL in the browser, and show it for a copy.
     pub url: String,
-    state: String,
-    pkce: Pkce,
+    state: CsrfToken,
+    verifier: PkceCodeVerifier,
     listener: Result<Listener, String>,
 }
 
 impl Login {
-    /// Make the PKCE pair and the state, and listen on the callback port. A listener failure
-    /// does not stop the login: the user can paste the redirected URL.
-    pub fn start(client_id: &str) -> Result<Login, LoginError> {
-        Self::start_on(client_id, CALLBACK_PORT)
-    }
-
-    fn start_on(client_id: &str, port: u16) -> Result<Login, LoginError> {
-        let pkce = Pkce::from_bytes(&random_bytes()?);
-        let state = URL_SAFE_NO_PAD.encode(random_bytes()?);
-        let url = authorize_url(client_id, &state, &pkce.challenge);
-        let listener = Listener::bind(port, state.clone()).map_err(|e| match e.kind() {
-            io::ErrorKind::AddrInUse => format!("Port {port} is in use. Paste the redirected URL instead."),
-            _ => format!("Cannot listen on port {port}: {e}. Paste the redirected URL instead."),
-        });
-        Ok(Login { url, state, pkce, listener })
-    }
-
     /// The reason the listener did not start, if it did not.
     pub fn listen_error(&self) -> Option<&str> {
         self.listener.as_ref().err().map(String::as_str)
@@ -323,12 +353,12 @@ impl Login {
 
     /// The code from a pasted URL.
     pub fn paste(&self, text: &str) -> Result<String, LoginError> {
-        parse_callback(text, &self.state)
+        parse_callback(text, self.state.secret())
     }
 
-    /// The PKCE verifier, for `exchange`.
-    pub fn verifier(&self) -> &str {
-        &self.pkce.verifier
+    /// The PKCE verifier, for `Sso::exchange`.
+    pub fn verifier(&self) -> PkceCodeVerifier {
+        PkceCodeVerifier::new(self.verifier.secret().clone())
     }
 }
 
@@ -344,78 +374,35 @@ pub struct Tokens {
 }
 
 #[derive(Deserialize)]
-struct TokenResponse {
-    access_token: String,
-    expires_in: u64,
-    refresh_token: String,
-}
-
-/// Send the code and the verifier, and get the tokens.
-pub fn exchange(agent: &ureq::Agent, client_id: &str, code: &str, verifier: &str) -> Result<Tokens, LoginError> {
-    let form = [("grant_type", "authorization_code"), ("code", code), ("client_id", client_id), ("code_verifier", verifier)];
-    tokens(post_form(agent, TOKEN_URL, &form)?, client_id, now())
-}
-
-/// Get a new access token with the refresh token.
-pub fn refresh(agent: &ureq::Agent, client_id: &str, refresh: &Secret) -> Result<Tokens, LoginError> {
-    let form = [("grant_type", "refresh_token"), ("refresh_token", refresh.expose()), ("client_id", client_id)];
-    tokens(post_form(agent, TOKEN_URL, &form)?, client_id, now())
-}
-
-/// Revoke a refresh token at SSO. After this, the token gives no access.
-pub fn revoke(agent: &ureq::Agent, client_id: &str, refresh: &Secret) -> Result<(), LoginError> {
-    let form = [("token_type_hint", "refresh_token"), ("token", refresh.expose()), ("client_id", client_id)];
-    post_form(agent, REVOKE_URL, &form).map(|_| ())
-}
-
-fn post_form(agent: &ureq::Agent, url: &str, form: &[(&str, &str)]) -> Result<String, LoginError> {
-    match agent.post(url).send_form(form.iter().copied()) {
-        Ok(mut resp) => resp.body_mut().read_to_string().map_err(|e| LoginError::Offline(e.to_string())),
-        Err(ureq::Error::StatusCode(400 | 401)) => Err(LoginError::Rejected),
-        Err(e) => Err(LoginError::Offline(e.to_string())),
-    }
-}
-
-fn tokens(body: String, client_id: &str, now: u64) -> Result<Tokens, LoginError> {
-    let resp: TokenResponse = serde_json::from_str(&body).map_err(|e| LoginError::Offline(format!("bad token response: {e}")))?;
-    let character = read_claims(&resp.access_token, client_id, now)?;
-    Ok(Tokens {
-        character,
-        access: Secret::new(resp.access_token),
-        refresh: Secret::new(resp.refresh_token),
-        expires_at: now + resp.expires_in,
-    })
-}
-
-#[derive(Deserialize)]
 struct Claims {
     iss: String,
     #[serde(default)]
-    aud: Audience,
+    aud: OneOrMany,
     exp: u64,
     sub: String,
     name: String,
     #[serde(default)]
-    scp: Scopes,
+    scp: OneOrMany,
 }
 
+/// SSO gives one value as a string, and more values as a list.
 #[derive(Deserialize, Default)]
 #[serde(untagged)]
-enum Audience {
+enum OneOrMany {
     One(String),
     Many(Vec<String>),
     #[default]
     None,
 }
 
-/// SSO gives one scope as a string, and more scopes as a list.
-#[derive(Deserialize, Default)]
-#[serde(untagged)]
-enum Scopes {
-    One(String),
-    Many(Vec<String>),
-    #[default]
-    None,
+impl OneOrMany {
+    fn into_vec(self) -> Vec<String> {
+        match self {
+            OneOrMany::One(s) => vec![s],
+            OneOrMany::Many(list) => list,
+            OneOrMany::None => vec![],
+        }
+    }
 }
 
 /// Read the character from the access token, and check the issuer, the audience, the expiry
@@ -431,11 +418,7 @@ pub fn read_claims(token: &str, client_id: &str, now: u64) -> Result<Character, 
     if !ISSUERS.contains(&claims.iss.as_str()) {
         return Err(LoginError::BadToken(format!("wrong issuer {}", claims.iss)));
     }
-    let audience = match claims.aud {
-        Audience::One(a) => vec![a],
-        Audience::Many(list) => list,
-        Audience::None => vec![],
-    };
+    let audience = claims.aud.into_vec();
     if !audience.iter().any(|a| a == client_id) || !audience.iter().any(|a| a == AUDIENCE) {
         return Err(bad("wrong audience"));
     }
@@ -443,12 +426,7 @@ pub fn read_claims(token: &str, client_id: &str, now: u64) -> Result<Character, 
         return Err(bad("expired"));
     }
     let id = claims.sub.strip_prefix(SUBJECT_PREFIX).and_then(|id| id.parse().ok()).ok_or_else(|| bad("bad subject"))?;
-    let scopes = match claims.scp {
-        Scopes::One(s) => vec![s],
-        Scopes::Many(list) => list,
-        Scopes::None => vec![],
-    };
-    Ok(Character { id, name: claims.name, scopes })
+    Ok(Character { id, name: claims.name, scopes: claims.scp.into_vec() })
 }
 
 fn now() -> u64 {
@@ -458,6 +436,7 @@ fn now() -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use base64::engine::general_purpose::URL_SAFE_NO_PAD;
     use serde_json::json;
 
     const CLIENT: &str = "client-123";
@@ -469,38 +448,43 @@ mod tests {
         format!("{}.{}.c2ln", part(&json!({"alg": "RS256", "kid": "JWT-Signature-Key"})), part(&claims))
     }
 
-    fn claims() -> serde_json::Value {
+    fn claims(exp: u64) -> serde_json::Value {
         json!({
             "iss": "https://login.eveonline.com",
             "aud": [CLIENT, "EVE Online"],
-            "exp": NOW + 1200,
+            "exp": exp,
             "sub": "CHARACTER:EVE:2112625428",
             "name": "Alice Ander",
             "scp": ["esi-ui.write_waypoint.v1", "esi-location.read_location.v1"],
         })
     }
 
-    #[test]
-    fn pkce_matches_rfc_7636_appendix_b() {
-        let bytes = [
-            116, 24, 223, 180, 151, 153, 224, 37, 79, 250, 96, 125, 216, 173, 187, 186, 22, 212, 37, 77, 105, 214, 191, 240, 91, 88, 5, 88,
-            83, 132, 141, 121,
-        ];
-        let pkce = Pkce::from_bytes(&bytes);
-        assert_eq!(pkce.verifier, "dBjftJeZ4CVP-mB92K27uhbUJU1p1r_wW1gFWFOEjXk");
-        assert_eq!(pkce.challenge, "E9Melhoa2OwvFrEMTJguCHaoeK1t8URWbuGJSstw-cM");
+    /// An `Sso` whose token and revoke URLs are a test server.
+    fn sso_at(url: &str) -> Sso {
+        Sso::with_urls(CLIENT, AUTHORIZE_URL, url, url, &redirect_uri())
     }
 
     #[test]
     fn authorize_url_has_every_parameter() {
-        let url = authorize_url(CLIENT, "st4te", "ch4llenge");
-        assert_eq!(
-            url,
-            "https://login.eveonline.com/v2/oauth/authorize?response_type=code\
-             &redirect_uri=http%3A%2F%2Flocalhost%3A21404%2Fcallback&client_id=client-123\
-             &scope=esi-ui.write_waypoint.v1%20esi-location.read_location.v1%20esi-location.read_ship_type.v1%20esi-location.read_online.v1\
-             &state=st4te&code_challenge=ch4llenge&code_challenge_method=S256"
-        );
+        let login = Sso::new(CLIENT).start_login_on(0);
+        let url = Url::parse(&login.url).unwrap();
+        assert_eq!(url.as_str().split('?').next(), Some(AUTHORIZE_URL));
+        let param = |name: &str| url.query_pairs().find(|(k, _)| k == name).map(|(_, v)| v.into_owned());
+        assert_eq!(param("response_type").as_deref(), Some("code"));
+        assert_eq!(param("client_id").as_deref(), Some(CLIENT));
+        assert_eq!(param("redirect_uri").as_deref(), Some("http://localhost:21404/callback"));
+        assert_eq!(param("scope"), Some(SCOPES.join(" ")));
+        assert_eq!(param("code_challenge_method").as_deref(), Some("S256"));
+        assert_eq!(param("state").as_deref(), Some(login.state.secret().as_str()));
+        assert!(param("code_challenge").is_some_and(|c| c.len() == 43));
+    }
+
+    #[test]
+    fn each_login_has_a_new_state_and_verifier() {
+        let sso = Sso::new(CLIENT);
+        let (a, b) = (sso.start_login_on(0), sso.start_login_on(0));
+        assert_ne!(a.state.secret(), b.state.secret());
+        assert_ne!(a.verifier().secret(), b.verifier().secret());
     }
 
     #[test]
@@ -518,15 +502,47 @@ mod tests {
     }
 
     #[test]
-    fn decode_keeps_bad_escapes() {
-        assert_eq!(decode("a%2"), "a%2");
-        assert_eq!(decode("a%zz"), "a%zz");
-        assert_eq!(decode("%41+b"), "A b");
+    fn exchange_gives_the_tokens() {
+        let body = json!({"access_token": jwt(claims(u64::MAX / 2)), "expires_in": 1199, "refresh_token": "r1", "token_type": "Bearer"});
+        let (url, rx) = crate::test_support::serve("200 OK", &body.to_string(), Duration::ZERO);
+        let tokens = sso_at(&url).exchange("c0de", PkceCodeVerifier::new("v".repeat(43))).unwrap();
+        assert_eq!(tokens.character.id, 2112625428);
+        assert_eq!(tokens.refresh.expose(), "r1");
+        assert!(rx.recv().unwrap().starts_with("POST / HTTP/1.1"));
+    }
+
+    #[test]
+    fn refresh_keeps_the_old_token_if_sso_gives_none() {
+        let body = json!({"access_token": jwt(claims(u64::MAX / 2)), "expires_in": 1199, "token_type": "Bearer"});
+        let (url, _rx) = crate::test_support::serve("200 OK", &body.to_string(), Duration::ZERO);
+        let tokens = sso_at(&url).refresh(&Secret::new("old")).unwrap();
+        assert_eq!(tokens.refresh.expose(), "old");
+    }
+
+    #[test]
+    fn refused_refresh_token_is_rejected() {
+        let body = r#"{"error":"invalid_grant","error_description":"Invalid refresh token."}"#;
+        let (url, _rx) = crate::test_support::serve("400 Bad Request", body, Duration::ZERO);
+        assert_eq!(sso_at(&url).refresh(&Secret::new("old")).unwrap_err(), LoginError::Rejected("invalid_grant".into()));
+    }
+
+    /// `oauth2` sends a revoke only to an HTTPS URL. The test server has no TLS, so the test
+    /// examines that guard.
+    #[test]
+    fn revoke_needs_https() {
+        let err = sso_at("http://127.0.0.1:9/revoke").revoke(&Secret::new("old")).unwrap_err();
+        assert!(matches!(&err, LoginError::Offline(e) if e.contains("HTTPS")), "{err:?}");
+    }
+
+    #[test]
+    fn server_error_is_offline() {
+        let (url, _rx) = crate::test_support::serve("503 Service Unavailable", "down", Duration::ZERO);
+        assert!(matches!(sso_at(&url).refresh(&Secret::new("old")), Err(LoginError::Offline(_))));
     }
 
     #[test]
     fn claims_give_the_character() {
-        let character = read_claims(&jwt(claims()), CLIENT, NOW).unwrap();
+        let character = read_claims(&jwt(claims(NOW + 1200)), CLIENT, NOW).unwrap();
         assert_eq!(character.id, 2112625428);
         assert_eq!(character.name, "Alice Ander");
         assert_eq!(character.scopes, ["esi-ui.write_waypoint.v1", "esi-location.read_location.v1"]);
@@ -534,7 +550,7 @@ mod tests {
 
     #[test]
     fn one_scope_as_a_string() {
-        let mut c = claims();
+        let mut c = claims(NOW + 1200);
         c["scp"] = json!("esi-ui.write_waypoint.v1");
         assert_eq!(read_claims(&jwt(c), CLIENT, NOW).unwrap().scopes, ["esi-ui.write_waypoint.v1"]);
     }
@@ -542,7 +558,7 @@ mod tests {
     #[test]
     fn bad_claims_are_refused() {
         let check = |key: &str, value: serde_json::Value| {
-            let mut c = claims();
+            let mut c = claims(NOW + 1200);
             c[key] = value;
             assert!(matches!(read_claims(&jwt(c), CLIENT, NOW), Err(LoginError::BadToken(_))), "{key}");
         };
@@ -553,33 +569,6 @@ mod tests {
         check("sub", json!("CORPORATION:EVE:1"));
         assert!(matches!(read_claims("a.b", CLIENT, NOW), Err(LoginError::BadToken(_))));
         assert!(matches!(read_claims("a.!!!.c", CLIENT, NOW), Err(LoginError::BadToken(_))));
-    }
-
-    #[test]
-    fn token_response_gives_tokens() {
-        let body = json!({"access_token": jwt(claims()), "expires_in": 1199, "refresh_token": "r1", "token_type": "Bearer"});
-        let tokens = tokens(body.to_string(), CLIENT, NOW).unwrap();
-        assert_eq!(tokens.character.name, "Alice Ander");
-        assert_eq!(tokens.refresh.expose(), "r1");
-        assert_eq!(tokens.expires_at, NOW + 1199);
-    }
-
-    #[test]
-    fn post_form_sends_the_form() {
-        let (url, rx) = crate::test_support::serve("200 OK", "{}", Duration::ZERO);
-        let agent = crate::sources::agent(TIMEOUT);
-        assert_eq!(post_form(&agent, &url, &[("grant_type", "refresh_token"), ("refresh_token", "r1")]), Ok("{}".into()));
-        let request = rx.recv().unwrap();
-        assert!(request.starts_with("POST / HTTP/1.1"), "{request}");
-        // The helper reads one TCP segment, so the body may not be in `request`.
-        assert!(request.contains("application/x-www-form-urlencoded"), "{request}");
-    }
-
-    #[test]
-    fn refused_refresh_token_is_rejected() {
-        let (url, _rx) = crate::test_support::serve("400 Bad Request", r#"{"error":"invalid_grant"}"#, Duration::ZERO);
-        let agent = crate::sources::agent(TIMEOUT);
-        assert_eq!(post_form(&agent, &url, &[("grant_type", "refresh_token")]), Err(LoginError::Rejected));
     }
 
     /// Send one request to the listener and return the response text.
@@ -626,19 +615,10 @@ mod tests {
     fn busy_port_gives_the_paste_path() {
         let busy = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = busy.local_addr().unwrap().port();
-        let login = Login::start_on(CLIENT, port).unwrap();
+        let login = Sso::new(CLIENT).start_login_on(port);
         assert_eq!(login.listen_error(), Some(format!("Port {port} is in use. Paste the redirected URL instead.").as_str()));
         assert!(login.poll().is_none());
-        let state = login.url.split("state=").nth(1).unwrap().split('&').next().unwrap();
+        let state = login.state.secret();
         assert_eq!(login.paste(&format!("http://localhost:{port}/callback?code=c0de&state={state}")), Ok("c0de".into()));
-    }
-
-    #[test]
-    fn each_login_has_a_new_state_and_verifier() {
-        let a = Login::start_on(CLIENT, 0).unwrap();
-        let b = Login::start_on(CLIENT, 0).unwrap();
-        assert_ne!(a.state, b.state);
-        assert_ne!(a.verifier(), b.verifier());
-        assert_eq!(a.verifier().len(), 43);
     }
 }
