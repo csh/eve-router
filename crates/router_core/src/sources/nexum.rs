@@ -412,13 +412,24 @@ fn fetch_all(cfg: &NexumConfig) -> Result<Fetched, FetchError> {
 
 /// Start the Nexum load: a fresh cache, else a fetch on a thread.
 pub fn start(cfg: &NexumConfig, cache_path: PathBuf, now: u64) -> Pending {
+    start_with(cfg, cache_path, now, true)
+}
+
+/// Start a Nexum fetch, also when the cache is fresh. A settings change needs this: a new key
+/// for the same map gives the same cache origin, so `start` would load the old map from the cache.
+pub fn start_fetch(cfg: &NexumConfig, cache_path: PathBuf, now: u64) -> Pending {
+    start_with(cfg, cache_path, now, false)
+}
+
+/// Start the Nexum load. `use_fresh` false skips the fresh-cache check.
+fn start_with(cfg: &NexumConfig, cache_path: PathBuf, now: u64, use_fresh: bool) -> Pending {
     if cfg.complete().is_none() {
         return Pending::None;
     }
     // A cache is for one map. Another source, another map or no origin counts as no cache.
     let origin = map_url(cfg);
     let cache = sources::read_cache(&cache_path).filter(|d| d.source == SourceId::Nexum && d.origin == origin);
-    if let Some(data) = cache.as_ref().filter(|d| sources::cache_is_fresh(d, now)) {
+    if use_fresh && let Some(data) = cache.as_ref().filter(|d| sources::cache_is_fresh(d, now)) {
         return Pending::Cache(data.clone());
     }
     let cfg = cfg.clone();
@@ -870,5 +881,26 @@ mod tests {
         assert_eq!(map_label(&cfg, &[], &[SourceData { name: None, ..named(MAP1) }]), "m1");
         cfg.map_id = None;
         assert_eq!(map_label(&cfg, &list, &[named(MAP1)]), "none");
+    }
+
+    #[test]
+    fn start_fetch_skips_a_fresh_cache() {
+        let body = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
+        // A server that stays open: each signature request gets a 500 at once, not a refused connection.
+        let (url, request) = crate::test_support::serve_routes(HashMap::from([("/api/v1/maps/m1".to_string(), body)]));
+        let path = temp("eve-router-test-start-fetch");
+        let cached = SourceData {
+            source: SourceId::Nexum,
+            fetched_at: FETCHED - 60,
+            origin: Some(format!("{url}/api/v1/maps/m1")),
+            name: None,
+            holes: Vec::new(),
+        };
+        crate::sources::write_cache(&path, &cached).unwrap();
+        // `start` uses the fresh cache. `start_fetch` sends the request.
+        assert!(matches!(start(&cfg(&url), path.clone(), FETCHED), Pending::Cache(_)));
+        let load = finish(start_fetch(&cfg(&url), path, FETCHED), |id| id != 39_999_999, &types());
+        assert!(request.recv_timeout(Duration::from_secs(10)).expect("no request").starts_with("GET /api/v1/maps/m1"));
+        assert_eq!(load.data.unwrap().holes.len(), 5);
     }
 }
