@@ -22,7 +22,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("EVE Router")
             .with_inner_size([1280.0, 820.0])
-            .with_min_inner_size([900.0, 560.0]),
+            .with_min_inner_size([1260.0, 560.0]),
         ..Default::default()
     };
     eframe::run_native("EVE Router", options, Box::new(|cc| Ok(Box::new(RouterApp::new(cc.egui_ctx.clone())))))

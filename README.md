@@ -7,7 +7,7 @@ A terminal route planner for EVE Online.
 - Favourite systems to see the shortest route at a glance.
 - Automatic updates of required SDE files.
 - Calculate the top-n routes through any number of midpoints with similar navigation options as ingame: shortest, prefer highsec and less secure.
-- Wormhole connections from a Nexum map, fetched at startup. The router uses the wormhole size, mass status and expiry.
+- Wormhole connections from a Nexum map, fetched at startup. The router uses the wormhole size, mass status and expiry. This needs a hosted Nexum instance and an API key. Without them, the router uses only the EVE-Scout wormholes.
 - The signature of each wormhole jump, for example `Wormhole · Sig. ABC · XL`.
 - Thera and Turnur wormholes from the public [EVE-Scout](https://www.eve-scout.com/) feed, fetched at startup. Each hub has its own switch.
 
@@ -47,7 +47,7 @@ cargo run --release -p router_egui
 - Alliance capital for usage with Ansiblex network.
 - Capacitor usage limit per jump bridge taken.
 - Favourite systems list.
-- Nexum URL, API key and map. The key needs only the `read` scope. The router sends GET requests only. A change applies at the next start.
+- Nexum URL, API key and map. Nexum is optional, but it needs a hosted instance and an API key. The key needs only the `read` scope. The router sends GET requests only. A change applies at the next start.
 - EVE-Scout: a Thera switch and a Turnur switch. Both are on by default. A change applies at once.
 
 Config files are stored in `com.smrkn.eve-router` under the platform config directory, whilst SDE files are located in the platform data directory. 
