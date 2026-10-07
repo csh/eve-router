@@ -58,7 +58,7 @@ cargo run --release -p router_egui
 - Alliance capital for usage with Ansiblex network.
 - Capacitor usage limit per jump bridge taken.
 - Favourite systems list.
-- Nexum URL, API key and map. Nexum is optional, but it needs a hosted instance and an API key. The key needs only the `read` scope. The router sends GET requests only. A change applies at the next start.
+- Nexum URL, API key and map. Nexum is optional, but it needs a hosted instance and an API key. The key needs only the `read` scope. The router sends GET requests only. A change loads the new map at once.
 - EVE-Scout: a Thera switch and a Turnur switch. Both are on by default. A change applies at once.
 
 Config files are stored in `com.smrkn.eve-router` under the platform config directory, whilst SDE files are located in the platform data directory. 
@@ -69,6 +69,8 @@ See the [`dirs`](https://crates.io/crates/dirs) crate for platform specific path
 At startup, the router gets the Nexum map from the API and keeps a copy in the platform cache directory. The router reads Nexum data only from the API. A copy that is less than 5 minutes old stops the fetch. If Nexum is offline, or the key is rejected, the router uses the copy and shows the problem on the status line.
 
 The router also gets the EVE-Scout feed at each startup, with the same cache and fallback. The feed is public and needs no key. Each entry gives an exact expiry, both signatures and a ship size, but no mass status.
+
+While the router runs, it gets both sources again each 5 minutes and builds a new map. The route list searches again with the same waypoints. The selected route stays selected when its path is still in the list. If a wormhole on the selected route closes, the status line says so. If a fetch fails, the router uses the cache or the data of the last refresh, and shows the problem on the status line.
 
 #### Signatures
 
