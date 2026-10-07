@@ -338,10 +338,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             label(ui, "Nexum map");
             ui.add_enabled_ui(!locked, |ui| {
                 ui.horizontal(|ui| {
-                    let name = match &s.cfg.nexum.map_id {
-                        None => "none".into(),
-                        Some(id) => s.map_names.iter().find(|m| &m.id == id).map_or(id.clone(), |m| m.name.clone()),
-                    };
+                    let name = s.map_name();
                     ui.label(RichText::new(name).color(theme::TEXT));
                     if loading {
                         ui.add(egui::Spinner::new().color(theme::ACCENT));

@@ -12,7 +12,8 @@ use router_core::esi::active::{ActiveRoute, Hop};
 use router_core::esi::client::{IMAGES_URL, portrait};
 use router_core::esi::pilots::{HullSync, PilotView, Pilots, StartPlan, pilots_by_step};
 use router_core::labels::{hull_label, ship_text, wormhole_hint};
-use router_core::route::Stop;
+use router_core::refresh::kept_route;
+use router_core::route::{Path, Stop};
 use router_core::settings::HullSource;
 use router_core::universe::display_sec;
 use std::collections::HashMap;
@@ -125,11 +126,14 @@ pub fn avatar_row(ui: &mut Ui, portraits: &mut Portraits, here: &[PilotView]) {
     }
 }
 
+/// The status text when a route start finds that its route is not in the list any more.
+pub const ROUTE_GONE: &str = "The routes changed, and that route is gone. Start the route again.";
+
 /// The step of a route start.
 pub enum Start {
-    /// Two or more characters: choose one.
+    /// Two or more characters: choose one. The route is its path, because a refresh can move it.
     Pick {
-        route: usize,
+        path: Path,
         chosen: u64,
     },
     Confirm(Box<StartPlan>),
@@ -145,7 +149,7 @@ pub struct PilotsUi {
     paste: String,
     pub start: Option<Start>,
     /// The route to start after the current login.
-    start_after_login: Option<usize>,
+    start_after_login: Option<Path>,
     stop: bool,
     reroute: Option<Box<ActiveRoute>>,
     show_offline: bool,
@@ -179,12 +183,8 @@ impl PilotsUi {
             s.status = notice;
         }
         // The login is done: continue the route start.
-        if had_login
-            && s.pilots.login.is_none()
-            && let Some(route) = self.start_after_login.take()
-        {
-            self.characters_open = false;
-            self.begin_start(s, route);
+        if had_login && s.pilots.login.is_none() {
+            self.continue_after_login(s);
         }
         let progress = s.pilots.active.as_ref().map(|a| a.progress);
         if progress != self.last_progress {
@@ -197,6 +197,25 @@ impl PilotsUi {
         }
     }
 
+    /// Start the route that waited for the login. Drop it if the route is gone.
+    fn continue_after_login(&mut self, s: &mut Session) {
+        let Some(path) = self.start_after_login.take() else { return };
+        self.characters_open = false;
+        if let Some(route) = resolve(s, &path) {
+            self.begin_start(s, route);
+        }
+    }
+
+    /// The index of the route of the open pick. Close the pick if the route is gone.
+    fn pick_index(&mut self, s: &mut Session) -> Option<usize> {
+        let Some(Start::Pick { path, .. }) = &self.start else { return None };
+        let route = resolve(s, path);
+        if route.is_none() {
+            self.start = None;
+        }
+        route
+    }
+
     fn login(&mut self, s: &mut Session) {
         self.paste.clear();
         if let Err(e) = s.pilots.start_login() {
@@ -207,18 +226,19 @@ impl PilotsUi {
 
     /// "Start route #n": choose the character, then confirm.
     pub fn begin_start(&mut self, s: &mut Session, route: usize) {
+        let Some(path) = s.routes.get(route).map(|r| r.path.clone()) else { return };
         let ids: Vec<u64> = s.pilots.senders().into_iter().map(|c| c.id).collect();
         match ids.len() {
             // A waypoint does nothing without the game client, so an offline pilot is not in the list.
             0 if s.pilots.characters().iter().any(|c| !c.live.expired) => s.status = Pilots::NO_SENDER.into(),
             0 => {
-                self.start_after_login = Some(route);
+                self.start_after_login = Some(path);
                 self.login(s);
             }
             1 => self.confirm(s, route, ids[0]),
             _ => {
                 let chosen = s.pilots.last_used().filter(|id| ids.contains(id)).unwrap_or(ids[0]);
-                self.start = Some(Start::Pick { route, chosen });
+                self.start = Some(Start::Pick { path, chosen });
             }
         }
     }
@@ -391,6 +411,13 @@ impl PilotsUi {
     }
 
     fn start_window(&mut self, ui: &mut Ui, s: &mut Session) {
+        // Find the route again: a refresh or a hull change can move it or remove it.
+        let route = if matches!(self.start, Some(Start::Pick { .. })) {
+            let Some(route) = self.pick_index(s) else { return };
+            route
+        } else {
+            0
+        };
         let Some(start) = &mut self.start else { return };
         let mut next = None;
         let mut close = false;
@@ -398,8 +425,8 @@ impl PilotsUi {
         let response = Modal::new(Id::new("start")).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
             ui.set_width(480.0);
             match start {
-                Start::Pick { route, chosen } => {
-                    crate::settings_window::title(ui, &format!("Send route #{} to…", *route + 1));
+                Start::Pick { chosen, .. } => {
+                    crate::settings_window::title(ui, &format!("Send route #{} to…", route + 1));
                     for pilot in s.pilots.senders() {
                         ui.horizontal(|ui| {
                             ui.radio_value(chosen, pilot.id, "");
@@ -414,7 +441,7 @@ impl PilotsUi {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         if ui.button("Continue").clicked() {
-                            next = Some((*route, *chosen));
+                            next = Some((route, *chosen));
                         }
                         close = ui.button("Cancel").clicked();
                     });
@@ -832,6 +859,15 @@ fn ship_row(ui: &mut Ui, pilot: &PilotView) {
     });
 }
 
+/// The index of the route with this path in the route list. Set `ROUTE_GONE` if there is none.
+fn resolve(s: &mut Session, path: &Path) -> Option<usize> {
+    let route = kept_route(&s.routes, path);
+    if route.is_none() {
+        s.status = ROUTE_GONE.into();
+    }
+    route
+}
+
 fn system_name(s: &Session, id: u32) -> String {
     s.uni.by_id.get(&id).map_or_else(|| id.to_string(), |&n| s.uni.name(n).to_string())
 }
@@ -865,6 +901,10 @@ fn question(ui: &mut Ui, id: &str, title: &str, text: &str, buttons: &[(&str, bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use router_core::config::Config;
+    use router_core::labels::Shortcuts;
+    use router_core::test_support::{overlay_universe, settings};
+    use std::sync::Arc;
 
     #[test]
     fn overflow_wording() {
@@ -876,5 +916,48 @@ mod tests {
     fn initials_of_names() {
         assert_eq!(initials("Alice Ander"), "AA");
         assert_eq!(initials("bob"), "B");
+    }
+
+    fn session_with_routes() -> Session {
+        let uni = overlay_universe();
+        let settings = settings(&uni, Some("black-ops"));
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
+        let path = std::env::temp_dir().join("eve-router-egui-test-pilots-view.json");
+        let mut s = Session::new(Arc::new(uni), settings, Config::default(), path, shortcuts);
+        s.add_list("Jita, Amarr");
+        assert!(s.routes.len() >= 2, "{}", s.status);
+        s
+    }
+
+    #[test]
+    fn a_moved_route_is_still_the_one_sent() {
+        let mut s = session_with_routes();
+        let path = s.routes[1].path.clone();
+        let mut ui = PilotsUi { start: Some(Start::Pick { path: path.clone(), chosen: 1 }), ..Default::default() };
+        s.routes.swap(0, 1);
+        assert_eq!(ui.pick_index(&mut s), Some(0));
+        assert_eq!(s.routes[0].path, path);
+        assert!(ui.start.is_some());
+    }
+
+    #[test]
+    fn a_gone_route_closes_the_pick() {
+        let mut s = session_with_routes();
+        let path = s.routes[1].path.clone();
+        let mut ui = PilotsUi { start: Some(Start::Pick { path, chosen: 1 }), ..Default::default() };
+        s.routes.truncate(1);
+        assert_eq!(ui.pick_index(&mut s), None);
+        assert!(ui.start.is_none());
+        assert_eq!(s.status, ROUTE_GONE);
+    }
+
+    #[test]
+    fn a_gone_route_drops_the_start_after_login() {
+        let mut s = session_with_routes();
+        let mut ui = PilotsUi { start_after_login: Some(s.routes[1].path.clone()), ..Default::default() };
+        s.routes.truncate(1);
+        ui.continue_after_login(&mut s);
+        assert!(ui.start_after_login.is_none() && ui.start.is_none());
+        assert_eq!(s.status, ROUTE_GONE);
     }
 }

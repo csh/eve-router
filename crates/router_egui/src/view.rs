@@ -583,8 +583,13 @@ fn status_bar(ui: &mut Ui, s: &Session) {
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
         sync_status(ui, s);
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-            let parts: Vec<&str> =
-                std::iter::once(&s.status).chain(&s.startup_lines).map(String::as_str).filter(|t| !t.is_empty()).collect();
+            // The refresh note stays: the status timer clears only the status and the startup lines.
+            let parts: Vec<&str> = std::iter::once(&s.status)
+                .chain(&s.startup_lines)
+                .chain(std::iter::once(&s.note))
+                .map(String::as_str)
+                .filter(|t| !t.is_empty())
+                .collect();
             let (text, color) = match parts.is_empty() {
                 true => ("Ready".to_string(), theme::TEXT_DIM),
                 false => (parts.join(" · "), theme::WARN),
