@@ -5,10 +5,9 @@ use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
 use petgraph::graph::NodeIndex;
 use router_core::ansiblex::{self, BridgeRules};
 use router_core::overlay;
-use router_core::route::{Mode, Router};
+use router_core::route::{Mode, Router, RouterOptions};
 use router_core::test_support::{fixture, hole, sde_dir};
 use router_core::universe::Universe;
-use router_core::wormhole::Hubs;
 use std::hint::black_box;
 
 fn load() -> Universe {
@@ -33,7 +32,7 @@ fn bench(c: &mut Criterion) {
     ansiblex::init(&sde_dir()).unwrap();
     let uni = with_overlays();
     let rules = BridgeRules { capital: uni.exact("JK-Q77"), hull: ansiblex::find_hull("Sin"), max_cap: None };
-    let router = |mode| Router::new(&uni, mode, true, Hubs::default(), true, rules, 0);
+    let router = |mode| Router::new(&uni, RouterOptions { mode, rules, ..Default::default() });
 
     let mut g = c.benchmark_group("load");
     g.sample_size(20);

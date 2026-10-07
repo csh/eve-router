@@ -11,9 +11,13 @@ use serde::{Deserialize, Serialize};
 use std::cmp::Reverse;
 use std::collections::{BinaryHeap, HashSet};
 
-/// The cost of one jump into an unwanted system. It is larger than any jump count,
-/// so a route first has the fewest unwanted jumps, then the fewest jumps.
-pub const PENALTY: u64 = 1_000_000;
+/// The cost of one jump, in milli-jumps. Soft costs (a bridge capacitor, an unknown signature)
+/// add fractions of a jump to it.
+pub const JUMP: u64 = 1000;
+
+/// The cost of one jump into an unwanted system. It is larger than any jump cost,
+/// so a route first has the fewest unwanted jumps, then the lowest cost.
+pub const PENALTY: u64 = 1_000_000 * JUMP;
 
 /// The most midpoints that "optimize order" takes. Held-Karp keeps m × 2^m states for m midpoints.
 pub const MAX_MIDPOINTS: usize = 20;
@@ -104,6 +108,25 @@ impl Route {
     }
 }
 
+/// What a `Router` needs to price the links of a universe.
+#[derive(Clone, Copy)]
+pub struct RouterOptions {
+    pub mode: Mode,
+    pub wormholes: bool,
+    /// Switches the wormholes of each hub (Thera, Turnur) on and off.
+    pub hubs: Hubs,
+    pub bridges: bool,
+    pub rules: BridgeRules,
+    /// Unix seconds. It sets which wormholes are expired.
+    pub now: u64,
+}
+
+impl Default for RouterOptions {
+    fn default() -> Self {
+        RouterOptions { mode: Mode::Shortest, wormholes: true, hubs: Hubs::default(), bridges: true, rules: BridgeRules::default(), now: 0 }
+    }
+}
+
 pub struct Router<'a> {
     pub uni: &'a Universe,
     pub rules: BridgeRules,
@@ -131,9 +154,8 @@ impl Bans {
 impl<'a> Router<'a> {
     /// Calculate the node costs and the edge permissions one time, in parallel.
     /// Each search then reads them instead of calculating them again.
-    /// `now` (Unix seconds) sets which wormholes are expired.
-    /// `hubs` switches the wormholes of each hub (Thera, Turnur) on and off.
-    pub fn new(uni: &'a Universe, mode: Mode, wormholes: bool, hubs: Hubs, bridges: bool, rules: BridgeRules, now: u64) -> Self {
+    pub fn new(uni: &'a Universe, options: RouterOptions) -> Self {
+        let RouterOptions { mode, wormholes, hubs, bridges, rules, now } = options;
         let graph = &uni.graph;
         let node_cost = graph
             .raw_nodes()
@@ -145,7 +167,7 @@ impl<'a> Router<'a> {
                     Mode::PreferHighsec => b != Band::High,
                     Mode::LessSecure => b == Band::High,
                 };
-                if unwanted { 1 + PENALTY } else { 1 }
+                if unwanted { JUMP + PENALTY } else { JUMP }
             })
             .collect();
         let hull_kg = rules.hull.and_then(|h| h.mass_kg);
@@ -417,8 +439,8 @@ impl<'a> Router<'a> {
     pub fn jumps_to(&self, origin: NodeIndex, targets: &[NodeIndex]) -> Vec<(NodeIndex, Option<u64>)> {
         let graph = EdgeFiltered::from_fn(&self.uni.graph, |e: EdgeReference<'_, Link>| self.link_allowed(e));
         let costs = dijkstra(&graph, origin, None, |e| self.enter_cost(e.target()));
-        // Each jump costs 1, and each unwanted jump adds PENALTY. Thus the remainder is the jump count.
-        targets.iter().map(|&t| (t, costs.get(&t).map(|c| c % PENALTY))).collect()
+        // Each jump costs JUMP, and each unwanted jump adds PENALTY. Thus the remainder is the jump count.
+        targets.iter().map(|&t| (t, costs.get(&t).map(|c| c % PENALTY / JUMP))).collect()
     }
 }
 
@@ -428,7 +450,7 @@ mod tests {
     use crate::test_support::{hole, sde_dir, universe};
 
     fn router(mode: Mode) -> Router<'static> {
-        Router::new(universe(), mode, true, Hubs::default(), true, BridgeRules::default(), 0)
+        Router::new(universe(), RouterOptions { mode, ..Default::default() })
     }
 
     use crate::ansiblex::find_hull;
@@ -467,7 +489,7 @@ mod tests {
     fn hub_jumps(hubs: Hubs, hull: Option<&str>, from: &str, to: &str, now: u64) -> usize {
         let uni = holes_universe();
         let rules = BridgeRules { capital: None, hull: hull.map(|h| find_hull(h).unwrap()), max_cap: None };
-        let router = Router::new(uni, Mode::Shortest, true, hubs, false, rules, now);
+        let router = Router::new(uni, RouterOptions { hubs, bridges: false, rules, now, ..Default::default() });
         let nodes = [uni.exact(from).unwrap(), uni.exact(to).unwrap()];
         router.routes(&nodes, 1).unwrap()[0].jumps
     }
@@ -498,7 +520,7 @@ mod tests {
     #[test]
     fn wormholes_off() {
         let uni = holes_universe();
-        let router = Router::new(uni, Mode::Shortest, false, Hubs::default(), false, BridgeRules::default(), 0);
+        let router = Router::new(uni, RouterOptions { wormholes: false, bridges: false, ..Default::default() });
         let nodes = [uni.exact("Dodixie").unwrap(), uni.exact("Hek").unwrap()];
         assert!(router.routes(&nodes, 1).unwrap()[0].jumps > 1);
     }

@@ -2,7 +2,7 @@
 
 use crate::ansiblex::{BridgeRules, find_hull, hull_by_type, same_hull, table};
 use crate::config::{self, Config};
-use crate::route::{Mode, Router};
+use crate::route::{Mode, Router, RouterOptions};
 use crate::universe::Universe;
 use crate::wormhole;
 use petgraph::graph::NodeIndex;
@@ -63,7 +63,15 @@ impl Settings {
     /// A router for the settings. `now` (Unix seconds) and `min_life` set which wormholes are usable.
     pub fn router<'a>(&self, uni: &'a Universe, now: u64) -> Router<'a> {
         let bridges = self.bridges && self.rules.blocked_reason().is_none();
-        Router::new(uni, self.mode, self.wormholes, self.hubs, bridges, self.rules, now + self.min_life * 60)
+        let options = RouterOptions {
+            mode: self.mode,
+            wormholes: self.wormholes,
+            hubs: self.hubs,
+            bridges,
+            rules: self.rules,
+            now: now + self.min_life * 60,
+        };
+        Router::new(uni, options)
     }
 
     /// Set the hull from the ship of the followed pilot. `ship_type` is `None` while the ship is
