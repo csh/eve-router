@@ -24,7 +24,7 @@ pub fn route_setting(row: SettingsRow) -> bool {
     !matches!(row, SettingsRow::Favourite(_) | SettingsRow::AddFavourite)
 }
 
-impl App<'_> {
+impl App {
     /// The name of a system, or its ID if the map does not have it.
     pub fn system_name(&self, id: u32) -> String {
         self.uni.by_id.get(&id).map_or_else(|| id.to_string(), |&n| self.uni.name(n).to_string())
@@ -144,7 +144,7 @@ impl App<'_> {
     fn confirm(&mut self, index: usize, id: u64) -> Option<Popup> {
         let pilot = self.pilots.characters().into_iter().find(|c| c.id == id)?;
         let route = self.routes.get(index)?;
-        let plan = StartPlan::new(self.uni, &self.settings, route, index + 1, &pilot, router_core::wormhole::now());
+        let plan = StartPlan::new(&self.uni, &self.settings, route, index + 1, &pilot, router_core::wormhole::now());
         if let Some(error) = &plan.error {
             self.status.clone_from(error);
         }
@@ -227,7 +227,7 @@ impl App<'_> {
 
     /// "Re-route from here": the new route goes into a confirm popup.
     fn reroute(&mut self) -> Option<Popup> {
-        match self.pilots.reroute(self.uni, &self.settings, router_core::wormhole::now()) {
+        match self.pilots.reroute(&self.uni, &self.settings, router_core::wormhole::now()) {
             Ok(route) => Some(Popup::Reroute(Box::new(route))),
             Err(e) => {
                 self.status = e;

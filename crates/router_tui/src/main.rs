@@ -10,6 +10,7 @@ use router_core::{startup, wormhole};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
+use std::sync::Arc;
 use std::time::Instant;
 
 /// mimalloc is faster than the system allocator for the many small maps of the route searches.
@@ -126,7 +127,7 @@ fn run() -> Result<(), String> {
         }
         print_routes(&mut std::io::stdout().lock(), uni, &settings, &systems, wormhole::now())
     } else {
-        tui::run(uni, settings, cfg, cfg_path, systems.join(" > "), snapshot.shortcuts, overrides)
+        tui::run(Arc::clone(uni), settings, cfg, cfg_path, systems.join(" > "), snapshot.shortcuts, overrides)
     }
 }
 
