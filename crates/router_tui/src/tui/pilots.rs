@@ -374,6 +374,8 @@ mod tests {
     use ratatui::crossterm::event::KeyModifiers;
     use router_core::config::Config;
     use router_core::esi::active::{ActiveRoute, Hop, Step};
+    use router_core::test_support::{hole, snapshot};
+    use router_core::wormhole::Wormhole;
 
     fn active(systems: &[u32]) -> ActiveRoute {
         let steps = systems
@@ -493,6 +495,25 @@ mod tests {
         assert!(app.forget_route_choice());
         assert!(app.popup.is_none() && app.start_after_login.is_none());
         assert!(!app.forget_route_choice());
+    }
+
+    /// Review focus: a wormhole refresh while a route is active.
+    #[test]
+    fn a_refresh_keeps_the_step_mark_of_the_active_route() {
+        let mut app = app("refresh-active", Config::default());
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        let mut route = active(&[30000142, 30000144, 30002187]);
+        route.progress = 1;
+        app.pilots.active = Some(route);
+        app.tick();
+        assert_eq!(app.detail.selected(), Some(1));
+        // The new wormhole route is first, so the refresh does not keep the planner path.
+        let hole = Wormhole { sig_a: Some("ABC-123".into()), ..hole(30000142, 30002187) };
+        app.apply_snapshot(snapshot(vec![hole]));
+        assert_eq!(app.routes[0].wormholes, 1, "{}", app.status);
+        app.tick();
+        assert_eq!(app.detail.selected(), Some(1));
     }
 
     #[test]

@@ -216,6 +216,8 @@ impl App {
         self.routes.clear();
         self.selected.select(None);
         self.detail = TableState::default();
+        // The table of an active route also uses `detail`. The next tick marks the step again.
+        self.last_progress = None;
         self.status.clear();
         if let Some(reason) = self.settings.rules.blocked_reason() {
             self.status = format!("Jump bridges off: {reason}");
