@@ -9,7 +9,7 @@ use router_core::ansiblex::HullClass;
 use router_core::config::{self, ApiKey};
 use router_core::esi::pilots::PilotRow;
 use router_core::labels::{on_off, ship_text};
-use router_core::settings::{HullSource, parse_max_cap};
+use router_core::settings::{HullSource, RouteCosts, parse_max_cap};
 use router_core::sources::{
     self,
     nexum::{self, MapInfo},
@@ -195,6 +195,50 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                             }
                             Err(e) => form.error = Some(e),
                         }
+                    }
+                })
+            })
+            .response
+            .on_disabled_hover_text(LOCKED);
+            ui.end_row();
+
+            // The soft costs of a route: the bridge capacitor and the unknown wormhole signature.
+            label(ui, "Bridge capacitor cost");
+            ui.add_enabled_ui(!locked, |ui| {
+                let drag = egui::DragValue::new(&mut s.settings.costs.cap_weight)
+                    .speed(0.05)
+                    .range(0.0..=RouteCosts::MAX)
+                    .max_decimals(2)
+                    .suffix(" jumps per 1% of a gate");
+                if ui.add(drag).on_hover_text("A bridge jump with a hull costs this much for each percent of the gate capacitor it uses").changed() {
+                    s.recompute();
+                    s.save();
+                }
+            })
+            .response
+            .on_disabled_hover_text(LOCKED);
+            ui.end_row();
+
+            label(ui, "Unknown signature cost");
+            ui.add_enabled_ui(!locked, |ui| {
+                ui.horizontal(|ui| {
+                    let costs = &mut s.settings.costs;
+                    let drag = egui::DragValue::new(&mut costs.unknown_sig_penalty)
+                        .speed(0.1)
+                        .range(0.0..=RouteCosts::MAX)
+                        .max_decimals(1)
+                        .suffix(" jumps");
+                    let mut changed = ui
+                        .add_enabled(!costs.unknown_sig_broken, drag)
+                        .on_hover_text("A wormhole with no known signature costs this much extra, for the scan")
+                        .changed();
+                    changed |= ui
+                        .checkbox(&mut costs.unknown_sig_broken, "Treat as broken")
+                        .on_hover_text("Skip these wormholes. Stale data can then cut the map")
+                        .changed();
+                    if changed {
+                        s.recompute();
+                        s.save();
                     }
                 })
             })

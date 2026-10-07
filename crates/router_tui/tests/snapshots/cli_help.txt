@@ -30,6 +30,15 @@ Options:
       --min-life <MIN_LIFE>
           The minimum time (minutes) that a wormhole must have left. The default is 60
 
+      --cap-weight <CAP_WEIGHT>
+          The cost, in jumps, of 1% of the Ansiblex capacitor. The default is 0.6
+
+      --unknown-sig-penalty <UNKNOWN_SIG_PENALTY>
+          The extra cost, in jumps, of a wormhole with no known signature. The default is 4
+
+      --unknown-sig-broken
+          Drop a wormhole with no known signature, instead of the penalty
+
       --bridges <BRIDGES>
           A jump bridge list in SMT format. The default is ansiblex.txt in the config directory
 

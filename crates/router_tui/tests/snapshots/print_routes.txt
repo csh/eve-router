@@ -105,6 +105,6 @@ Shortest route from Jita (shortest):
   Jita                0
   Amarr              11
 
-#1 1 jump (1 wormhole)
+#1 1 jump (1 wormhole, 1 unknown sig)
     0 Start       Jita                  0.9 The Forge            
     1 Destination J134702              -1.0 E-R00028             Wormhole · Sig. Unknown · Large · Less than 14h 0m remaining

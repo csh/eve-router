@@ -164,6 +164,12 @@ pub fn route_extras(route: &Route) -> String {
     if let Some(tj) = route.bridge_tj {
         parts.push(format!("{tj} TJ"));
     }
+    if let Some(pct) = route.bridge_cap_pct {
+        parts.push(format!("{pct:.1}% of a gate"));
+    }
+    if route.unknown_sigs > 0 {
+        parts.push(format!("{} unknown sig{}", route.unknown_sigs, if route.unknown_sigs == 1 { "" } else { "s" }));
+    }
     if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
 }
 

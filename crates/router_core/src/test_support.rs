@@ -60,6 +60,7 @@ pub fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
         rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| find_hull(h).unwrap()), max_cap: None },
         hull_source: HullSource::Manual,
         min_life: 0,
+        costs: Default::default(),
         favourites: Vec::new(),
     }
 }

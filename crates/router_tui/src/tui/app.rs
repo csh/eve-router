@@ -755,6 +755,7 @@ pub(crate) mod tests {
             rules: BridgeRules::default(),
             hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
+            costs: Default::default(),
             favourites: Vec::new(),
         };
         let path = std::env::temp_dir().join(format!("eve-router-test-{name}.json"));

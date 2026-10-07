@@ -110,6 +110,12 @@ pub struct Config {
     /// Visit each system one time, in the cheapest order.
     pub optimize: bool,
     pub top: Option<usize>,
+    /// The cost of 1% of the Ansiblex capacitor, in jumps. `None` gives the default.
+    pub cap_weight: Option<f32>,
+    /// The extra cost, in jumps, of a wormhole with no known signature. `None` gives the default.
+    pub unknown_sig_penalty: Option<f32>,
+    /// Drop a wormhole with no known signature, instead of a penalty.
+    pub unknown_sig_broken: bool,
     pub nexum: NexumConfig,
     /// The Thera and Turnur switches. Both are on in a file without them.
     pub eve_scout: Hubs,
@@ -150,6 +156,9 @@ impl RunOverrides {
         keep(&mut cfg.mode, &f.mode, &r.mode);
         keep(&mut cfg.optimize, &f.optimize, &r.optimize);
         keep(&mut cfg.top, &f.top, &r.top);
+        keep(&mut cfg.cap_weight, &f.cap_weight, &r.cap_weight);
+        keep(&mut cfg.unknown_sig_penalty, &f.unknown_sig_penalty, &r.unknown_sig_penalty);
+        keep(&mut cfg.unknown_sig_broken, &f.unknown_sig_broken, &r.unknown_sig_broken);
     }
 }
 
@@ -247,6 +256,9 @@ mod tests {
             mode: Some(Mode::PreferHighsec),
             optimize: true,
             top: Some(3),
+            cap_weight: Some(0.6),
+            unknown_sig_penalty: Some(4.0),
+            unknown_sig_broken: true,
             nexum: NexumConfig {
                 url: Some("https://nexum.example".into()),
                 key: Some(ApiKey("nxm_key".into())),

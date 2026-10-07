@@ -2,7 +2,7 @@
 
 use crate::ansiblex::{BridgeRules, find_hull, hull_by_type, same_hull, table};
 use crate::config::{self, Config};
-use crate::route::{DEFAULT_CAP_WEIGHT, Mode, Router, RouterOptions};
+use crate::route::{DEFAULT_CAP_WEIGHT, DEFAULT_UNKNOWN_SIG_PENALTY, JUMP, Mode, Router, RouterOptions};
 use crate::universe::Universe;
 use crate::wormhole;
 use petgraph::graph::NodeIndex;
@@ -16,6 +16,48 @@ pub enum HullSource {
     Pilot(u64),
 }
 
+/// The soft costs of a route, in jumps. A cost of 1 makes a link as dear as one more gate jump.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct RouteCosts {
+    /// The cost of 1% of the Ansiblex capacitor, for a bridge jump with a hull.
+    pub cap_weight: f32,
+    /// The extra cost of a wormhole with no known signature at its departure system.
+    pub unknown_sig_penalty: f32,
+    /// Drop a wormhole with no known signature, instead of the penalty.
+    pub unknown_sig_broken: bool,
+}
+
+impl Default for RouteCosts {
+    fn default() -> Self {
+        RouteCosts {
+            cap_weight: DEFAULT_CAP_WEIGHT as f32 / JUMP as f32,
+            unknown_sig_penalty: DEFAULT_UNKNOWN_SIG_PENALTY as f32 / JUMP as f32,
+            unknown_sig_broken: false,
+        }
+    }
+}
+
+impl RouteCosts {
+    /// The most that a cost can be, in jumps. A larger cost makes the link unusable in effect.
+    pub const MAX: f32 = 1000.0;
+
+    /// The costs from the config. A missing or invalid value gives the default.
+    pub fn from_config(cfg: &Config) -> Self {
+        let default = RouteCosts::default();
+        let ok = |v: Option<f32>, default: f32| v.filter(|v| v.is_finite() && (0.0..=Self::MAX).contains(v)).unwrap_or(default);
+        RouteCosts {
+            cap_weight: ok(cfg.cap_weight, default.cap_weight),
+            unknown_sig_penalty: ok(cfg.unknown_sig_penalty, default.unknown_sig_penalty),
+            unknown_sig_broken: cfg.unknown_sig_broken,
+        }
+    }
+
+    /// A cost in jumps as milli-jumps.
+    fn milli(jumps: f32) -> u32 {
+        (jumps.clamp(0.0, Self::MAX) * JUMP as f32).round() as u32
+    }
+}
+
 /// The settings that a user interface can change.
 pub struct Settings {
     pub mode: Mode,
@@ -27,6 +69,7 @@ pub struct Settings {
     pub hubs: wormhole::Hubs,
     pub bridges: bool,
     pub rules: BridgeRules,
+    pub costs: RouteCosts,
     /// With `Pilot`, `follow` sets `rules.hull`.
     pub hull_source: HullSource,
     /// The minimum time (minutes) that a wormhole must have left. The router skips other wormholes.
@@ -54,6 +97,7 @@ impl Settings {
             hubs: cfg.eve_scout,
             bridges: true,
             rules: BridgeRules { capital, hull, max_cap: cfg.max_cap_tj },
+            costs: RouteCosts::from_config(cfg),
             hull_source: cfg.pilot.map_or(HullSource::Manual, HullSource::Pilot),
             min_life: cfg.min_life_min.unwrap_or(config::DEFAULT_MIN_LIFE_MIN),
             favourites: resolve_all(uni, &favourite_names(cfg))?,
@@ -69,9 +113,10 @@ impl Settings {
             hubs: self.hubs,
             bridges,
             rules: self.rules,
-            cap_weight: DEFAULT_CAP_WEIGHT,
+            cap_weight: RouteCosts::milli(self.costs.cap_weight),
+            unknown_sig_penalty: RouteCosts::milli(self.costs.unknown_sig_penalty),
+            unknown_sig_broken: self.costs.unknown_sig_broken,
             now: now + self.min_life * 60,
-            ..RouterOptions::default()
         };
         Router::new(uni, options)
     }
@@ -99,6 +144,9 @@ impl Settings {
         cfg.mode = Some(self.mode);
         cfg.optimize = self.optimize;
         cfg.top = Some(self.top);
+        cfg.cap_weight = Some(self.costs.cap_weight);
+        cfg.unknown_sig_penalty = Some(self.costs.unknown_sig_penalty);
+        cfg.unknown_sig_broken = self.costs.unknown_sig_broken;
         cfg.eve_scout = self.hubs;
         cfg.favourites = Some(self.favourites.iter().map(|&n| uni.name(n).to_string()).collect());
     }
@@ -220,6 +268,39 @@ mod tests {
         s.hull_source = HullSource::Manual;
         s.store(&uni, &mut cfg);
         assert_eq!(cfg.pilot, None);
+    }
+
+    #[test]
+    fn route_costs_round_trip_and_default() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        assert_eq!(s.costs, RouteCosts::default());
+        assert_eq!((s.costs.cap_weight, s.costs.unknown_sig_penalty), (0.6, 4.0));
+        s.costs = RouteCosts { cap_weight: 1.5, unknown_sig_penalty: 2.0, unknown_sig_broken: true };
+        let mut cfg = Config::default();
+        s.store(&uni, &mut cfg);
+        assert_eq!(Settings::from_config(&cfg, &uni).unwrap().costs, s.costs);
+        // A value that is negative, too large or not a number gives the default.
+        cfg.cap_weight = Some(-1.0);
+        cfg.unknown_sig_penalty = Some(f32::NAN);
+        let costs = Settings::from_config(&cfg, &uni).unwrap().costs;
+        assert_eq!((costs.cap_weight, costs.unknown_sig_penalty), (0.6, 4.0));
+        cfg.cap_weight = Some(RouteCosts::MAX + 1.0);
+        assert_eq!(Settings::from_config(&cfg, &uni).unwrap().costs.cap_weight, 0.6);
+    }
+
+    #[test]
+    fn route_costs_reach_the_router() {
+        let uni = overlay_universe();
+        // Jita to J134702 uses a Nexum wormhole with no signature.
+        let nodes = resolve_all(&uni, &["Jita".into(), "J134702".into()]).unwrap();
+        let mut s = settings(&uni, None);
+        let cost = |s: &Settings| s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).map(|r| r[0].path.cost);
+        assert_eq!(cost(&s), Ok(1000 + 4000));
+        s.costs.unknown_sig_penalty = 1.5;
+        assert_eq!(cost(&s), Ok(1000 + 1500));
+        s.costs.unknown_sig_broken = true;
+        assert!(cost(&s).is_err());
     }
 
     #[test]

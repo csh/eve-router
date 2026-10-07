@@ -78,6 +78,7 @@ mod tests {
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
             hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
+            costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
         };
         let mut app = App::new(
@@ -191,6 +192,7 @@ mod tests {
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
             hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
+            costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
         };
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
@@ -222,6 +224,7 @@ mod tests {
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
             hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
+            costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap()],
         };
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
@@ -253,6 +256,7 @@ mod tests {
             rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("black-ops"), max_cap: None },
             hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
+            costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap()],
         };
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
@@ -298,6 +302,7 @@ mod tests {
             rules: BridgeRules::default(),
             hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
+            costs: Default::default(),
             favourites: Vec::new(),
         };
         let cfg_path = std::env::temp_dir().join("eve-router-test-hubs").join("eve-router.json");
@@ -352,6 +357,7 @@ mod tests {
             rules: BridgeRules::default(),
             hull_source: router_core::settings::HullSource::Manual,
             min_life: 0,
+            costs: Default::default(),
             favourites: Vec::new(),
         };
         let input = "UALX-3 > Dodixie > UALX-3 > Jita > Turnur > Hek > Rens > Jita > C-J6MT > UALX-3";

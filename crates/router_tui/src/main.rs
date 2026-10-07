@@ -44,6 +44,15 @@ struct Cli {
     /// The minimum time (minutes) that a wormhole must have left. The default is 60.
     #[arg(long)]
     min_life: Option<u64>,
+    /// The cost, in jumps, of 1% of the Ansiblex capacitor. The default is 0.6.
+    #[arg(long)]
+    cap_weight: Option<f32>,
+    /// The extra cost, in jumps, of a wormhole with no known signature. The default is 4.
+    #[arg(long)]
+    unknown_sig_penalty: Option<f32>,
+    /// Drop a wormhole with no known signature, instead of the penalty.
+    #[arg(long)]
+    unknown_sig_broken: bool,
     /// A jump bridge list in SMT format. The default is ansiblex.txt in the config directory.
     #[arg(long)]
     bridges: Option<PathBuf>,
@@ -82,6 +91,9 @@ fn run() -> Result<(), String> {
     cfg.mode = cli.mode.or(cfg.mode);
     cfg.optimize = cli.optimize || cfg.optimize;
     cfg.top = cli.top.or(cfg.top);
+    cfg.cap_weight = cli.cap_weight.or(cfg.cap_weight);
+    cfg.unknown_sig_penalty = cli.unknown_sig_penalty.or(cfg.unknown_sig_penalty);
+    cfg.unknown_sig_broken = cli.unknown_sig_broken || cfg.unknown_sig_broken;
 
     // Start the wormhole fetches before the SDE update, so they run at the same time.
     let pending = startup::begin(&cfg, &cfg_path);
