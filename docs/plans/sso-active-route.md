@@ -61,7 +61,7 @@ SSO details:
 
 New dependencies: `oauth2` (PKCE, state, token requests), `keyring` (OS keyring), `base64` (JWT claims), `webbrowser` (browser), `tiny_http` (callback listener), `httpdate` (`Expires` header), `image` (JPEG decode for egui portraits).
 
-Each dependency must pass `cargo deny check` (see `deny.toml`): no open RustSec advisory, and a license that is compatible with AGPL-3.0 and with MIT OR Apache-2.0. For this reason the plan has no `jsonwebtoken` and no `openidconnect`. Both pull in `rsa` 0.9, which has RUSTSEC-2023-0071 with no fixed version. `oauth2` has no default features: it uses the ureq 3 agent of the router through a small `SyncHttpClient` adapter.
+Each dependency must pass `cargo deny check` (see `deny.toml`): no open RustSec advisory, and a license that is compatible with MIT OR Apache-2.0. For this reason the plan has no `jsonwebtoken` and no `openidconnect`. Both pull in `rsa` 0.9, which has RUSTSEC-2023-0071 with no fixed version. `oauth2` has no default features: it uses the ureq 3 agent of the router through a small `SyncHttpClient` adapter.
 
 ### Token storage
 

@@ -170,3 +170,9 @@ git tag v0.1.0 && git push origin v0.1.0
 `cargo test -p router_core keyring_round_trip -- --ignored` writes and deletes one test token in the OS keyring.
 
 `cargo test regenerate_repo_sde -- --ignored` makes `sde/ships.json` and `sde/wormholes.json` again. It needs the network.
+
+## License
+
+Licensed under either of [Apache License 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option.
+
+Unless you state otherwise, a contribution that you send for this project is under the same two licenses, with no extra terms.

@@ -1,5 +1,5 @@
 # `cargo deny check` examines the RustSec advisories, the licenses and the crate sources.
-# Every license here is compatible with AGPL-3.0 and with MIT OR Apache-2.0.
+# Every license here is compatible with MIT OR Apache-2.0, the license of this project.
 
 [advisories]
 # A crate that is unmaintained or yanked also fails the check.
@@ -28,7 +28,7 @@ confidence-threshold = 0.9
 crate = "epaint_default_fonts"
 allow = ["OFL-1.1", "Ubuntu-font-1.0"]
 
-# The workspace crates have no license yet. They are not on crates.io.
+# The workspace crates are not on crates.io.
 [licenses.private]
 ignore = true
 
