@@ -250,7 +250,8 @@ impl Session {
                 self.note = route_note(&old_uni, path, &self.uni, kept.is_some()).unwrap_or_default();
             }
         }
-        // The status line shows a fetch problem, as at startup, but only one time.
+        // The status line shows a fetch problem, as at startup. While the text shows, a refresh does
+        // not add it again. The status bar clears it after `STATUS_TIME`, so each refresh shows it again.
         if let Some(warning) = self.shortcuts.warning.clone()
             && !self.status.contains(&warning)
         {

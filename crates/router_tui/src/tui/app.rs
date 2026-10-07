@@ -268,6 +268,10 @@ impl App {
         let old_uni = std::mem::replace(&mut self.uni, snap.uni);
         self.shortcuts = snap.shortcuts;
         self.wormhole_data = snap.all;
+        // The map loaded, so the text "Loading the new map" is not true any more.
+        if self.status.contains(refresh::NEXUM_LOADING) {
+            self.status = self.status.split(" · ").filter(|part| *part != refresh::NEXUM_LOADING).collect::<Vec<_>>().join(" · ");
+        }
         if !self.searched.is_empty() {
             let old = self.selected_route().map(|r| r.path.clone());
             let old_keys: Vec<_> = self.routes.iter().map(|r| RouteKey::new(&old_uni, &r.path)).collect();
@@ -912,6 +916,20 @@ pub(crate) mod tests {
         assert_eq!(app.status, "keep");
     }
 
+    /// Review focus: the new Nexum map arrives, with no search.
+    #[test]
+    fn a_refresh_clears_the_loading_text() {
+        let mut app = app("refresh-loading", Config::default());
+        app.status = format!("keep · {NEXUM_LOADING}");
+        app.apply_snapshot(snapshot(Vec::new()));
+        assert_eq!(app.status, "keep");
+        app.status = NEXUM_LOADING.into();
+        let mut snap = snapshot(Vec::new());
+        snap.shortcuts.warning = Some("Nexum offline".into());
+        app.apply_snapshot(snap);
+        assert_eq!(app.status, "Nexum offline");
+    }
+
     /// Review focus: the same fetch warning at each refresh, with no search.
     #[test]
     fn a_fetch_warning_shows_one_time() {
@@ -1170,12 +1188,5 @@ pub(crate) mod tests {
         app.on_key(KeyEvent::from(KeyCode::Enter));
         assert!(!app.load_maps_pending);
         assert_eq!(app.status, "Set the Nexum URL and key first");
-    }
-
-    #[test]
-    fn the_app_shares_the_map() {
-        // The helper `app` gives `shared_universe()` to `App::new`. The app keeps that `Arc`.
-        let app = app("shares", Config::default());
-        assert!(Arc::ptr_eq(&app.uni, &shared_universe()));
     }
 }

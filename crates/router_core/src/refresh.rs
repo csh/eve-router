@@ -24,6 +24,7 @@ pub const NEXUM_LOADING: &str = "Nexum settings saved. Loading the new map…";
 
 /// A map with the wormholes of one load.
 pub struct Snapshot {
+    /// The base map with the merged wormholes of this load.
     pub uni: Arc<Universe>,
     /// The counts of the Shortcuts box, and the fetch warnings for the status line.
     pub shortcuts: Shortcuts,
