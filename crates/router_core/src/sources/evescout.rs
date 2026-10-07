@@ -98,7 +98,7 @@ pub fn convert(sigs: &[Signature], known: impl Fn(u32) -> bool, types: &Wormhole
             ..Wormhole::new(s.out_system_id, in_id, s.out_signature.clone(), s.in_signature.clone(), SourceId::EveScout)
         });
     }
-    (SourceData { source: SourceId::EveScout, fetched_at, origin: None, holes }, report)
+    (SourceData { source: SourceId::EveScout, fetched_at, origin: None, name: None, holes }, report)
 }
 
 /// The wormhole data of the EVE-Scout source, for the startup and the sidebar.
@@ -184,6 +184,7 @@ mod tests {
     fn converts_the_fixture() {
         let (data, report) = fixture(|_| true, FETCHED);
         assert_eq!(data.source, SourceId::EveScout);
+        assert_eq!(data.name, None);
         assert_eq!(data.holes.len(), 28);
         assert_eq!(report, EveScoutReport::default());
         assert_eq!(data.holes.iter().filter(|h| h.a == THERA || h.b == THERA).count(), 18);
@@ -251,7 +252,8 @@ mod tests {
         let path = temp("eve-router-test-scout-fresh");
         // Port 9 has no server, so a fetch would fail.
         let url = "http://127.0.0.1:9";
-        let cached = SourceData { source: SourceId::EveScout, fetched_at: FETCHED - 60, origin: Some(url.into()), holes: Vec::new() };
+        let cached =
+            SourceData { source: SourceId::EveScout, fetched_at: FETCHED - 60, origin: Some(url.into()), name: None, holes: Vec::new() };
         sources::write_cache(&path, &cached).unwrap();
         assert!(matches!(start(url, path, FETCHED), Pending::Cache(ref d) if *d == cached));
     }
@@ -260,7 +262,8 @@ mod tests {
     fn failed_fetch_uses_an_old_cache() {
         let (url, _) = serve("503 Service Unavailable", "{}", Duration::ZERO);
         let path = temp("eve-router-test-scout-stale");
-        let old = SourceData { source: SourceId::EveScout, fetched_at: FETCHED - 3600, origin: Some(url.clone()), holes: Vec::new() };
+        let old =
+            SourceData { source: SourceId::EveScout, fetched_at: FETCHED - 3600, origin: Some(url.clone()), name: None, holes: Vec::new() };
         sources::write_cache(&path, &old).unwrap();
         let load = finish(start(&url, path, FETCHED), |_| true, &types());
         assert_eq!(load.data, Some(old));

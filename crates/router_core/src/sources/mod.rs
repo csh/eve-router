@@ -202,7 +202,7 @@ mod tests {
     }
 
     fn sample(fetched_at: u64) -> SourceData {
-        SourceData { source: SourceId::Nexum, fetched_at, origin: None, holes: vec![hole(30000142, 31002230)] }
+        SourceData { source: SourceId::Nexum, fetched_at, origin: None, name: None, holes: vec![hole(30000142, 31002230)] }
     }
 
     #[test]
@@ -241,6 +241,20 @@ mod tests {
         let chosen = choose(SourceId::Nexum, Err(FetchError::Offline("timeout".into())), None, &path);
         assert_eq!(chosen.data, None);
         assert_eq!(chosen.warning.as_deref(), Some("Nexum offline"));
+        fs::remove_dir_all(&dir).unwrap();
+    }
+
+    #[test]
+    fn an_old_cache_with_no_name_loads() {
+        let dir = std::env::temp_dir().join("eve-router-test-cache-no-name");
+        let _ = fs::remove_dir_all(&dir);
+        fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("nexum.json");
+        // A cache file from before the name field.
+        let old = r#"{"source":"Nexum","fetched_at":1000,"origin":"https://nexum.example/api/v1/maps/m1","holes":[]}"#;
+        fs::write(&path, old).unwrap();
+        let data = read_cache(&path).unwrap();
+        assert_eq!((data.name, data.fetched_at), (None, 1000));
         fs::remove_dir_all(&dir).unwrap();
     }
 }

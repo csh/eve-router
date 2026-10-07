@@ -213,6 +213,9 @@ pub struct SourceData {
     /// An old cache file has no origin.
     #[serde(default)]
     pub origin: Option<String>,
+    /// A name for the data, for example the Nexum map name. An old cache file has no name.
+    #[serde(default)]
+    pub name: Option<String>,
     pub holes: Vec<Wormhole>,
 }
 
@@ -428,7 +431,7 @@ pub mod tests {
     }
 
     fn data(source: SourceId, holes: Vec<Wormhole>) -> SourceData {
-        SourceData { source, fetched_at: 0, origin: None, holes }
+        SourceData { source, fetched_at: 0, origin: None, name: None, holes }
     }
 
     #[test]

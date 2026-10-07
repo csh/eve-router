@@ -18,6 +18,9 @@ use std::time::Duration;
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct NexumMap {
+    /// The map name, for the settings. The route search does not use it.
+    #[serde(default)]
+    pub name: Option<String>,
     pub systems: Vec<NexumSystem>,
     pub connections: Vec<NexumConnection>,
 }
@@ -99,6 +102,20 @@ fn api_base(cfg: &NexumConfig) -> Option<String> {
 /// The URL of the configured map.
 pub fn map_url(cfg: &NexumConfig) -> Option<String> {
     Some(format!("{}/maps/{}", api_base(cfg)?, cfg.map_id.as_deref()?))
+}
+
+/// The text of the map row in the settings. The order: the name in the map list `maps`, then
+/// the name in the Nexum data of the current map, then the map ID. "none" if no map is set.
+pub fn map_label(cfg: &NexumConfig, maps: &[MapInfo], data: &[SourceData]) -> String {
+    let Some(id) = &cfg.map_id else { return "none".into() };
+    if let Some(map) = maps.iter().find(|m| &m.id == id) {
+        return map.name.clone();
+    }
+    let origin = map_url(cfg);
+    data.iter()
+        .find(|d| d.source == SourceId::Nexum && d.origin.is_some() && d.origin == origin)
+        .and_then(|d| d.name.clone())
+        .unwrap_or_else(|| id.clone())
 }
 
 /// GET the configured map, as text. The caller parses it after the SDE loads.
@@ -349,7 +366,7 @@ pub fn convert(
             ..Wormhole::new(a, b, source_sig, target_sig, SourceId::Nexum)
         });
     }
-    (SourceData { source: SourceId::Nexum, fetched_at, origin: None, holes }, report)
+    (SourceData { source: SourceId::Nexum, fetched_at, origin: None, name: map.name.clone(), holes }, report)
 }
 
 /// The wormhole data of the Nexum source, for the startup and the sidebar.
@@ -683,7 +700,8 @@ mod tests {
     #[test]
     fn fresh_cache_stops_the_fetch() {
         let path = temp("eve-router-test-fresh");
-        let cached = SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 60, origin: Some(MAP1.into()), holes: Vec::new() };
+        let cached =
+            SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 60, origin: Some(MAP1.into()), name: None, holes: Vec::new() };
         crate::sources::write_cache(&path, &cached).unwrap();
         // Port 9 has no server, so a fetch would fail.
         let pending = start(&cfg("http://127.0.0.1:9"), path.clone(), FETCHED);
@@ -714,6 +732,7 @@ mod tests {
             source: SourceId::Nexum,
             fetched_at: FETCHED - 3600,
             origin: Some(format!("{url}/api/v1/maps/m1")),
+            name: None,
             holes: Vec::new(),
         };
         crate::sources::write_cache(&path, &old).unwrap();
@@ -732,6 +751,7 @@ mod tests {
             source: SourceId::Nexum,
             fetched_at: FETCHED - 60,
             origin: Some(format!("{url}/api/v1/maps/m2")),
+            name: None,
             holes: Vec::new(),
         };
         crate::sources::write_cache(&path, &other).unwrap();
@@ -752,6 +772,7 @@ mod tests {
             source: SourceId::Nexum,
             fetched_at: FETCHED - 3600,
             origin: Some(format!("{url}/api/v1/maps/m2")),
+            name: None,
             holes: Vec::new(),
         };
         crate::sources::write_cache(&path, &other).unwrap();
@@ -817,5 +838,37 @@ mod tests {
         let load = finish(start(&cfg(&url), temp("eve-router-test-badjson"), FETCHED), |_| true, &types());
         assert_eq!(load.data, None);
         assert_eq!(load.warning.as_deref(), Some("Nexum offline"));
+    }
+
+    #[test]
+    fn convert_reads_the_map_name() {
+        let (data, _) = fixture();
+        assert_eq!(data.name.as_deref(), Some("Test Map"));
+        // A map with no name field gives no name.
+        let map = parse_map(r#"{"systems":[],"connections":[]}"#).unwrap();
+        let (data, _) = convert(&map, &SystemSigs::new(), |_| true, &types(), FETCHED);
+        assert_eq!(data.name, None);
+    }
+
+    #[test]
+    fn map_label_order() {
+        let mut cfg = cfg("http://127.0.0.1:9");
+        let named = |origin: &str| SourceData {
+            source: SourceId::Nexum,
+            fetched_at: 0,
+            origin: Some(origin.into()),
+            name: Some("Home".into()),
+            holes: Vec::new(),
+        };
+        let list = [MapInfo { id: "m1".into(), name: "Listed".into() }];
+        // 1. The name in the map list.
+        assert_eq!(map_label(&cfg, &list, &[named(MAP1)]), "Listed");
+        // 2. The name in the Nexum data of the current map.
+        assert_eq!(map_label(&cfg, &[], &[named(MAP1)]), "Home");
+        // 3. The map ID: the data is for another map, or it has no name.
+        assert_eq!(map_label(&cfg, &[], &[named("http://127.0.0.1:9/api/v1/maps/m2")]), "m1");
+        assert_eq!(map_label(&cfg, &[], &[SourceData { name: None, ..named(MAP1) }]), "m1");
+        cfg.map_id = None;
+        assert_eq!(map_label(&cfg, &list, &[named(MAP1)]), "none");
     }
 }
