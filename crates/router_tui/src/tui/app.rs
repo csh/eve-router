@@ -8,7 +8,7 @@ use router_core::config::{self, ApiKey, Config, RunOverrides};
 use router_core::esi::active::{ActiveRoute, active_path};
 use router_core::esi::pilots::{PilotRow, Pilots, StartPlan};
 use router_core::labels::Shortcuts;
-use router_core::refresh::{self, Refresher, Snapshot, kept_route, route_note};
+use router_core::refresh::{self, Refresher, RouteKey, Snapshot, kept_route, route_note};
 use router_core::route::{Mode, Route};
 use router_core::settings::{HullSource, Settings, parse_max_cap, resolve_all, split_systems};
 use router_core::sources::{
@@ -260,7 +260,7 @@ impl App {
     }
 
     /// Swap in a new map from the refresh worker. Search again with the systems of the last
-    /// search. Keep the selected route and step if the new list has the same path. Else select
+    /// search. Keep the selected route and step if `kept_route` finds the route. Else select
     /// the first route. With no search, only swap the map.
     pub fn apply_snapshot(&mut self, snap: Snapshot) {
         let old_uni = std::mem::replace(&mut self.uni, snap.uni);
@@ -268,17 +268,17 @@ impl App {
         self.wormhole_data = snap.all;
         if !self.searched.is_empty() {
             let old = self.selected_route().map(|r| r.path.clone());
-            let old_paths: Vec<_> = self.routes.iter().map(|r| r.path.nodes.clone()).collect();
+            let old_keys: Vec<_> = self.routes.iter().map(|r| RouteKey::new(&old_uni, &r.path)).collect();
             let old_detail = self.detail;
             self.reset_routes();
             self.search();
-            let kept = old.as_ref().and_then(|path| kept_route(&self.routes, path));
+            let kept = old.as_ref().and_then(|path| kept_route(&self.routes, &self.uni, &old_uni, path));
             if let Some(i) = kept {
                 self.selected.select(Some(i));
                 self.detail = old_detail;
             }
             // A route number of the old list can point to another route now.
-            let same = self.routes.iter().map(|r| &r.path.nodes).eq(old_paths.iter());
+            let same = self.routes.iter().map(|r| RouteKey::new(&self.uni, &r.path)).eq(old_keys);
             let forgot = !same && self.forget_route_choice();
             let note = old.and_then(|path| route_note(&old_uni, &path, &self.uni, kept.is_some()));
             for text in note.into_iter().chain(forgot.then(|| WORMHOLES_CHANGED.to_string())) {
@@ -834,6 +834,7 @@ pub(crate) mod tests {
 
     const JITA: u32 = 30000142;
     const AMARR: u32 = 30002187;
+    const PERIMETER: u32 = 30000144;
 
     /// A wormhole from Jita to Amarr, with the signature ABC at Jita. It gives a 1-jump route.
     fn jita_amarr() -> Wormhole {
@@ -945,6 +946,26 @@ pub(crate) mod tests {
         assert!(matches!(app.popup, Some(Popup::Pick { .. })));
         assert_eq!(app.start_after_login, Some(0));
         assert!(!app.status.contains(WORMHOLES_CHANGED), "{}", app.status);
+    }
+
+    /// Review focus: a stargate and a wormhole between the same two systems swap places.
+    #[test]
+    fn swapped_parallel_routes_forget_the_pick() {
+        let perimeter = || Wormhole { sig_a: Some("ABC-123".into()), ..hole(JITA, PERIMETER) };
+        let mut app = app("refresh-parallel", Config::default());
+        app.settings.top = 2;
+        app.uni = snapshot(vec![perimeter()]).uni;
+        app.input = "Jita > Perimeter".into();
+        app.recompute();
+        assert_eq!(app.routes.iter().map(|r| r.wormholes).collect::<Vec<_>>(), [0, 1], "{}", app.status);
+        // The old list has the wormhole route first. The new search puts the stargate route first.
+        app.routes.reverse();
+        app.popup = Some(Popup::Pick { route: 0, ids: vec![7], state: ListState::default() });
+        app.apply_snapshot(snapshot(vec![perimeter()]));
+        assert!(app.popup.is_none());
+        assert!(app.status.ends_with(WORMHOLES_CHANGED), "{}", app.status);
+        // The selection stays on the wormhole route.
+        assert_eq!(app.selected.selected(), Some(1));
     }
 
     #[test]

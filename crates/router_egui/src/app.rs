@@ -231,7 +231,7 @@ impl Session {
     }
 
     /// Swap in a new map from the refresh worker. Search again with the waypoints. Keep the
-    /// selected route and step if the new list has the same path. Else select the first route.
+    /// selected route and step if `kept_route` finds the route. Else select the first route.
     /// With no waypoints, only swap the map.
     pub fn apply_snapshot(&mut self, snap: Snapshot) {
         let old_uni = std::mem::replace(&mut self.uni, snap.uni);
@@ -241,7 +241,7 @@ impl Session {
             let old = self.selected_route().map(|r| r.path.clone());
             let old_step = self.selected_step;
             self.recompute();
-            let kept = old.as_ref().and_then(|path| kept_route(&self.routes, path));
+            let kept = old.as_ref().and_then(|path| kept_route(&self.routes, &self.uni, &old_uni, path));
             if let Some(i) = kept {
                 self.selected = i;
                 self.selected_step = old_step;
@@ -459,6 +459,7 @@ mod tests {
 
     const JITA: u32 = 30000142;
     const AMARR: u32 = 30002187;
+    const PERIMETER: u32 = 30000144;
 
     /// A wormhole from Jita to Amarr, with the signature ABC at Jita. It gives a 1-jump route.
     fn jita_amarr() -> Wormhole {
@@ -478,6 +479,35 @@ mod tests {
         assert_eq!(s.selected_route().unwrap().path.nodes, nodes);
         assert_eq!(s.selected_step, Some(3));
         assert_eq!(s.note, "");
+    }
+
+    #[test]
+    fn a_refresh_selects_the_new_index_of_the_kept_path() {
+        let mut s = session("refresh-moved");
+        s.uni = snapshot(Vec::new()).uni;
+        s.add_list("Jita, Amarr");
+        s.selected_step = Some(2);
+        let nodes = s.routes[0].path.nodes.clone();
+        // The new wormhole route is first, so the kept path moves down.
+        s.apply_snapshot(snapshot(vec![jita_amarr()]));
+        assert_eq!(s.routes[0].wormholes, 1, "{}", s.status);
+        assert_eq!(s.selected, 1);
+        assert_eq!(s.selected_route().unwrap().path.nodes, nodes);
+        assert_eq!(s.selected_step, Some(2));
+    }
+
+    /// Review focus: a stargate and a wormhole between the same two systems.
+    #[test]
+    fn a_refresh_keeps_the_selected_parallel_route() {
+        let perimeter = || Wormhole { sig_a: Some("ABC-123".into()), ..hole(JITA, PERIMETER) };
+        let mut s = session("refresh-parallel");
+        s.uni = snapshot(vec![perimeter()]).uni;
+        s.add_list("Jita, Perimeter");
+        assert_eq!((s.routes[0].wormholes, s.routes[1].wormholes), (0, 1), "{}", s.status);
+        s.selected = 1;
+        s.apply_snapshot(snapshot(vec![perimeter()]));
+        assert_eq!(s.selected, 1);
+        assert_eq!(s.selected_route().unwrap().wormholes, 1);
     }
 
     #[test]

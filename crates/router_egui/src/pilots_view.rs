@@ -15,8 +15,9 @@ use router_core::labels::{hull_label, ship_text, wormhole_hint};
 use router_core::refresh::kept_route;
 use router_core::route::{Path, Stop};
 use router_core::settings::HullSource;
-use router_core::universe::display_sec;
+use router_core::universe::{Universe, display_sec};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 /// At most this many avatars show in one cell. More give "+n other characters".
@@ -129,11 +130,25 @@ pub fn avatar_row(ui: &mut Ui, portraits: &mut Portraits, here: &[PilotView]) {
 /// The status text when a route start finds that its route is not in the list any more.
 pub const ROUTE_GONE: &str = "The routes changed, and that route is gone. Start the route again.";
 
+/// The route of a route start: its path, and the map of that path. A refresh can move the
+/// route in the list, so the app finds the route again with `kept_route`.
+pub struct ChosenRoute {
+    uni: Arc<Universe>,
+    path: Path,
+}
+
+impl ChosenRoute {
+    /// Route `route` of the route list.
+    fn new(s: &Session, route: usize) -> Option<ChosenRoute> {
+        s.routes.get(route).map(|r| ChosenRoute { uni: Arc::clone(&s.uni), path: r.path.clone() })
+    }
+}
+
 /// The step of a route start.
 pub enum Start {
-    /// Two or more characters: choose one. The route is its path, because a refresh can move it.
+    /// Two or more characters: choose one.
     Pick {
-        path: Path,
+        route: ChosenRoute,
         chosen: u64,
     },
     Confirm(Box<StartPlan>),
@@ -149,7 +164,7 @@ pub struct PilotsUi {
     paste: String,
     pub start: Option<Start>,
     /// The route to start after the current login.
-    start_after_login: Option<Path>,
+    start_after_login: Option<ChosenRoute>,
     stop: bool,
     reroute: Option<Box<ActiveRoute>>,
     show_offline: bool,
@@ -199,17 +214,17 @@ impl PilotsUi {
 
     /// Start the route that waited for the login. Drop it if the route is gone.
     fn continue_after_login(&mut self, s: &mut Session) {
-        let Some(path) = self.start_after_login.take() else { return };
+        let Some(chosen) = self.start_after_login.take() else { return };
         self.characters_open = false;
-        if let Some(route) = resolve(s, &path) {
+        if let Some(route) = resolve(s, &chosen) {
             self.begin_start(s, route);
         }
     }
 
     /// The index of the route of the open pick. Close the pick if the route is gone.
     fn pick_index(&mut self, s: &mut Session) -> Option<usize> {
-        let Some(Start::Pick { path, .. }) = &self.start else { return None };
-        let route = resolve(s, path);
+        let Some(Start::Pick { route, .. }) = &self.start else { return None };
+        let route = resolve(s, route);
         if route.is_none() {
             self.start = None;
         }
@@ -226,19 +241,19 @@ impl PilotsUi {
 
     /// "Start route #n": choose the character, then confirm.
     pub fn begin_start(&mut self, s: &mut Session, route: usize) {
-        let Some(path) = s.routes.get(route).map(|r| r.path.clone()) else { return };
+        let Some(picked) = ChosenRoute::new(s, route) else { return };
         let ids: Vec<u64> = s.pilots.senders().into_iter().map(|c| c.id).collect();
         match ids.len() {
             // A waypoint does nothing without the game client, so an offline pilot is not in the list.
             0 if s.pilots.characters().iter().any(|c| !c.live.expired) => s.status = Pilots::NO_SENDER.into(),
             0 => {
-                self.start_after_login = Some(path);
+                self.start_after_login = Some(picked);
                 self.login(s);
             }
             1 => self.confirm(s, route, ids[0]),
             _ => {
                 let chosen = s.pilots.last_used().filter(|id| ids.contains(id)).unwrap_or(ids[0]);
-                self.start = Some(Start::Pick { path, chosen });
+                self.start = Some(Start::Pick { route: picked, chosen });
             }
         }
     }
@@ -859,9 +874,9 @@ fn ship_row(ui: &mut Ui, pilot: &PilotView) {
     });
 }
 
-/// The index of the route with this path in the route list. Set `ROUTE_GONE` if there is none.
-fn resolve(s: &mut Session, path: &Path) -> Option<usize> {
-    let route = kept_route(&s.routes, path);
+/// The index of the chosen route in the route list. Set `ROUTE_GONE` if there is none.
+fn resolve(s: &mut Session, chosen: &ChosenRoute) -> Option<usize> {
+    let route = kept_route(&s.routes, &s.uni, &chosen.uni, &chosen.path);
     if route.is_none() {
         s.status = ROUTE_GONE.into();
     }
@@ -903,8 +918,12 @@ mod tests {
     use super::*;
     use router_core::config::Config;
     use router_core::labels::Shortcuts;
-    use router_core::test_support::{overlay_universe, settings};
+    use router_core::test_support::{hole, overlay_universe, settings, snapshot};
+    use router_core::wormhole::Wormhole;
     use std::sync::Arc;
+
+    const JITA: u32 = 30000142;
+    const PERIMETER: u32 = 30000144;
 
     #[test]
     fn overflow_wording() {
@@ -933,18 +952,34 @@ mod tests {
     fn a_moved_route_is_still_the_one_sent() {
         let mut s = session_with_routes();
         let path = s.routes[1].path.clone();
-        let mut ui = PilotsUi { start: Some(Start::Pick { path: path.clone(), chosen: 1 }), ..Default::default() };
+        let mut ui = PilotsUi { start: Some(Start::Pick { route: ChosenRoute::new(&s, 1).unwrap(), chosen: 1 }), ..Default::default() };
         s.routes.swap(0, 1);
         assert_eq!(ui.pick_index(&mut s), Some(0));
         assert_eq!(s.routes[0].path, path);
         assert!(ui.start.is_some());
     }
 
+    /// Review focus: a stargate and a wormhole between the same two systems.
+    #[test]
+    fn the_pick_of_a_parallel_route_stays_on_that_route() {
+        let hole_route = || Wormhole { sig_a: Some("ABC-123".into()), ..hole(JITA, PERIMETER) };
+        let mut s = session_with_routes();
+        s.uni = snapshot(vec![hole_route()]).uni;
+        s.replace_list("Jita, Perimeter");
+        assert_eq!(s.routes[0].path.nodes, s.routes[1].path.nodes);
+        assert_eq!((s.routes[0].wormholes, s.routes[1].wormholes), (0, 1));
+        let mut ui = PilotsUi { start: Some(Start::Pick { route: ChosenRoute::new(&s, 1).unwrap(), chosen: 1 }), ..Default::default() };
+        assert_eq!(ui.pick_index(&mut s), Some(1));
+        // A refresh with the same wormhole gives a new map. The pick stays on the wormhole route.
+        s.apply_snapshot(snapshot(vec![hole_route()]));
+        assert_eq!(ui.pick_index(&mut s), Some(1));
+        assert_eq!(s.routes[1].wormholes, 1);
+    }
+
     #[test]
     fn a_gone_route_closes_the_pick() {
         let mut s = session_with_routes();
-        let path = s.routes[1].path.clone();
-        let mut ui = PilotsUi { start: Some(Start::Pick { path, chosen: 1 }), ..Default::default() };
+        let mut ui = PilotsUi { start: Some(Start::Pick { route: ChosenRoute::new(&s, 1).unwrap(), chosen: 1 }), ..Default::default() };
         s.routes.truncate(1);
         assert_eq!(ui.pick_index(&mut s), None);
         assert!(ui.start.is_none());
@@ -954,7 +989,7 @@ mod tests {
     #[test]
     fn a_gone_route_drops_the_start_after_login() {
         let mut s = session_with_routes();
-        let mut ui = PilotsUi { start_after_login: Some(s.routes[1].path.clone()), ..Default::default() };
+        let mut ui = PilotsUi { start_after_login: ChosenRoute::new(&s, 1), ..Default::default() };
         s.routes.truncate(1);
         ui.continue_after_login(&mut s);
         assert!(ui.start_after_login.is_none() && ui.start.is_none());

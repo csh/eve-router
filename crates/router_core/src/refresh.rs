@@ -9,6 +9,7 @@ use crate::sources::{self, evescout, nexum};
 use crate::universe::{Link, Universe};
 use crate::wormhole::{self, SourceData, SourceId};
 use crate::wormhole_types::WormholeTypes;
+use petgraph::graph::NodeIndex;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, RecvTimeoutError, Sender, TryRecvError};
@@ -41,10 +42,49 @@ pub fn build(base: &Universe, report: &OverlayReport, wh: &nexum::Load, scout: &
     (Snapshot { uni: Arc::new(uni), shortcuts, all }, count)
 }
 
-/// The index of the route in `routes` with the same systems in the same order as `old`.
-/// A new `EdgeIndex` alone does not count as a change.
-pub fn kept_route(routes: &[Route], old: &Path) -> Option<usize> {
-    routes.iter().position(|r| r.path.nodes == old.nodes)
+/// The identity of a route that two maps share: each system, and each link between them.
+/// An `EdgeIndex` changes from map to map, so the key does not use it. A `NodeIndex` does not.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RouteKey {
+    nodes: Vec<NodeIndex>,
+    links: Vec<LinkKey>,
+}
+
+/// The kind of a link. A wormhole also has its signatures and its sources, so a stargate and
+/// a wormhole between the same two systems have different keys.
+#[derive(Clone, Debug, PartialEq, Eq)]
+enum LinkKey {
+    Stargate,
+    JumpBridge,
+    Wormhole { sig_a: Option<String>, sig_b: Option<String>, sources: Vec<SourceId> },
+}
+
+impl RouteKey {
+    /// The key of `path`, which is a path in `uni`.
+    pub fn new(uni: &Universe, path: &Path) -> RouteKey {
+        let links = path
+            .edges
+            .iter()
+            .map(|&edge| match &uni.graph[edge] {
+                Link::Stargate => LinkKey::Stargate,
+                Link::JumpBridge => LinkKey::JumpBridge,
+                Link::Wormhole(w) => LinkKey::Wormhole { sig_a: w.sig_a.clone(), sig_b: w.sig_b.clone(), sources: w.sources.clone() },
+            })
+            .collect();
+        RouteKey { nodes: path.nodes.clone(), links }
+    }
+}
+
+/// The index of the route in `routes`, a list for `uni`, that is the route `old` of `old_uni`.
+/// - In the same map, the route must have the same edges. Thus a parallel route never counts.
+/// - In another map, first find the same `RouteKey`. If no route has it, find the same systems
+///   in the same order.
+pub fn kept_route(routes: &[Route], uni: &Universe, old_uni: &Universe, old: &Path) -> Option<usize> {
+    if std::ptr::eq(uni, old_uni) {
+        return routes.iter().position(|r| r.path == *old);
+    }
+    let key = RouteKey::new(old_uni, old);
+    routes.iter().position(|r| RouteKey::new(uni, &r.path) == key).or_else(|| routes.iter().position(|r| r.path.nodes == old.nodes))
 }
 
 /// The status note after a refresh, for the route that was selected before it. `old` is the
@@ -223,11 +263,11 @@ impl Worker {
 mod tests {
     use super::*;
     use crate::config::ApiKey;
-    use crate::route::{Path, Route};
     use crate::sources::CACHE_FRESH_SECS;
     use crate::test_support::{FIXTURE_TIME, hole, serve, serve_live, serve_routes, shared_universe, universe};
     use crate::universe::Link;
     use crate::wormhole::{SourceId, THERA, Wormhole};
+    use petgraph::visit::EdgeRef;
     use std::collections::HashMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -236,6 +276,7 @@ mod tests {
     const JITA: u32 = 30000142;
     const AMARR: u32 = 30002187;
     const DODIXIE: u32 = 30002659;
+    const PERIMETER: u32 = 30000144;
 
     /// The path Jita » Amarr » Dodixie over two wormholes. The Jita end of the first has the signature ABC.
     fn two_hole_path() -> (Snapshot, Path) {
@@ -275,14 +316,42 @@ mod tests {
     }
 
     #[test]
-    fn kept_route_compares_the_systems_only() {
-        let (_, path) = two_hole_path();
-        // The same systems with other edges, as in a new map.
-        let other_edges = Path { edges: path.edges.iter().rev().copied().collect(), ..path.clone() };
-        let shorter = Path { nodes: path.nodes[..2].to_vec(), edges: path.edges[..1].to_vec(), cost: 0 };
-        let routes = [make_route(shorter), make_route(other_edges)];
-        assert_eq!(kept_route(&routes, &path), Some(1));
-        assert_eq!(kept_route(&routes[..1], &path), None);
+    fn kept_route_ignores_a_new_edge_index() {
+        let (old, path) = two_hole_path();
+        // The new map has one more wormhole first, so each edge of the path gets a new index.
+        let signed = Wormhole { sig_a: Some("ABC-123".into()), ..hole(JITA, AMARR) };
+        let new = crate::test_support::snapshot(vec![hole(THERA, JITA), signed, hole(AMARR, DODIXIE)]);
+        let edges: Vec<_> = path.nodes.windows(2).map(|w| new.uni.graph.find_edge(w[0], w[1]).unwrap()).collect();
+        assert_ne!(edges, path.edges);
+        let shorter = Path { nodes: path.nodes[..2].to_vec(), edges: edges[..1].to_vec(), cost: 0 };
+        let routes = [make_route(shorter), make_route(Path { edges, ..path.clone() })];
+        assert_eq!(kept_route(&routes, &new.uni, &old.uni, &path), Some(1));
+        assert_eq!(kept_route(&routes[..1], &new.uni, &old.uni, &path), None);
+    }
+
+    /// A map with a stargate and a signed wormhole from Jita to Perimeter. Return the map, the
+    /// stargate path and the wormhole path.
+    fn parallel(sig: &str) -> (Snapshot, Path, Path) {
+        let snap = crate::test_support::snapshot(vec![Wormhole { sig_a: Some(sig.into()), ..hole(JITA, PERIMETER) }]);
+        let (jita, perimeter) = (snap.uni.by_id[&JITA], snap.uni.by_id[&PERIMETER]);
+        let edge = |want: fn(&Link) -> bool| snap.uni.graph.edges_connecting(jita, perimeter).find(|e| want(e.weight())).unwrap().id();
+        let path = |edge| Path { nodes: vec![jita, perimeter], edges: vec![edge], cost: 0 };
+        let (gate, hole) = (path(edge(|l| matches!(l, Link::Stargate))), path(edge(|l| matches!(l, Link::Wormhole(_)))));
+        (snap, gate, hole)
+    }
+
+    #[test]
+    fn kept_route_tells_a_wormhole_from_a_parallel_stargate() {
+        let (old, _, old_hole) = parallel("ABC-123");
+        let (new, gate, hole) = parallel("ABC-123");
+        let routes = [make_route(gate), make_route(hole.clone())];
+        assert_eq!(kept_route(&routes, &new.uni, &old.uni, &old_hole), Some(1));
+        // In the same map, only the same edges count. The stargate route is not the wormhole route.
+        assert_eq!(kept_route(&routes, &new.uni, &new.uni, &hole), Some(1));
+        assert_eq!(kept_route(&routes[..1], &new.uni, &new.uni, &hole), None);
+        // No route has the same key, because the signature changed. The same systems count.
+        let (other, _, other_hole) = parallel("XYZ-789");
+        assert_eq!(kept_route(&routes, &new.uni, &other.uni, &other_hole), Some(0));
     }
 
     /// EVE-Scout data with one wormhole from Thera to Jita.
