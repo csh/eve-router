@@ -134,6 +134,8 @@ pub struct Router<'a> {
     node_cost: Vec<u64>,
     /// True if the current settings allow the edge, by `EdgeIndex`.
     edge_ok: Vec<bool>,
+    /// The cost that an edge adds to the cost of a jump into its target, by `EdgeIndex`.
+    edge_extra: Vec<u64>,
 }
 
 /// A Yen candidate path: the cost, the nodes and the edges, cheapest first.
@@ -142,12 +144,12 @@ type Candidate = Reverse<(u64, Vec<NodeIndex>, Vec<EdgeIndex>)>;
 struct Bans {
     /// Banned nodes, by `NodeIndex`.
     nodes: Vec<bool>,
-    pairs: HashSet<(NodeIndex, NodeIndex)>,
+    edges: HashSet<EdgeIndex>,
 }
 
 impl Bans {
     fn new(node_count: usize) -> Self {
-        Bans { nodes: vec![false; node_count], pairs: HashSet::new() }
+        Bans { nodes: vec![false; node_count], edges: HashSet::new() }
     }
 }
 
@@ -180,32 +182,43 @@ impl<'a> Router<'a> {
                 Link::JumpBridge => bridges && rules.allowed(uni, e.source()),
             })
             .collect();
-        Router { uni, rules, node_cost, edge_ok }
+        let edge_extra = vec![0; graph.edge_count()];
+        Router { uni, rules, node_cost, edge_ok, edge_extra }
     }
 
     fn link_allowed(&self, e: EdgeReference<'_, Link>) -> bool {
         self.edge_ok[e.id().index()]
     }
 
-    /// The cost of a jump into `node`.
-    fn enter_cost(&self, node: NodeIndex) -> u64 {
-        self.node_cost[node.index()]
+    /// The cost of a jump along an edge: the cost of the target plus the extra cost of the edge.
+    fn step_cost(&self, e: EdgeReference<'_, Link>) -> u64 {
+        self.node_cost[e.target().index()] + self.edge_extra[e.id().index()]
+    }
+
+    /// The cost of a jump along the edge `e`.
+    fn edge_cost(&self, e: EdgeIndex) -> u64 {
+        let (_, target) = self.uni.graph.edge_endpoints(e).expect("an edge of the graph");
+        self.node_cost[target.index()] + self.edge_extra[e.index()]
     }
 
     fn usable(&self, e: EdgeReference<'_, Link>, bans: &Bans) -> bool {
-        self.link_allowed(e) && !bans.nodes[e.target().index()] && !bans.pairs.contains(&(e.source(), e.target()))
+        self.link_allowed(e) && !bans.nodes[e.target().index()] && !bans.edges.contains(&e.id())
     }
 
-    /// The edge for one step of a path. A stargate comes first, because it needs no overlay.
+    /// The edge for one step of a path: the cheapest edge between the two systems. At equal cost,
+    /// a stargate comes first, because it needs no overlay.
     fn pick_edge(&self, a: NodeIndex, b: NodeIndex, bans: &Bans) -> EdgeIndex {
         self.uni
             .graph
             .edges_connecting(a, b)
             .filter(|e| self.usable(*e, bans))
-            .min_by_key(|e| match e.weight() {
-                Link::Stargate => 0,
-                Link::JumpBridge => 1,
-                Link::Wormhole(_) => 2,
+            .min_by_key(|e| {
+                let rank = match e.weight() {
+                    Link::Stargate => 0,
+                    Link::JumpBridge => 1,
+                    Link::Wormhole(_) => 2,
+                };
+                (self.step_cost(*e), rank)
             })
             .map(|e| e.id())
             .expect("astar returned a step with no usable edge")
@@ -213,7 +226,7 @@ impl<'a> Router<'a> {
 
     fn shortest(&self, from: NodeIndex, to: NodeIndex, bans: &Bans) -> Option<Path> {
         let graph = EdgeFiltered::from_fn(&self.uni.graph, |e: EdgeReference<'_, Link>| self.usable(e, bans));
-        let (cost, nodes) = astar(&graph, from, |n| n == to, |e| self.enter_cost(e.target()), |_| 0)?;
+        let (cost, nodes) = astar(&graph, from, |n| n == to, |e| self.step_cost(e), |_| 0)?;
         let edges = nodes.windows(2).map(|w| self.pick_edge(w[0], w[1], bans)).collect();
         Some(Path { nodes, edges, cost })
     }
@@ -225,7 +238,7 @@ impl<'a> Router<'a> {
             return Vec::new();
         };
         let mut found = vec![first];
-        let mut seen: HashSet<Vec<NodeIndex>> = HashSet::from([found[0].nodes.clone()]);
+        let mut seen: HashSet<Vec<EdgeIndex>> = HashSet::from([found[0].edges.clone()]);
         let mut candidates: BinaryHeap<Candidate> = BinaryHeap::new();
 
         while found.len() < k {
@@ -237,9 +250,10 @@ impl<'a> Router<'a> {
                     let spur = prev.nodes[i];
                     let root = &prev.nodes[..=i];
                     let mut bans = Bans::new(node_count);
+                    // A found path with the same root edges gives up the edge that follows the root.
                     for p in &found {
-                        if p.nodes.len() > i + 1 && p.nodes[..=i] == *root {
-                            bans.pairs.insert((p.nodes[i], p.nodes[i + 1]));
+                        if p.edges.len() > i && p.edges[..i] == prev.edges[..i] {
+                            bans.edges.insert(p.edges[i]);
                         }
                     }
                     for n in &root[..i] {
@@ -250,12 +264,12 @@ impl<'a> Router<'a> {
                     nodes.extend(&spur_path.nodes[1..]);
                     let mut edges = prev.edges[..i].to_vec();
                     edges.extend(spur_path.edges);
-                    let root_cost: u64 = root[1..].iter().map(|&n| self.enter_cost(n)).sum();
+                    let root_cost: u64 = prev.edges[..i].iter().map(|&e| self.edge_cost(e)).sum();
                     Some(Reverse((root_cost + spur_path.cost, nodes, edges)))
                 })
                 .collect();
             for candidate in spurs {
-                if seen.insert(candidate.0.1.clone()) {
+                if seen.insert(candidate.0.2.clone()) {
                     candidates.push(candidate);
                 }
             }
@@ -284,7 +298,7 @@ impl<'a> Router<'a> {
         let start = vec![0; legs.len()];
         let mut heap = BinaryHeap::from([Reverse((cost_of(&start), start.clone()))]);
         let mut queued = HashSet::from([start]);
-        let mut seen_nodes = HashSet::new();
+        let mut seen_edges = HashSet::new();
         let mut routes = Vec::new();
         while let Some(Reverse((cost, idx))) = heap.pop() {
             let mut path = Path { nodes: vec![waypoints[0]], edges: Vec::new(), cost };
@@ -294,7 +308,7 @@ impl<'a> Router<'a> {
                 path.edges.extend(&leg[i].edges);
                 stops.push(path.edges.len());
             }
-            if seen_nodes.insert(path.nodes.clone()) {
+            if seen_edges.insert(path.edges.clone()) {
                 let mut route = self.summarize(path);
                 route.stops = stops;
                 routes.push(route);
@@ -348,7 +362,7 @@ impl<'a> Router<'a> {
         let dist: Vec<Vec<u64>> = nodes[..=m]
             .par_iter()
             .map(|&src| {
-                let costs = dijkstra(&graph, src, None, |e| self.enter_cost(e.target()));
+                let costs = dijkstra(&graph, src, None, |e| self.step_cost(e));
                 nodes.iter().map(|n| costs.get(n).copied().unwrap_or(u64::MAX)).collect()
             })
             .collect();
@@ -435,12 +449,28 @@ impl<'a> Router<'a> {
         route
     }
 
-    /// The jump count from `origin` to each target, in the current mode. One search covers all targets.
+    /// The jump count from `origin` to each target, on the cheapest route in the current mode.
+    /// One search covers all targets.
     pub fn jumps_to(&self, origin: NodeIndex, targets: &[NodeIndex]) -> Vec<(NodeIndex, Option<u64>)> {
-        let graph = EdgeFiltered::from_fn(&self.uni.graph, |e: EdgeReference<'_, Link>| self.link_allowed(e));
-        let costs = dijkstra(&graph, origin, None, |e| self.enter_cost(e.target()));
-        // Each jump costs JUMP, and each unwanted jump adds PENALTY. Thus the remainder is the jump count.
-        targets.iter().map(|&t| (t, costs.get(&t).map(|c| c % PENALTY / JUMP))).collect()
+        let graph = &self.uni.graph;
+        // The best (cost, jumps) for each node. A tie in cost keeps the lower jump count.
+        let mut best: Vec<Option<(u64, u64)>> = vec![None; graph.node_count()];
+        best[origin.index()] = Some((0, 0));
+        let mut heap = BinaryHeap::from([Reverse((0u64, 0u64, origin))]);
+        while let Some(Reverse((cost, jumps, node))) = heap.pop() {
+            if best[node.index()] != Some((cost, jumps)) {
+                continue;
+            }
+            for e in graph.edges(node).filter(|e| self.link_allowed(*e)) {
+                let next = (cost + self.step_cost(e), jumps + 1);
+                let slot = &mut best[e.target().index()];
+                if slot.is_none_or(|b| next < b) {
+                    *slot = Some(next);
+                    heap.push(Reverse((next.0, next.1, e.target())));
+                }
+            }
+        }
+        targets.iter().map(|&t| (t, best[t.index()].map(|(_, jumps)| jumps))).collect()
     }
 }
 
@@ -663,5 +693,67 @@ mod tests {
         let hubs = router(Mode::Shortest).jumps_to(node("Jita"), &targets);
         assert_eq!(hubs[0], (node("Jita"), Some(0)));
         assert!(hubs.iter().all(|(_, j)| j.is_some()));
+    }
+
+    /// The SDE, plus a wormhole between Jita and Perimeter, which also share a stargate.
+    fn parallel_universe() -> &'static Universe {
+        static UNI: OnceLock<Universe> = OnceLock::new();
+        UNI.get_or_init(|| {
+            let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
+            let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
+            let holes = [hole(id("Jita"), id("Perimeter"))];
+            assert_eq!(uni.add_wormholes(&holes), 1);
+            uni
+        })
+    }
+
+    /// The edge from Jita to Perimeter of each link kind: (stargate, wormhole).
+    fn parallel_edges(r: &Router) -> (EdgeIndex, EdgeIndex) {
+        let (jita, perimeter) = (r.uni.exact("Jita").unwrap(), r.uni.exact("Perimeter").unwrap());
+        let find = |want: fn(&Link) -> bool| r.uni.graph.edges_connecting(jita, perimeter).find(|e| want(e.weight())).unwrap().id();
+        (find(|l| matches!(l, Link::Stargate)), find(|l| matches!(l, Link::Wormhole(_))))
+    }
+
+    #[test]
+    fn a_dearer_edge_loses_to_a_parallel_edge() {
+        let uni = parallel_universe();
+        let mut r = Router::new(uni, RouterOptions::default());
+        let (gate, hole) = parallel_edges(&r);
+        let (jita, perimeter) = (uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap());
+
+        // At equal cost, the stargate comes first. The wormhole route follows it as its own route.
+        let paths = r.k_shortest(jita, perimeter, 2);
+        assert_eq!(paths.iter().map(|p| p.edges.clone()).collect::<Vec<_>>(), [vec![gate], vec![hole]]);
+
+        // A dear stargate makes the wormhole the first path, at the lower cost.
+        r.edge_extra[gate.index()] = JUMP / 2;
+        let paths = r.k_shortest(jita, perimeter, 2);
+        assert_eq!(paths.iter().map(|p| (p.edges.clone(), p.cost)).collect::<Vec<_>>(), [(vec![hole], JUMP), (vec![gate], JUMP + JUMP / 2)]);
+    }
+
+    #[test]
+    fn an_extra_cost_changes_the_order_of_routes() {
+        let uni = parallel_universe();
+        let mut r = Router::new(uni, RouterOptions::default());
+        let (_, hole) = parallel_edges(&r);
+        r.edge_extra[hole.index()] = JUMP / 2;
+        let routes = r.routes(&[uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap()], 2).unwrap();
+        assert_eq!(routes.iter().map(|r| (r.wormholes, r.path.cost)).collect::<Vec<_>>(), [(0, JUMP), (1, JUMP + JUMP / 2)]);
+    }
+
+    #[test]
+    fn jumps_to_counts_jumps_of_the_cheapest_route() {
+        let uni = parallel_universe();
+        let mut r = Router::new(uni, RouterOptions::default());
+        let (jita, perimeter) = (uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap());
+        let targets = [jita, perimeter];
+        // Both edges cost one jump, whatever the extra cost of a dear edge is.
+        for e in uni.graph.edge_indices() {
+            r.edge_extra[e.index()] = 0;
+        }
+        let (gate, hole) = parallel_edges(&r);
+        r.edge_extra[gate.index()] = 700;
+        r.edge_extra[hole.index()] = 300;
+        assert_eq!(r.jumps_to(jita, &targets), [(jita, Some(0)), (perimeter, Some(1))]);
     }
 }
