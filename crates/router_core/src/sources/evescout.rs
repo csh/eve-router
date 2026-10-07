@@ -53,7 +53,7 @@ impl EveScoutReport {
     }
 }
 
-fn parse_size(size: &str) -> Option<Size> {
+pub(crate) fn parse_size(size: &str) -> Option<Size> {
     match size {
         "small" => Some(Size::Small),
         "medium" => Some(Size::Medium),

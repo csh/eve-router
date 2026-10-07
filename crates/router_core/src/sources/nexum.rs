@@ -629,6 +629,18 @@ mod tests {
         assert_eq!(manual, Some(Expiry { at: FETCHED + 20 * HOUR, exact: true }));
     }
 
+    /// Both sources name the same classes. Nexum has no "capital" name, so a Nexum "xl" hole is the
+    /// class of an EVE-Scout "xlarge" hole, and the Capital class stays apart.
+    #[test]
+    fn sizes_match_eve_scout() {
+        use crate::sources::evescout;
+        for (nexum, scout) in [("small", "small"), ("medium", "medium"), ("large", "large"), ("xl", "xlarge")] {
+            assert_eq!(parse_size(nexum), evescout::parse_size(scout), "{nexum}");
+        }
+        assert_eq!(evescout::parse_size("capital"), Some(Size::Capital));
+        assert_ne!(parse_size("xl"), evescout::parse_size("capital"));
+    }
+
     #[test]
     fn value_mapping() {
         assert_eq!(parse_size("xl"), Some(Size::XLarge));
