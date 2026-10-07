@@ -1,6 +1,17 @@
 # EVE Router
 
-A terminal route planner for EVE Online. 
+A route planner for EVE Online. 
+
+> [!NOTE]
+> I'm really bad at updating READMEs as I go so this will probably be light on details until I consider the application feature-complete or close enough.
+
+## AI Usage Disclaimer
+
+This project is an AI assisted/driven adaptation of a [library I previously wrote](https://github.com/csh/eve-arbitrage-dashboard) for arbitrage trading using the Cloudflare Workers platform, utilising Dijkstra and Held-Karp to solve the [traveling salesman problem](https://en.wikipedia.org/wiki/Travelling_salesman_problem) with the goal of producing the shortest route possible for asset pickup and drop off. 
+
+This port currently lacks several features it had, such as overlaying zKillboard data to check for gatecamps to affect system ranking and provide re-routes in realtime.
+
+With this in mind, some of the code will inevitably be dogshit, however I am careful to pause and review steps as I go. 
 
 ## Features
 
