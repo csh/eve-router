@@ -14,6 +14,11 @@ pub const FILE: &str = "wormholes.json";
 pub const K162: &str = "K162";
 /// The longest life of any wormhole. Nexum uses it for a K162, so the router does the same.
 const K162_LIFE_HOURS: f64 = 48.0;
+/// The Drifter wormhole systems: Sentinel MZ, Liberated Barbican, Sanctified Vidette,
+/// Conflux Eyrie and Azdaja Redoubt. No wormhole that touches one lives more than 16 h.
+pub const DRIFTER_SYSTEMS: [u32; 5] = [31000001, 31000002, 31000003, 31000004, 31000006];
+/// The life of a K162 with a Drifter system at one end.
+const K162_DRIFTER_LIFE_HOURS: f64 = 16.0;
 
 /// `wormholeTargetSystemClass`.
 const ATTR_TARGET_CLASS: u32 = 1381;
@@ -48,10 +53,12 @@ impl WormholeTypes {
         self.types.iter().find(|t| t.code.eq_ignore_ascii_case(code))
     }
 
-    /// The maximum life in hours. K162 gives 48 h. An unknown code gives `None`.
-    pub fn life_hours(&self, code: &str) -> Option<f64> {
+    /// The maximum life in hours of a wormhole between the systems `ends`. A K162 gives 16 h
+    /// with a Drifter system at one end, else 48 h. An unknown code gives `None`.
+    pub fn life_hours(&self, code: &str, ends: [u32; 2]) -> Option<f64> {
         if code.trim().eq_ignore_ascii_case(K162) {
-            return Some(K162_LIFE_HOURS);
+            let drifter = ends.iter().any(|id| DRIFTER_SYSTEMS.contains(id));
+            return Some(if drifter { K162_DRIFTER_LIFE_HOURS } else { K162_LIFE_HOURS });
         }
         self.get(code).map(|t| t.max_life_h)
     }
@@ -137,9 +144,15 @@ mod tests {
         assert_eq!(table.types, vec![b274]);
         assert_eq!(table.build, Some(1));
         assert_eq!(table.get("b274").unwrap().max_jump_kg, 375_000_000.0);
-        assert_eq!(table.life_hours("B274"), Some(24.0));
-        assert_eq!(table.life_hours("k162"), Some(48.0));
-        assert_eq!(table.life_hours("Z999"), None);
+        let ends = [30000142, 31002230];
+        assert_eq!(table.life_hours("B274", ends), Some(24.0));
+        assert_eq!(table.life_hours("k162", ends), Some(48.0));
+        assert_eq!(table.life_hours("Z999", ends), None);
+        // A K162 to a Drifter system (Liberated Barbican), at either end, lives at most 16 h.
+        assert_eq!(table.life_hours("K162", [30002481, 31000002]), Some(16.0));
+        assert_eq!(table.life_hours("K162", [31000006, 30002033]), Some(16.0));
+        // A typed hole keeps its SDE life.
+        assert_eq!(table.life_hours("B274", [30002481, 31000002]), Some(24.0));
         assert!(table.get(K162).is_none());
     }
 
@@ -149,6 +162,6 @@ mod tests {
         assert_eq!(table.types.len(), 99);
         assert_eq!(table.get("B274").unwrap().max_jump_kg, 375_000_000.0);
         // The SDE value, not the Nexum chart value (24 h).
-        assert_eq!(table.life_hours("C248"), Some(16.0));
+        assert_eq!(table.life_hours("C248", [30000142, 31002230]), Some(16.0));
     }
 }

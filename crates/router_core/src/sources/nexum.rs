@@ -228,9 +228,9 @@ fn earlier(a: Option<Expiry>, b: Option<Expiry>) -> Option<Expiry> {
 }
 
 /// The expiry, in the Nexum order: the manual time, then the EOL mark plus 4 h, then the
-/// creation time plus the type life. The time status is at most one hour old, so it can give
+/// creation time plus the type life. `ends` are the EVE system IDs, for the K162 life. The time status is at most one hour old, so it can give
 /// an earlier limit. The earlier value wins.
-fn expiry(c: &NexumConnection, types: &WormholeTypes, fetched_at: u64, report: &mut NexumReport) -> Option<Expiry> {
+fn expiry(c: &NexumConnection, ends: [u32; 2], types: &WormholeTypes, fetched_at: u64, report: &mut NexumReport) -> Option<Expiry> {
     let mut time = |value: &Option<String>| {
         let parsed = value.as_deref().map(parse_utc)?;
         if parsed.is_none() {
@@ -243,7 +243,7 @@ fn expiry(c: &NexumConnection, types: &WormholeTypes, fetched_at: u64, report: &
     } else if let Some(eol) = time(&c.eol_at) {
         Some(Expiry { at: eol.saturating_add(4 * HOUR), exact: false })
     } else {
-        match c.wh_type.as_deref().and_then(|t| types.life_hours(t)) {
+        match c.wh_type.as_deref().and_then(|t| types.life_hours(t, ends)) {
             Some(hours) => time(&c.created_at).map(|created| Expiry { at: created.saturating_add((hours * 3600.0) as u64), exact: false }),
             None => None,
         }
@@ -324,7 +324,7 @@ pub fn convert(
             report.missing_end += 1;
             continue;
         };
-        let expiry = expiry(c, types, fetched_at, &mut report);
+        let expiry = expiry(c, [a, b], types, fetched_at, &mut report);
         if expiry.is_some_and(|e| e.at <= fetched_at) {
             report.expired += 1;
             continue;
@@ -597,8 +597,36 @@ mod tests {
         }))
         .unwrap();
         let mut report = NexumReport::default();
-        let e = expiry(&c, &WormholeTypes::default(), 1_000, &mut report).unwrap();
+        let e = expiry(&c, [1, 2], &WormholeTypes::default(), 1_000, &mut report).unwrap();
         assert_eq!(e.at, u64::MAX);
+    }
+
+    #[test]
+    fn k162_to_a_drifter_system_lives_16h() {
+        // createdAt is 3h 19m before the fetch, as with the KVW-404 hole to Liberated Barbican.
+        let created = FETCHED - 3 * HOUR - 19 * 60;
+        let created_text = chrono::DateTime::from_timestamp(created as i64, 0).unwrap().to_rfc3339();
+        let c: NexumConnection = serde_json::from_value(serde_json::json!({
+            "sourceId": "1",
+            "targetId": "2",
+            "connectionType": "standard",
+            "type": "K162",
+            "timeStatus": "fresh",
+            "createdAt": created_text,
+        }))
+        .unwrap();
+        let mut report = NexumReport::default();
+        let drifter = expiry(&c, [30002481, 31000002], &WormholeTypes::default(), FETCHED, &mut report);
+        assert_eq!(drifter, Some(Expiry { at: created + 16 * HOUR, exact: false }));
+        assert_eq!(crate::wormhole::expiry_text(drifter.unwrap(), FETCHED), "Less than 12h 41m remaining");
+        // A K162 with no Drifter end keeps the 48 h limit.
+        let other = expiry(&c, [30002481, 31002230], &WormholeTypes::default(), FETCHED, &mut report);
+        assert_eq!(other, Some(Expiry { at: created + 48 * HOUR, exact: false }));
+        // A manual time wins over the K162 life.
+        let mut manual = c.clone();
+        manual.lifetime_expires_at = Some(chrono::DateTime::from_timestamp((FETCHED + 20 * HOUR) as i64, 0).unwrap().to_rfc3339());
+        let manual = expiry(&manual, [30002481, 31000002], &WormholeTypes::default(), FETCHED, &mut report);
+        assert_eq!(manual, Some(Expiry { at: FETCHED + 20 * HOUR, exact: true }));
     }
 
     #[test]
