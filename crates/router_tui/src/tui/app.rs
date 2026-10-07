@@ -16,6 +16,7 @@ use router_core::sources::{
 };
 use router_core::universe::Universe;
 use std::path::PathBuf;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 #[derive(PartialEq, Eq)]
@@ -96,8 +97,8 @@ pub enum Popup {
     Reroute(Box<ActiveRoute>),
 }
 
-pub struct App<'a> {
-    pub uni: &'a Universe,
+pub struct App {
+    pub uni: Arc<Universe>,
     pub settings: Settings,
     cfg: Config,
     /// The file values that the CLI flags replace for this run. `write_config` puts them back.
@@ -135,8 +136,8 @@ pub struct App<'a> {
     pub last_progress: Option<usize>,
 }
 
-impl<'a> App<'a> {
-    pub fn new(uni: &'a Universe, settings: Settings, cfg: Config, cfg_path: PathBuf, input: String, shortcuts: Shortcuts) -> Self {
+impl App {
+    pub fn new(uni: Arc<Universe>, settings: Settings, cfg: Config, cfg_path: PathBuf, input: String, shortcuts: Shortcuts) -> Self {
         let mut app = App {
             uni,
             settings,
@@ -190,7 +191,7 @@ impl<'a> App<'a> {
             self.hub_origin = None;
             return;
         }
-        let nodes = match resolve_all(self.uni, &names) {
+        let nodes = match resolve_all(&self.uni, &names) {
             Ok(nodes) => nodes,
             Err(e) => {
                 self.status = e;
@@ -199,7 +200,7 @@ impl<'a> App<'a> {
         };
         let started = Instant::now();
         self.now = router_core::wormhole::now();
-        let router = self.settings.router(self.uni, self.now);
+        let router = self.settings.router(&self.uni, self.now);
         self.hub_origin = Some(self.uni.name(nodes[0]).to_string());
         // The sidebar search and the route search are independent, so they run at the same time.
         let (hubs, routes) = rayon::join(
@@ -603,7 +604,7 @@ impl<'a> App<'a> {
         let value = text.trim();
         match kind {
             PromptKind::Capital if value.is_empty() => self.settings.rules.capital = None,
-            PromptKind::Capital => match resolve_all(self.uni, &[value.to_string()]) {
+            PromptKind::Capital => match resolve_all(&self.uni, &[value.to_string()]) {
                 Ok(nodes) => self.settings.rules.capital = Some(nodes[0]),
                 Err(e) => {
                     self.status = e;
@@ -611,7 +612,7 @@ impl<'a> App<'a> {
                 }
             },
             PromptKind::Favourite if value.is_empty() => return None,
-            PromptKind::Favourite => match resolve_all(self.uni, &[value.to_string()]) {
+            PromptKind::Favourite => match resolve_all(&self.uni, &[value.to_string()]) {
                 Ok(nodes) if self.settings.favourites.contains(&nodes[0]) => {
                     self.status = format!("{} is already a favourite", self.uni.name(nodes[0]));
                     return Some(Popup::Prompt { kind, text });
@@ -728,7 +729,7 @@ impl<'a> App<'a> {
     /// Copy the settings to the config, and write the config file. A CLI flag value does not go
     /// into the file, unless the user changed that field.
     fn write_config(&mut self) -> Result<(), String> {
-        self.settings.store(self.uni, &mut self.cfg);
+        self.settings.store(&self.uni, &mut self.cfg);
         let mut file = self.cfg.clone();
         self.overrides.restore(&mut file);
         file.save(&self.cfg_path)
@@ -743,8 +744,15 @@ pub(crate) mod tests {
     use router_core::config::RunOverrides;
     use router_core::route::Mode;
     use router_core::test_support::{serve, universe};
+    use std::sync::OnceLock;
 
-    pub(crate) fn app(name: &str, cfg: Config) -> App<'static> {
+    // Stand-in until `router_core::test_support::shared_universe` (Task 3) is merged.
+    fn shared_universe() -> Arc<Universe> {
+        static UNI: OnceLock<Arc<Universe>> = OnceLock::new();
+        Arc::clone(UNI.get_or_init(|| Arc::new(universe().clone())))
+    }
+
+    pub(crate) fn app(name: &str, cfg: Config) -> App {
         let settings = Settings {
             mode: Mode::Shortest,
             optimize: false,
@@ -760,7 +768,7 @@ pub(crate) mod tests {
         };
         let path = std::env::temp_dir().join(format!("eve-router-test-{name}.json"));
         let shortcuts = Shortcuts::new(universe(), &Default::default(), &Default::default(), &Default::default());
-        App::new(universe(), settings, cfg, path, String::new(), shortcuts)
+        App::new(shared_universe(), settings, cfg, path, String::new(), shortcuts)
     }
 
     #[test]
@@ -879,5 +887,12 @@ pub(crate) mod tests {
         app.on_key(KeyEvent::from(KeyCode::Enter));
         assert!(!app.load_maps_pending);
         assert_eq!(app.status, "Set the Nexum URL and key first");
+    }
+
+    #[test]
+    fn the_app_shares_the_map() {
+        // The helper `app` gives `shared_universe()` to `App::new`. The app keeps that `Arc`.
+        let app = app("shares", Config::default());
+        assert!(Arc::ptr_eq(&app.uni, &shared_universe()));
     }
 }
