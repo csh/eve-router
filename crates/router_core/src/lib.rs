@@ -6,6 +6,7 @@ pub mod config;
 pub mod esi;
 pub mod labels;
 pub mod overlay;
+pub mod refresh;
 pub mod route;
 pub mod sde;
 pub mod sde_update;

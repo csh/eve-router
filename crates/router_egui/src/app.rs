@@ -81,9 +81,10 @@ fn load(ctx: egui::Context) -> Result<Session, String> {
     let sde_dir = config::default_sde_dir();
     let mut startup_lines = Vec::new();
     let loaded = startup::finish(pending, &sde_dir, None, |outcome| startup_lines.extend(outcome.message(&sde_dir)))?;
-    let shortcuts = Shortcuts::new(&loaded.uni, &loaded.report, &loaded.wh, &loaded.scout);
-    let settings = Settings::from_config(&cfg, &loaded.uni)?;
-    let mut session = Session::new(loaded.uni, settings, cfg, cfg_path.clone(), shortcuts);
+    // The session owns its map. A later change gives it the shared map of the refresh worker.
+    let uni = Arc::unwrap_or_clone(loaded.snapshot.uni);
+    let settings = Settings::from_config(&cfg, &uni)?;
+    let mut session = Session::new(uni, settings, cfg, cfg_path.clone(), loaded.snapshot.shortcuts);
     session.startup_lines = startup_lines;
     // A tracker event or a login result repaints the window.
     session.pilots = Pilots::open(&cfg_path, Arc::new(move || ctx.request_repaint()));

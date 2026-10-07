@@ -5,12 +5,15 @@
 
 use crate::config::{self, Config};
 use crate::overlay::{self, OverlayReport};
+use crate::refresh::{self, Snapshot};
 use crate::sde_update::{self, Outcome};
 use crate::sources::{self, evescout, nexum};
 use crate::universe::Universe;
-use crate::wormhole::{self, SourceData, SourceId};
+use crate::wormhole::{self, SourceId};
+use crate::wormhole_types::WormholeTypes;
 use crate::{ansiblex, sde, wormhole_types};
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 /// The fetches that `begin` started.
@@ -22,12 +25,15 @@ pub struct Pending {
 
 /// The loaded map, with the overlays.
 pub struct Loaded {
-    pub uni: Universe,
+    /// The map with the wormholes, its Shortcuts box, and the wormhole data of each source.
+    pub snapshot: Snapshot,
+    /// The map with the stargates and the jump bridges, before the wormholes. Each refresh copies it.
+    pub base: Arc<Universe>,
     pub report: OverlayReport,
+    /// The wormhole types of the SDE. Each refresh converts the source data with them.
+    pub types: WormholeTypes,
     pub wh: nexum::Load,
     pub scout: evescout::Load,
-    /// The wormhole data of each source.
-    pub all: Vec<SourceData>,
     /// The wormholes that the map got after the merge.
     pub wormhole_count: usize,
     /// The time from the SDE load to the end, without the SDE update.
@@ -62,8 +68,7 @@ pub fn finish(pending: Pending, sde_dir: &Path, bridges: Option<PathBuf>, on_sde
     let types = wormhole_types::load(sde_dir)?;
     let wh = nexum::finish(pending.nexum, |id| uni.by_id.contains_key(&id), &types);
     let scout = evescout::finish(pending.scout, |id| uni.by_id.contains_key(&id), &types);
-    let all: Vec<SourceData> = wh.data.iter().chain(&scout.data).cloned().collect();
-    let wormhole_count = uni.add_wormholes(&wormhole::merge(&all, wormhole::now()));
+    let (snapshot, wormhole_count) = refresh::build(&uni, &report, &wh, &scout, wormhole::now());
     let load_time = started.elapsed();
-    Ok(Loaded { uni, report, wh, scout, all, wormhole_count, load_time })
+    Ok(Loaded { snapshot, base: Arc::new(uni), report, types, wh, scout, wormhole_count, load_time })
 }

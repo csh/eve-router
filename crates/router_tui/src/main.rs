@@ -2,7 +2,7 @@ mod tui;
 
 use clap::Parser;
 use router_core::config::{self, Config, RunOverrides};
-use router_core::labels::{Shortcuts, route_text};
+use router_core::labels::route_text;
 use router_core::route::Mode;
 use router_core::settings::{Settings, resolve_all, split_systems};
 use router_core::universe::Universe;
@@ -98,35 +98,35 @@ fn run() -> Result<(), String> {
     // Start the wormhole fetches before the SDE update, so they run at the same time.
     let pending = startup::begin(&cfg, &cfg_path);
     let sde_dir = cli.sde.unwrap_or_else(config::default_sde_dir);
-    let startup::Loaded { uni, report, wh, scout, all, wormhole_count, load_time } =
+    let startup::Loaded { snapshot, report, wh, scout, wormhole_count, load_time, .. } =
         startup::finish(pending, &sde_dir, cli.bridges, |outcome| {
             if let Some(text) = outcome.message(&sde_dir) {
                 eprintln!("{text}");
             }
         })?;
+    let uni = &snapshot.uni;
 
-    let settings = Settings::from_config(&cfg, &uni)?;
+    let settings = Settings::from_config(&cfg, uni)?;
     // The flag values as a save writes them, so `restore` compares the same spellings.
     let mut run_cfg = cfg.clone();
-    settings.store(&uni, &mut run_cfg);
+    settings.store(uni, &mut run_cfg);
     let overrides = RunOverrides::new(file_cfg, run_cfg);
     let systems = split_systems(&cli.systems.join(","));
 
     if cli.print {
         eprintln!("Loaded {} systems in {} ms. Bridges: {}", uni.graph.node_count(), load_time.as_millis(), report.summary());
-        if !all.is_empty() {
+        if !snapshot.all.is_empty() {
             let now = wormhole::now();
             let from: Vec<String> =
-                all.iter().map(|d| format!("{} ({})", d.source.label(), wormhole::age_text(d.fetched_at, now))).collect();
+                snapshot.all.iter().map(|d| format!("{} ({})", d.source.label(), wormhole::age_text(d.fetched_at, now))).collect();
             eprintln!("Wormholes: {wormhole_count} from {}", from.join(", "));
         }
         for warning in wh.warning.iter().chain(&scout.warning) {
             eprintln!("{warning}");
         }
-        print_routes(&mut std::io::stdout().lock(), &uni, &settings, &systems, wormhole::now())
+        print_routes(&mut std::io::stdout().lock(), uni, &settings, &systems, wormhole::now())
     } else {
-        let shortcuts = Shortcuts::new(&uni, &report, &wh, &scout);
-        tui::run(&uni, settings, cfg, cfg_path, systems.join(" > "), shortcuts, overrides)
+        tui::run(uni, settings, cfg, cfg_path, systems.join(" > "), snapshot.shortcuts, overrides)
     }
 }
 

@@ -8,6 +8,7 @@ use std::collections::HashMap;
 /// Meters in one light year.
 pub const LIGHT_YEAR: f64 = 9_460_730_472_580_800.0;
 
+#[derive(Clone)]
 pub struct System {
     pub id: u32,
     pub name: String,
@@ -47,6 +48,7 @@ pub fn band(security: f64) -> Band {
     }
 }
 
+#[derive(Clone)]
 pub struct Universe {
     pub graph: DiGraph<System, Link>,
     pub by_id: HashMap<u32, NodeIndex>,
