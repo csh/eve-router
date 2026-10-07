@@ -1,4 +1,4 @@
-﻿//! Benchmarks of the hot paths of the core library. Run with:
+//! Benchmarks of the hot paths of the core library. Run with:
 //! `cargo bench -p router_core --features test-support`
 
 use criterion::{BatchSize, Criterion, criterion_group, criterion_main};
@@ -63,7 +63,22 @@ fn bench(c: &mut Criterion) {
 
     let mut g = c.benchmark_group("optimize");
     g.sample_size(10);
-    let names = ["Rens", "Hek", "Dodixie", "Perimeter", "Tash-Murkon Prime", "Oursulaert", "Turnur", "Pator", "Ashab", "Sivala", "Aunia", "Kisogo", "Otela", "Ommare"];
+    let names = [
+        "Rens",
+        "Hek",
+        "Dodixie",
+        "Perimeter",
+        "Tash-Murkon Prime",
+        "Oursulaert",
+        "Turnur",
+        "Pator",
+        "Ashab",
+        "Sivala",
+        "Aunia",
+        "Kisogo",
+        "Otela",
+        "Ommare",
+    ];
     for m in [6usize, 10, 14] {
         let mut w = vec![jita];
         w.extend(names.iter().cycle().take(m).map(|n| node(&uni, n)));
