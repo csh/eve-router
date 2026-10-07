@@ -9,24 +9,26 @@ use app::App;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use router_core::config::{Config, RunOverrides};
 use router_core::esi::pilots::Pilots;
-use router_core::labels::Shortcuts;
+use router_core::refresh::{Refresher, Snapshot};
 use router_core::settings::Settings;
-use router_core::universe::Universe;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 pub fn run(
-    uni: Arc<Universe>,
+    start: Snapshot,
+    refresher: Refresher,
     settings: Settings,
     cfg: Config,
     cfg_path: PathBuf,
     input: String,
-    shortcuts: Shortcuts,
     overrides: RunOverrides,
 ) -> Result<(), String> {
+    let Snapshot { uni, shortcuts, all } = start;
     let mut app = App::new(uni, settings, cfg, cfg_path.clone(), input, shortcuts);
     app.overrides = overrides;
+    app.wormhole_data = all;
+    app.refresher = Some(refresher);
     // The TUI reads the tracker each 250 ms, so it needs no wake.
     app.pilots = Pilots::open(&cfg_path, Arc::new(|| {}));
     app.on_open();
@@ -48,6 +50,7 @@ pub fn run(
                 app.on_key(key);
             }
             app.tick();
+            app.poll_refresh();
         }
         Ok(())
     })();
@@ -62,7 +65,9 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
     use router_core::ansiblex::{BridgeRules, find_hull};
+    use router_core::labels::Shortcuts;
     use router_core::route::Mode;
+    use router_core::universe::Universe;
 
     #[test]
     fn draws_and_handles_keys() {

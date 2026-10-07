@@ -8,7 +8,7 @@ use router_core::config::{self, ApiKey, Config, RunOverrides};
 use router_core::esi::active::{ActiveRoute, active_path};
 use router_core::esi::pilots::{PilotRow, Pilots, StartPlan};
 use router_core::labels::Shortcuts;
-use router_core::refresh::{Snapshot, kept_route, route_note};
+use router_core::refresh::{self, Refresher, Snapshot, kept_route, route_note};
 use router_core::route::{Mode, Route};
 use router_core::settings::{HullSource, Settings, parse_max_cap, resolve_all, split_systems};
 use router_core::sources::{
@@ -19,6 +19,7 @@ use router_core::universe::Universe;
 use router_core::wormhole::SourceData;
 use std::path::PathBuf;
 use std::sync::Arc;
+use std::sync::mpsc::TryRecvError;
 use std::time::{Duration, Instant};
 
 #[derive(PartialEq, Eq)]
@@ -129,8 +130,9 @@ pub struct App {
     pub status: String,
     pub shortcuts: Shortcuts,
     /// The wormhole data of each source, from the startup or the last refresh.
-    #[allow(dead_code)] // Read after the run loop gets the refresh worker.
     pub wormhole_data: Vec<SourceData>,
+    /// The refresh worker. `None` in the tests, and after the worker stops.
+    pub refresher: Option<Refresher>,
     pub quit: bool,
     /// True after Enter on the map row. The run loop draws, then calls `load_maps`.
     pub load_maps_pending: bool,
@@ -168,6 +170,7 @@ impl App {
             status: String::new(),
             shortcuts,
             wormhole_data: Vec::new(),
+            refresher: None,
             quit: false,
             load_maps_pending: false,
             map_names: Vec::new(),
@@ -259,13 +262,13 @@ impl App {
     /// Swap in a new map from the refresh worker. Search again with the systems of the last
     /// search. Keep the selected route and step if the new list has the same path. Else select
     /// the first route. With no search, only swap the map.
-    #[allow(dead_code)] // Called after the run loop gets the refresh worker.
     pub fn apply_snapshot(&mut self, snap: Snapshot) {
         let old_uni = std::mem::replace(&mut self.uni, snap.uni);
         self.shortcuts = snap.shortcuts;
         self.wormhole_data = snap.all;
         if !self.searched.is_empty() {
             let old = self.selected_route().map(|r| r.path.clone());
+            let old_paths: Vec<_> = self.routes.iter().map(|r| r.path.nodes.clone()).collect();
             let old_detail = self.detail;
             self.reset_routes();
             self.search();
@@ -275,7 +278,8 @@ impl App {
                 self.detail = old_detail;
             }
             // A route number of the old list can point to another route now.
-            let forgot = self.forget_route_choice();
+            let same = self.routes.iter().map(|r| &r.path.nodes).eq(old_paths.iter());
+            let forgot = !same && self.forget_route_choice();
             let note = old.and_then(|path| route_note(&old_uni, &path, &self.uni, kept.is_some()));
             for text in note.into_iter().chain(forgot.then(|| WORMHOLES_CHANGED.to_string())) {
                 self.append_status(&text);
@@ -286,6 +290,20 @@ impl App {
             && !self.status.contains(&warning)
         {
             self.append_status(&warning);
+        }
+    }
+
+    /// Take the newest map from the refresh worker, if it sent one. The run loop calls this
+    /// each 250 ms. A stopped worker gives a status note one time, and the map stays.
+    pub fn poll_refresh(&mut self) {
+        let Some(refresher) = &self.refresher else { return };
+        match refresher.try_recv() {
+            Ok(snap) => self.apply_snapshot(snap),
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.refresher = None;
+                self.append_status(refresh::STOPPED);
+            }
         }
     }
 
@@ -719,10 +737,17 @@ impl App {
         None
     }
 
-    /// Save the config after a change to a Nexum row. A Nexum change applies at the next start.
+    /// Save the config after a change to a Nexum row. The refresh worker loads the new map at once.
     fn nexum_saved(&mut self) {
         self.status = match self.write_config() {
-            Ok(()) => "Nexum settings saved. Restart to load the new map.".into(),
+            Ok(()) => match &self.refresher {
+                Some(refresher) => {
+                    refresher.nexum(self.cfg.nexum.clone());
+                    refresh::NEXUM_LOADING.into()
+                }
+                // No worker: a test, or a worker that stopped.
+                None => "Nexum settings saved. Restart to load the new map.".into(),
+            },
             Err(e) => e,
         };
     }
@@ -749,10 +774,7 @@ impl App {
         match row {
             SettingsRow::NexumUrl => n.url.clone().unwrap_or_else(|| "none".into()),
             SettingsRow::NexumKey => n.key.as_ref().map_or("none".into(), ApiKey::masked),
-            SettingsRow::NexumMap => match &n.map_id {
-                None => "none".into(),
-                Some(id) => self.map_names.iter().find(|m| &m.id == id).map_or(id.clone(), |m| m.name.clone()),
-            },
+            SettingsRow::NexumMap => nexum::map_label(n, &self.map_names, &self.wormhole_data),
             _ => String::new(),
         }
     }
@@ -803,10 +825,12 @@ pub(crate) mod tests {
     use super::*;
     use router_core::ansiblex::BridgeRules;
     use router_core::config::ApiKey;
+    use router_core::config::NexumConfig;
     use router_core::config::RunOverrides;
+    use router_core::refresh::{Control, NEXUM_LOADING, Refresher, STOPPED};
     use router_core::route::Mode;
     use router_core::test_support::{hole, serve, shared_universe, snapshot, universe};
-    use router_core::wormhole::Wormhole;
+    use router_core::wormhole::{SourceId, Wormhole};
 
     const JITA: u32 = 30000142;
     const AMARR: u32 = 30002187;
@@ -905,9 +929,87 @@ pub(crate) mod tests {
         app.input = "Jita > Amarr".into();
         app.recompute();
         app.popup = Some(Popup::Pick { route: 0, ids: vec![7], state: ListState::default() });
-        app.apply_snapshot(snapshot(Vec::new()));
+        app.apply_snapshot(snapshot(vec![jita_amarr()]));
         assert!(app.popup.is_none());
         assert!(app.status.ends_with(WORMHOLES_CHANGED), "{}", app.status);
+    }
+
+    #[test]
+    fn a_refresh_with_the_same_routes_keeps_the_pick() {
+        let mut app = app("refresh-pick-same", Config::default());
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        app.popup = Some(Popup::Pick { route: 0, ids: vec![7], state: ListState::default() });
+        app.start_after_login = Some(0);
+        app.apply_snapshot(snapshot(Vec::new()));
+        assert!(matches!(app.popup, Some(Popup::Pick { .. })));
+        assert_eq!(app.start_after_login, Some(0));
+        assert!(!app.status.contains(WORMHOLES_CHANGED), "{}", app.status);
+    }
+
+    #[test]
+    fn a_refresh_selects_the_new_index_of_the_kept_path() {
+        let mut app = app("refresh-moved", Config::default());
+        app.settings.top = 3;
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        app.selected.select(Some(0));
+        app.detail.select(Some(2));
+        let nodes = app.selected_route().unwrap().path.nodes.clone();
+        // The new wormhole route is first, so the kept path moves down.
+        app.apply_snapshot(snapshot(vec![jita_amarr()]));
+        assert_eq!(app.routes[0].wormholes, 1, "{}", app.status);
+        assert_eq!(app.selected.selected(), Some(1));
+        assert_eq!(app.selected_route().unwrap().path.nodes, nodes);
+        assert_eq!(app.detail.selected(), Some(2));
+    }
+
+    #[test]
+    fn the_poll_applies_a_snapshot_and_reports_a_stopped_worker() {
+        let (refresher, snapshots, _control) = Refresher::fake();
+        let mut app = app("poll-refresh", Config::default());
+        app.refresher = Some(refresher);
+        app.poll_refresh();
+        assert_eq!(app.shortcuts.wormholes, 0);
+        snapshots.send(snapshot(vec![jita_amarr()])).unwrap();
+        app.poll_refresh();
+        assert_eq!(app.shortcuts.wormholes, 1);
+        drop(snapshots);
+        app.status.clear();
+        app.poll_refresh();
+        assert_eq!(app.status, STOPPED);
+        assert!(app.refresher.is_none());
+        // The note shows one time.
+        app.status.clear();
+        app.poll_refresh();
+        assert_eq!(app.status, "");
+    }
+
+    #[test]
+    fn a_nexum_change_asks_the_worker_for_the_new_map() {
+        let (refresher, _snapshots, control) = Refresher::fake();
+        let mut app = app("nexum-refresh", Config::default());
+        app.refresher = Some(refresher);
+        open_row(&mut app, SettingsRow::NexumUrl);
+        app.on_key(KeyEvent::from(KeyCode::Enter));
+        type_text(&mut app, "https://nexum.example");
+        assert_eq!(app.status, NEXUM_LOADING);
+        let Ok(Control::Nexum(sent)) = control.try_recv() else { panic!("no Nexum message") };
+        assert_eq!(sent.url.as_deref(), Some("https://nexum.example"));
+    }
+
+    #[test]
+    fn map_row_uses_the_name_in_the_wormhole_data() {
+        let cfg = Config {
+            nexum: NexumConfig { url: Some("https://nexum.example".into()), key: None, map_id: Some("m1".into()) },
+            ..Default::default()
+        };
+        let mut app = app("map-name-data", cfg);
+        assert_eq!(app.nexum_value(SettingsRow::NexumMap), "m1");
+        let origin = nexum::map_url(&app.cfg.nexum);
+        app.wormhole_data =
+            vec![SourceData { source: SourceId::Nexum, fetched_at: 0, origin, name: Some("Home".into()), holes: Vec::new() }];
+        assert_eq!(app.nexum_value(SettingsRow::NexumMap), "Home");
     }
 
     pub(crate) fn app(name: &str, cfg: Config) -> App {

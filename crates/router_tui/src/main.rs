@@ -3,6 +3,7 @@ mod tui;
 use clap::Parser;
 use router_core::config::{self, Config, RunOverrides};
 use router_core::labels::route_text;
+use router_core::refresh::{Refresher, Setup};
 use router_core::route::Mode;
 use router_core::settings::{Settings, resolve_all, split_systems};
 use router_core::universe::Universe;
@@ -10,7 +11,6 @@ use router_core::{startup, wormhole};
 use std::io::Write;
 use std::path::PathBuf;
 use std::process::ExitCode;
-use std::sync::Arc;
 use std::time::Instant;
 
 /// mimalloc is faster than the system allocator for the many small maps of the route searches.
@@ -99,7 +99,7 @@ fn run() -> Result<(), String> {
     // Start the wormhole fetches before the SDE update, so they run at the same time.
     let pending = startup::begin(&cfg, &cfg_path);
     let sde_dir = cli.sde.unwrap_or_else(config::default_sde_dir);
-    let startup::Loaded { snapshot, report, wh, scout, wormhole_count, load_time, .. } =
+    let startup::Loaded { snapshot, base, report, types, wh, scout, wormhole_count, load_time } =
         startup::finish(pending, &sde_dir, cli.bridges, |outcome| {
             if let Some(text) = outcome.message(&sde_dir) {
                 eprintln!("{text}");
@@ -127,7 +127,12 @@ fn run() -> Result<(), String> {
         }
         print_routes(&mut std::io::stdout().lock(), uni, &settings, &systems, wormhole::now())
     } else {
-        tui::run(Arc::clone(uni), settings, cfg, cfg_path, systems.join(" > "), snapshot.shortcuts, overrides)
+        // The worker gets the wormholes again each 5 minutes. The TUI polls it, so `wake` does nothing.
+        let mut setup = Setup::new(base, report, types, cfg.nexum.clone(), &cfg_path);
+        // The worker starts with the startup wormholes.
+        setup.last = snapshot.all.clone();
+        let refresher = Refresher::start(setup, wormhole::now, || {});
+        tui::run(snapshot, refresher, settings, cfg, cfg_path, systems.join(" > "), overrides)
     }
 }
 
