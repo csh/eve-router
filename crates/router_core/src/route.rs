@@ -2,7 +2,7 @@
 
 use crate::ansiblex::BridgeRules;
 use crate::universe::{Band, Link, Universe, band};
-use crate::wormhole::Hubs;
+use crate::wormhole::{Hubs, Wormhole};
 use petgraph::algo::{astar, dijkstra};
 use petgraph::graph::{EdgeIndex, EdgeReference, NodeIndex};
 use petgraph::visit::{EdgeFiltered, EdgeRef};
@@ -21,6 +21,10 @@ pub const PENALTY: u64 = 1_000_000 * JUMP;
 
 /// The default cost of 1% of the gate capacitor, in milli-jumps. A bridge jump of 5% costs 3 jumps more.
 pub const DEFAULT_CAP_WEIGHT: u32 = 600;
+
+/// The default extra cost of a wormhole with no known signature at its departure system, in
+/// milli-jumps. The pilot must scan the hole down first.
+pub const DEFAULT_UNKNOWN_SIG_PENALTY: u32 = 4 * JUMP as u32;
 
 /// The most midpoints that "optimize order" takes. Held-Karp keeps m × 2^m states for m midpoints.
 pub const MAX_MIDPOINTS: usize = 20;
@@ -79,6 +83,8 @@ pub struct Route {
     /// The sum of the shares of the gate capacitor that the bridge jumps use, in percent.
     /// `None` when no hull is set.
     pub bridge_cap_pct: Option<f32>,
+    /// The number of wormhole jumps with no known signature at the departure system.
+    pub unknown_sigs: usize,
     /// The step index of each given system: the start, the midpoints, the destination.
     pub stops: Vec<usize>,
 }
@@ -114,6 +120,11 @@ impl Route {
     }
 }
 
+/// True if the wormhole has no known signature in the system `from`.
+fn sig_unknown(uni: &Universe, w: &Wormhole, from: NodeIndex) -> bool {
+    w.sig_at(uni.system(from).id).is_none()
+}
+
 /// What a `Router` needs to price the links of a universe.
 #[derive(Clone, Copy)]
 pub struct RouterOptions {
@@ -125,13 +136,21 @@ pub struct RouterOptions {
     pub rules: BridgeRules,
     /// The cost of 1% of the gate capacitor, in milli-jumps. It prices a bridge jump with a hull.
     pub cap_weight: u32,
+    /// The extra cost of a wormhole with no known signature at its departure system, in milli-jumps.
+    pub unknown_sig_penalty: u32,
+    /// Drop the wormholes with no known signature at their departure system, instead of a penalty.
+    pub unknown_sig_broken: bool,
     /// Unix seconds. It sets which wormholes are expired.
     pub now: u64,
 }
 
 impl Default for RouterOptions {
     fn default() -> Self {
-        RouterOptions { mode: Mode::Shortest, wormholes: true, hubs: Hubs::default(), bridges: true, rules: BridgeRules::default(), cap_weight: DEFAULT_CAP_WEIGHT, now: 0 }
+        RouterOptions { mode: Mode::Shortest, wormholes: true, hubs: Hubs::default(), bridges: true, rules: BridgeRules::default(), cap_weight: DEFAULT_CAP_WEIGHT,
+            unknown_sig_penalty: DEFAULT_UNKNOWN_SIG_PENALTY,
+            unknown_sig_broken: false,
+            now: 0,
+        }
     }
 }
 
@@ -165,7 +184,7 @@ impl<'a> Router<'a> {
     /// Calculate the node costs and the edge permissions one time, in parallel.
     /// Each search then reads them instead of calculating them again.
     pub fn new(uni: &'a Universe, options: RouterOptions) -> Self {
-        let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, now } = options;
+        let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, unknown_sig_penalty, unknown_sig_broken, now } = options;
         let graph = &uni.graph;
         let node_cost = graph
             .raw_nodes()
@@ -186,7 +205,12 @@ impl<'a> Router<'a> {
             .par_iter()
             .map(|e| match &e.weight {
                 Link::Stargate => true,
-                Link::Wormhole(w) => wormholes && hubs.allows(w) && w.usable(now, hull_kg),
+                Link::Wormhole(w) => {
+                    wormholes
+                        && hubs.allows(w)
+                        && w.usable(now, hull_kg)
+                        && !(unknown_sig_broken && sig_unknown(uni, w, e.source()))
+                }
                 Link::JumpBridge => bridges && rules.allowed(uni, e.source()),
             })
             .collect();
@@ -199,6 +223,7 @@ impl<'a> Router<'a> {
                     let pct = rules.cost(uni, e.source()).and_then(|c| c.cap_pct).unwrap_or(0.0);
                     (f64::from(pct) * f64::from(cap_weight)).round() as u64
                 }
+                Link::Wormhole(ref w) if wormholes && sig_unknown(uni, w, e.source()) => u64::from(unknown_sig_penalty),
                 _ => 0,
             })
             .collect();
@@ -450,12 +475,16 @@ impl<'a> Router<'a> {
     }
 
     fn summarize(&self, path: Path) -> Route {
-        let mut route = Route { jumps: path.edges.len(), wormholes: 0, bridges: 0, bridge_tj: None, bridge_cap_pct: None, stops: Vec::new(), path };
+        let mut route = Route { jumps: path.edges.len(), wormholes: 0, bridges: 0, bridge_tj: None, bridge_cap_pct: None, unknown_sigs: 0, stops: Vec::new(), path };
         let mut tj = Some(0.0);
         let mut cap_pct = Some(0.0);
         for &e in &route.path.edges {
             match &self.uni.graph[e] {
-                Link::Wormhole(_) => route.wormholes += 1,
+                Link::Wormhole(w) => {
+                    route.wormholes += 1;
+                    let (from, _) = self.uni.graph.edge_endpoints(e).unwrap();
+                    route.unknown_sigs += usize::from(sig_unknown(self.uni, w, from));
+                }
                 Link::JumpBridge => {
                     route.bridges += 1;
                     let (from, _) = self.uni.graph.edge_endpoints(e).unwrap();
@@ -739,7 +768,8 @@ mod tests {
     #[test]
     fn a_dearer_edge_loses_to_a_parallel_edge() {
         let uni = parallel_universe();
-        let mut r = Router::new(uni, RouterOptions::default());
+        // The test wormhole has no signature, so the penalty for it is off.
+        let mut r = Router::new(uni, RouterOptions { unknown_sig_penalty: 0, ..Default::default() });
         let (gate, hole) = parallel_edges(&r);
         let (jita, perimeter) = (uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap());
 
@@ -808,5 +838,35 @@ mod tests {
         assert_eq!(gates.bridges, 0);
         assert_eq!(gates.bridge_cap_pct, None);
         assert!(gates.jumps > 1);
+    }
+
+    /// The Jita-Amarr wormhole of the test universe has no signature. The gate route is 10 jumps or more.
+    fn jita_amarr(options: RouterOptions) -> Route {
+        let uni = holes_universe();
+        let r = Router::new(uni, options);
+        r.routes(&[uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()], 1).unwrap().remove(0)
+    }
+
+    #[test]
+    fn an_unknown_signature_costs_extra() {
+        let free = jita_amarr(RouterOptions { unknown_sig_penalty: 0, ..Default::default() });
+        assert_eq!((free.wormholes, free.unknown_sigs, free.path.cost), (1, 1, JUMP));
+        let priced = jita_amarr(RouterOptions::default());
+        assert_eq!((priced.wormholes, priced.unknown_sigs), (1, 1));
+        assert_eq!(priced.path.cost, JUMP + u64::from(DEFAULT_UNKNOWN_SIG_PENALTY));
+    }
+
+    #[test]
+    fn a_big_penalty_sends_the_route_over_the_gates() {
+        let route = jita_amarr(RouterOptions { unknown_sig_penalty: u32::MAX, ..Default::default() });
+        assert_eq!((route.wormholes, route.unknown_sigs), (0, 0));
+        assert!(route.jumps > 1);
+    }
+
+    #[test]
+    fn broken_drops_a_wormhole_with_no_signature() {
+        let route = jita_amarr(RouterOptions { unknown_sig_broken: true, ..Default::default() });
+        assert_eq!(route.wormholes, 0);
+        assert!(route.jumps > 1);
     }
 }

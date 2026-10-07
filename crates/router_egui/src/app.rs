@@ -411,8 +411,8 @@ mod tests {
         assert_eq!(names(&s), ["UALX-3", "Jita"]);
         let lines: Vec<String> = s.routes.iter().map(|r| format!("{}{}", jumps_label(r.jumps), route_extras(r))).collect();
         assert_eq!(lines.len(), 3, "{}", s.status);
-        assert_eq!(lines[0], "30 jumps");
-        assert_eq!(lines[1], "30 jumps (2 wormholes)");
+        // The 2-wormhole route of 30 jumps costs 8 jumps more now: its wormholes have no signature.
+        assert_eq!(lines, ["30 jumps", "30 jumps", "31 jumps"]);
     }
 
     #[test]

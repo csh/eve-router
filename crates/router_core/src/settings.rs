@@ -71,6 +71,7 @@ impl Settings {
             rules: self.rules,
             cap_weight: DEFAULT_CAP_WEIGHT,
             now: now + self.min_life * 60,
+            ..RouterOptions::default()
         };
         Router::new(uni, options)
     }
