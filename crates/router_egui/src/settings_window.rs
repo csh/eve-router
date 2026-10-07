@@ -210,7 +210,11 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                     .range(0.0..=RouteCosts::MAX)
                     .max_decimals(2)
                     .suffix(" jumps per 1% of a gate");
-                if ui.add(drag).on_hover_text("A bridge jump with a hull costs this much for each percent of the gate capacitor it uses").changed() {
+                if ui
+                    .add(drag)
+                    .on_hover_text("A bridge jump with a hull costs this much for each percent of the gate capacitor it uses")
+                    .changed()
+                {
                     s.recompute();
                     s.save();
                 }

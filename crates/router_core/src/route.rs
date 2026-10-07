@@ -146,7 +146,13 @@ pub struct RouterOptions {
 
 impl Default for RouterOptions {
     fn default() -> Self {
-        RouterOptions { mode: Mode::Shortest, wormholes: true, hubs: Hubs::default(), bridges: true, rules: BridgeRules::default(), cap_weight: DEFAULT_CAP_WEIGHT,
+        RouterOptions {
+            mode: Mode::Shortest,
+            wormholes: true,
+            hubs: Hubs::default(),
+            bridges: true,
+            rules: BridgeRules::default(),
+            cap_weight: DEFAULT_CAP_WEIGHT,
             unknown_sig_penalty: DEFAULT_UNKNOWN_SIG_PENALTY,
             unknown_sig_broken: false,
             now: 0,
@@ -157,8 +163,10 @@ impl Default for RouterOptions {
 pub struct Router<'a> {
     pub uni: &'a Universe,
     pub rules: BridgeRules,
-    /// The cost of a jump into each node, by `NodeIndex`.
+    /// The cost of a jump into each node, by `NodeIndex`. It includes `node_danger`.
     node_cost: Vec<u64>,
+    /// The danger cost of each node, in milli-jumps, by `NodeIndex`. It is zero until `set_danger`.
+    node_danger: Vec<u64>,
     /// True if the current settings allow the edge, by `EdgeIndex`.
     edge_ok: Vec<bool>,
     /// The cost that an edge adds to the cost of a jump into its target, by `EdgeIndex`.
@@ -206,10 +214,7 @@ impl<'a> Router<'a> {
             .map(|e| match &e.weight {
                 Link::Stargate => true,
                 Link::Wormhole(w) => {
-                    wormholes
-                        && hubs.allows(w)
-                        && w.usable(now, hull_kg)
-                        && !(unknown_sig_broken && sig_unknown(uni, w, e.source()))
+                    wormholes && hubs.allows(w) && w.usable(now, hull_kg) && !(unknown_sig_broken && sig_unknown(uni, w, e.source()))
                 }
                 Link::JumpBridge => bridges && rules.allowed(uni, e.source()),
             })
@@ -227,11 +232,23 @@ impl<'a> Router<'a> {
                 _ => 0,
             })
             .collect();
-        Router { uni, rules, node_cost, edge_ok, edge_extra }
+        let node_danger = vec![0; graph.node_count()];
+        Router { uni, rules, node_cost, node_danger, edge_ok, edge_extra }
     }
 
     fn link_allowed(&self, e: EdgeReference<'_, Link>) -> bool {
         self.edge_ok[e.id().index()]
+    }
+
+    /// Set the danger cost of each system, in milli-jumps, by `NodeIndex`. A jump into a system pays
+    /// its danger cost. A later call replaces the earlier danger costs. This is the place for data
+    /// such as the recent deaths in a system, or a gate camp.
+    pub fn set_danger(&mut self, danger: Vec<u64>) {
+        assert_eq!(danger.len(), self.node_cost.len(), "one danger cost for each system");
+        for ((cost, old), new) in self.node_cost.iter_mut().zip(&self.node_danger).zip(&danger) {
+            *cost = *cost - old + new;
+        }
+        self.node_danger = danger;
     }
 
     /// The cost of a jump along an edge: the cost of the target plus the extra cost of the edge.
@@ -475,7 +492,16 @@ impl<'a> Router<'a> {
     }
 
     fn summarize(&self, path: Path) -> Route {
-        let mut route = Route { jumps: path.edges.len(), wormholes: 0, bridges: 0, bridge_tj: None, bridge_cap_pct: None, unknown_sigs: 0, stops: Vec::new(), path };
+        let mut route = Route {
+            jumps: path.edges.len(),
+            wormholes: 0,
+            bridges: 0,
+            bridge_tj: None,
+            bridge_cap_pct: None,
+            unknown_sigs: 0,
+            stops: Vec::new(),
+            path,
+        };
         let mut tj = Some(0.0);
         let mut cap_pct = Some(0.0);
         for &e in &route.path.edges {
@@ -780,7 +806,10 @@ mod tests {
         // A dear stargate makes the wormhole the first path, at the lower cost.
         r.edge_extra[gate.index()] = JUMP / 2;
         let paths = r.k_shortest(jita, perimeter, 2);
-        assert_eq!(paths.iter().map(|p| (p.edges.clone(), p.cost)).collect::<Vec<_>>(), [(vec![hole], JUMP), (vec![gate], JUMP + JUMP / 2)]);
+        assert_eq!(
+            paths.iter().map(|p| (p.edges.clone(), p.cost)).collect::<Vec<_>>(),
+            [(vec![hole], JUMP), (vec![gate], JUMP + JUMP / 2)]
+        );
     }
 
     #[test]
@@ -868,5 +897,45 @@ mod tests {
         let route = jita_amarr(RouterOptions { unknown_sig_broken: true, ..Default::default() });
         assert_eq!(route.wormholes, 0);
         assert!(route.jumps > 1);
+    }
+
+    /// A wormhole route of 1 jump, with an unknown signature, ranks after a gate route of 2 jumps.
+    #[test]
+    fn a_longer_cheaper_route_ranks_first() {
+        let uni = parallel_universe();
+        let nodes = [uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap()];
+        let ranked = |options: RouterOptions| -> Vec<(usize, usize)> {
+            let routes = Router::new(uni, options).routes(&nodes, 6).unwrap();
+            routes.iter().map(|r| (r.jumps, r.wormholes)).collect()
+        };
+
+        // With no penalty, the wormhole route is as cheap as the gate route.
+        let free = ranked(RouterOptions { unknown_sig_penalty: 0, ..Default::default() });
+        assert_eq!(free[..2], [(1, 0), (1, 1)]);
+
+        // With the default penalty, a 2-jump gate route is first, and then the wormhole route follows.
+        let priced = ranked(RouterOptions::default());
+        let gate_two = priced.iter().position(|&r| r == (2, 0)).expect("a 2-jump gate route");
+        let hole = priced.iter().position(|&r| r == (1, 1)).unwrap_or(priced.len());
+        assert_eq!(priced[0], (1, 0));
+        assert!(gate_two < hole, "{priced:?}");
+    }
+
+    #[test]
+    fn a_danger_cost_steers_the_route() {
+        let uni = holes_universe();
+        let nodes = [uni.exact("Jita").unwrap(), uni.exact("Dodixie").unwrap()];
+        let mut r = Router::new(uni, RouterOptions { wormholes: false, ..Default::default() });
+        let best = r.routes(&nodes, 1).unwrap().remove(0);
+        let middle = best.path.nodes[best.jumps / 2];
+        let mut danger = vec![0; uni.graph.node_count()];
+        danger[middle.index()] = 10 * JUMP;
+        r.set_danger(danger);
+        let safer = r.routes(&nodes, 1).unwrap().remove(0);
+        assert!(!safer.path.nodes.contains(&middle));
+        assert!(safer.path.cost > best.path.cost);
+        // A later call replaces the earlier danger: zero danger gives the first route back.
+        r.set_danger(vec![0; uni.graph.node_count()]);
+        assert_eq!(r.routes(&nodes, 1).unwrap()[0].path, best.path);
     }
 }
