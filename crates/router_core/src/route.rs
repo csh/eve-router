@@ -19,6 +19,9 @@ pub const JUMP: u64 = 1000;
 /// so a route first has the fewest unwanted jumps, then the lowest cost.
 pub const PENALTY: u64 = 1_000_000 * JUMP;
 
+/// The default cost of 1% of the gate capacitor, in milli-jumps. A bridge jump of 5% costs 3 jumps more.
+pub const DEFAULT_CAP_WEIGHT: u32 = 600;
+
 /// The most midpoints that "optimize order" takes. Held-Karp keeps m × 2^m states for m midpoints.
 pub const MAX_MIDPOINTS: usize = 20;
 
@@ -73,6 +76,9 @@ pub struct Route {
     pub bridges: usize,
     /// The sum of the bridge jump costs. `None` when no hull is set.
     pub bridge_tj: Option<f32>,
+    /// The sum of the shares of the gate capacitor that the bridge jumps use, in percent.
+    /// `None` when no hull is set.
+    pub bridge_cap_pct: Option<f32>,
     /// The step index of each given system: the start, the midpoints, the destination.
     pub stops: Vec<usize>,
 }
@@ -117,13 +123,15 @@ pub struct RouterOptions {
     pub hubs: Hubs,
     pub bridges: bool,
     pub rules: BridgeRules,
+    /// The cost of 1% of the gate capacitor, in milli-jumps. It prices a bridge jump with a hull.
+    pub cap_weight: u32,
     /// Unix seconds. It sets which wormholes are expired.
     pub now: u64,
 }
 
 impl Default for RouterOptions {
     fn default() -> Self {
-        RouterOptions { mode: Mode::Shortest, wormholes: true, hubs: Hubs::default(), bridges: true, rules: BridgeRules::default(), now: 0 }
+        RouterOptions { mode: Mode::Shortest, wormholes: true, hubs: Hubs::default(), bridges: true, rules: BridgeRules::default(), cap_weight: DEFAULT_CAP_WEIGHT, now: 0 }
     }
 }
 
@@ -157,7 +165,7 @@ impl<'a> Router<'a> {
     /// Calculate the node costs and the edge permissions one time, in parallel.
     /// Each search then reads them instead of calculating them again.
     pub fn new(uni: &'a Universe, options: RouterOptions) -> Self {
-        let RouterOptions { mode, wormholes, hubs, bridges, rules, now } = options;
+        let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, now } = options;
         let graph = &uni.graph;
         let node_cost = graph
             .raw_nodes()
@@ -182,7 +190,18 @@ impl<'a> Router<'a> {
                 Link::JumpBridge => bridges && rules.allowed(uni, e.source()),
             })
             .collect();
-        let edge_extra = vec![0; graph.edge_count()];
+        // A bridge jump with a hull costs more as it uses more of the gate capacitor.
+        let edge_extra = graph
+            .raw_edges()
+            .par_iter()
+            .map(|e| match e.weight {
+                Link::JumpBridge if bridges => {
+                    let pct = rules.cost(uni, e.source()).and_then(|c| c.cap_pct).unwrap_or(0.0);
+                    (f64::from(pct) * f64::from(cap_weight)).round() as u64
+                }
+                _ => 0,
+            })
+            .collect();
         Router { uni, rules, node_cost, edge_ok, edge_extra }
     }
 
@@ -431,21 +450,24 @@ impl<'a> Router<'a> {
     }
 
     fn summarize(&self, path: Path) -> Route {
-        let mut route = Route { jumps: path.edges.len(), wormholes: 0, bridges: 0, bridge_tj: None, stops: Vec::new(), path };
+        let mut route = Route { jumps: path.edges.len(), wormholes: 0, bridges: 0, bridge_tj: None, bridge_cap_pct: None, stops: Vec::new(), path };
         let mut tj = Some(0.0);
+        let mut cap_pct = Some(0.0);
         for &e in &route.path.edges {
             match &self.uni.graph[e] {
                 Link::Wormhole(_) => route.wormholes += 1,
                 Link::JumpBridge => {
                     route.bridges += 1;
                     let (from, _) = self.uni.graph.edge_endpoints(e).unwrap();
-                    let cost = self.rules.cost(self.uni, from).and_then(|c| c.tj);
-                    tj = tj.zip(cost).map(|(a, b)| a + b);
+                    let cost = self.rules.cost(self.uni, from);
+                    tj = tj.zip(cost.and_then(|c| c.tj)).map(|(a, b)| a + b);
+                    cap_pct = cap_pct.zip(cost.and_then(|c| c.cap_pct)).map(|(a, b)| a + b);
                 }
                 Link::Stargate => {}
             }
         }
         route.bridge_tj = if route.bridges > 0 { tj } else { None };
+        route.bridge_cap_pct = if route.bridges > 0 { cap_pct } else { None };
         route
     }
 
@@ -755,5 +777,36 @@ mod tests {
         r.edge_extra[gate.index()] = 700;
         r.edge_extra[hole.index()] = 300;
         assert_eq!(r.jumps_to(jita, &targets), [(jita, Some(0)), (perimeter, Some(1))]);
+    }
+
+    #[test]
+    fn a_bridge_costs_by_the_share_of_the_gate_capacitor() {
+        let uni = crate::test_support::overlay_universe();
+        let rules = BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("Battleship"), max_cap: None };
+        let (from, to) = (uni.exact("QLU-P0").unwrap(), uni.exact("Q5KZ-W").unwrap());
+        // QLU-P0 is in zone 2, so a Battleship uses 33 TJ of 1250 TJ.
+        let pct = rules.cost(&uni, from).unwrap().cap_pct.unwrap();
+        assert!(pct > 0.0);
+        let route = |cap_weight| {
+            let r = Router::new(&uni, RouterOptions { rules, cap_weight, ..Default::default() });
+            r.routes(&[from, to], 1).unwrap().remove(0)
+        };
+
+        // A weight of 0 makes the bridge free of extra cost: one jump.
+        let free = route(0);
+        assert_eq!((free.bridges, free.path.cost), (1, JUMP));
+        assert!((free.bridge_cap_pct.unwrap() - pct).abs() < 1e-4);
+
+        // The default weight adds the share of the capacitor to the cost of the jump.
+        let priced = route(DEFAULT_CAP_WEIGHT);
+        let extra = (f64::from(pct) * f64::from(DEFAULT_CAP_WEIGHT)).round() as u64;
+        assert!(extra > 0);
+        assert!(priced.path.cost > free.path.cost && priced.path.cost <= JUMP + extra, "the bridge, or a cheaper gate route");
+
+        // A very high weight sends the route over the gates.
+        let gates = route(u32::MAX);
+        assert_eq!(gates.bridges, 0);
+        assert_eq!(gates.bridge_cap_pct, None);
+        assert!(gates.jumps > 1);
     }
 }

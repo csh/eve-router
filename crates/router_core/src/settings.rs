@@ -2,7 +2,7 @@
 
 use crate::ansiblex::{BridgeRules, find_hull, hull_by_type, same_hull, table};
 use crate::config::{self, Config};
-use crate::route::{Mode, Router, RouterOptions};
+use crate::route::{DEFAULT_CAP_WEIGHT, Mode, Router, RouterOptions};
 use crate::universe::Universe;
 use crate::wormhole;
 use petgraph::graph::NodeIndex;
@@ -69,6 +69,7 @@ impl Settings {
             hubs: self.hubs,
             bridges,
             rules: self.rules,
+            cap_weight: DEFAULT_CAP_WEIGHT,
             now: now + self.min_life * 60,
         };
         Router::new(uni, options)

@@ -160,6 +160,8 @@ pub struct BridgeCost {
     pub multiplier: f32,
     /// `None` when no hull is set.
     pub tj: Option<f32>,
+    /// The share of the gate capacitor that the jump uses, in percent. `None` when no hull is set.
+    pub cap_pct: Option<f32>,
 }
 
 #[derive(Clone, Copy, Default)]
@@ -175,7 +177,8 @@ impl BridgeRules {
         let capital = self.capital?;
         let (zone, multiplier) = zone(uni.distance_ly(capital, from));
         let tj = self.hull.and_then(|h| h.base_tj).map(|base| base * multiplier);
-        Some(BridgeCost { zone, multiplier, tj })
+        let cap_pct = tj.map(|tj| tj / table().gate_capacitor_tj * 100.0);
+        Some(BridgeCost { zone, multiplier, tj, cap_pct })
     }
 
     /// A bridge jump needs a capital and a hull that can use bridges.
@@ -229,6 +232,9 @@ mod tests {
         let r = rules(Some("black-ops"), None);
         let cost = r.cost(uni, uni.exact("QLU-P0").unwrap()).unwrap();
         assert_eq!(cost.tj, Some(36.0));
+        // The gate holds 1250 TJ, so 36 TJ is 2.88%.
+        assert!((cost.cap_pct.unwrap() - 2.88).abs() < 1e-4);
+        assert_eq!(rules(None, None).cost(uni, uni.exact("QLU-P0").unwrap()).unwrap().cap_pct, None);
     }
 
     #[test]
