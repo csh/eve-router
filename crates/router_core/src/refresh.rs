@@ -4,8 +4,9 @@
 use crate::config::NexumConfig;
 use crate::labels::Shortcuts;
 use crate::overlay::OverlayReport;
+use crate::route::{Path, Route};
 use crate::sources::{self, evescout, nexum};
-use crate::universe::Universe;
+use crate::universe::{Link, Universe};
 use crate::wormhole::{self, SourceData, SourceId};
 use crate::wormhole_types::WormholeTypes;
 use std::path::PathBuf;
@@ -38,6 +39,35 @@ pub fn build(base: &Universe, report: &OverlayReport, wh: &nexum::Load, scout: &
     let count = uni.add_wormholes(&wormhole::merge(&all, now));
     let shortcuts = Shortcuts::new(&uni, report, wh, scout);
     (Snapshot { uni: Arc::new(uni), shortcuts, all }, count)
+}
+
+/// The index of the route in `routes` with the same systems in the same order as `old`.
+/// A new `EdgeIndex` alone does not count as a change.
+pub fn kept_route(routes: &[Route], old: &Path) -> Option<usize> {
+    routes.iter().position(|r| r.path.nodes == old.nodes)
+}
+
+/// The status note after a refresh, for the route that was selected before it. `old` is the
+/// path of that route in `old_uni`. `kept` is true if the new route list has the same path.
+/// A `NodeIndex` is the same in both maps, so the note looks for each old wormhole in `new_uni`.
+pub fn route_note(old_uni: &Universe, old: &Path, new_uni: &Universe, kept: bool) -> Option<String> {
+    let mut closed = Vec::new();
+    for &edge in &old.edges {
+        let (Link::Wormhole(w), Some((from, to))) = (&old_uni.graph[edge], old_uni.graph.edge_endpoints(edge)) else {
+            continue;
+        };
+        if !new_uni.graph.edges_connecting(from, to).any(|e| matches!(e.weight(), Link::Wormhole(_))) {
+            // The signature in the system that the jump leaves, else the two system names.
+            let name = w.sig_at(old_uni.system(from).id).unwrap_or_else(|| format!("{} » {}", old_uni.name(from), old_uni.name(to)));
+            closed.push(name);
+        }
+    }
+    match closed.as_slice() {
+        [] if kept => None,
+        [] => Some("Wormholes updated: a new route is first".into()),
+        [one] => Some(format!("Wormhole {one} closed: the route changed")),
+        many => Some(format!("Wormholes {} closed: the route changed", many.join(", "))),
+    }
 }
 
 /// What the worker needs for each refresh.
@@ -193,10 +223,11 @@ impl Worker {
 mod tests {
     use super::*;
     use crate::config::ApiKey;
+    use crate::route::{Path, Route};
     use crate::sources::CACHE_FRESH_SECS;
     use crate::test_support::{FIXTURE_TIME, hole, serve, serve_live, serve_routes, shared_universe, universe};
     use crate::universe::Link;
-    use crate::wormhole::{SourceId, THERA};
+    use crate::wormhole::{SourceId, THERA, Wormhole};
     use std::collections::HashMap;
     use std::sync::Mutex;
     use std::sync::atomic::{AtomicU64, Ordering};
@@ -204,6 +235,55 @@ mod tests {
 
     const JITA: u32 = 30000142;
     const AMARR: u32 = 30002187;
+    const DODIXIE: u32 = 30002659;
+
+    /// The path Jita » Amarr » Dodixie over two wormholes. The Jita end of the first has the signature ABC.
+    fn two_hole_path() -> (Snapshot, Path) {
+        let signed = Wormhole { sig_a: Some("ABC-123".into()), ..hole(JITA, AMARR) };
+        let snap = crate::test_support::snapshot(vec![signed, hole(AMARR, DODIXIE)]);
+        let (jita, amarr, dodixie) = (snap.uni.by_id[&JITA], snap.uni.by_id[&AMARR], snap.uni.by_id[&DODIXIE]);
+        let edges = vec![snap.uni.graph.find_edge(jita, amarr).unwrap(), snap.uni.graph.find_edge(amarr, dodixie).unwrap()];
+        let path = Path { nodes: vec![jita, amarr, dodixie], edges, cost: 0 };
+        (snap, path)
+    }
+
+    fn make_route(path: Path) -> Route {
+        Route {
+            jumps: path.edges.len(),
+            path,
+            wormholes: 0,
+            bridges: 0,
+            bridge_tj: None,
+            bridge_cap_pct: None,
+            unknown_sigs: 0,
+            stops: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn route_note_names_each_closed_wormhole() {
+        let (old, path) = two_hole_path();
+        let none = crate::test_support::snapshot(Vec::new());
+        let note = route_note(&old.uni, &path, &none.uni, false);
+        assert_eq!(note.as_deref(), Some("Wormholes ABC, Amarr » Dodixie closed: the route changed"));
+        let one = crate::test_support::snapshot(vec![hole(JITA, AMARR)]);
+        let note = route_note(&old.uni, &path, &one.uni, false);
+        assert_eq!(note.as_deref(), Some("Wormhole Amarr » Dodixie closed: the route changed"));
+        // All wormholes are open: a note only when the path changed.
+        assert_eq!(route_note(&old.uni, &path, &old.uni, true), None);
+        assert_eq!(route_note(&old.uni, &path, &old.uni, false).as_deref(), Some("Wormholes updated: a new route is first"));
+    }
+
+    #[test]
+    fn kept_route_compares_the_systems_only() {
+        let (_, path) = two_hole_path();
+        // The same systems with other edges, as in a new map.
+        let other_edges = Path { edges: path.edges.iter().rev().copied().collect(), ..path.clone() };
+        let shorter = Path { nodes: path.nodes[..2].to_vec(), edges: path.edges[..1].to_vec(), cost: 0 };
+        let routes = [make_route(shorter), make_route(other_edges)];
+        assert_eq!(kept_route(&routes, &path), Some(1));
+        assert_eq!(kept_route(&routes[..1], &path), None);
+    }
 
     /// EVE-Scout data with one wormhole from Thera to Jita.
     fn scout_load() -> evescout::Load {

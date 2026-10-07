@@ -5,7 +5,7 @@ use crate::route::Mode;
 use crate::settings::{HullSource, Settings};
 use crate::sources::nexum;
 use crate::universe::Universe;
-use crate::wormhole::{self, SourceId, Wormhole};
+use crate::wormhole::{self, SourceData, SourceId, Wormhole};
 use crate::{overlay, sde, wormhole_types};
 use std::collections::HashMap;
 use std::fs;
@@ -78,6 +78,13 @@ pub fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
 /// A wormhole between two systems, with no known values.
 pub fn hole(a: u32, b: u32) -> Wormhole {
     Wormhole::new(a, b, None, None, SourceId::Nexum)
+}
+
+/// A refresh snapshot of the real SDE with `holes` as Nexum wormholes, at `FIXTURE_TIME`.
+pub fn snapshot(holes: Vec<Wormhole>) -> crate::refresh::Snapshot {
+    let data = SourceData { source: SourceId::Nexum, fetched_at: FIXTURE_TIME, origin: None, name: None, holes };
+    let wh = nexum::Load { data: Some(data), ..Default::default() };
+    crate::refresh::build(universe(), &Default::default(), &wh, &Default::default(), FIXTURE_TIME).0
 }
 
 /// Compare `text` with the snapshot file `tests/snapshots/<name>.txt` of the calling crate.

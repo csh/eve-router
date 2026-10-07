@@ -12,6 +12,10 @@ pub const LOCKED: &str = "Locked while route is active — press x to stop";
 /// The status text after a ship change closes a route choice.
 pub const ROUTES_CHANGED: &str = "The ship changed, so the routes changed. Start the route again.";
 
+/// The status text after a wormhole refresh closes a route choice.
+#[allow(dead_code)] // Used after the run loop gets the refresh worker.
+pub const WORMHOLES_CHANGED: &str = "The wormholes changed, so the routes changed. Start the route again.";
+
 /// True for a key that changes the route search. These keys do nothing while a route is active,
 /// so the app and the in-game waypoints stay the same.
 pub fn route_locked(code: KeyCode) -> bool {
@@ -76,7 +80,7 @@ impl App {
 
     /// Forget a choice that holds a route index: the Pick popup and the start after the login.
     /// After a recompute, the index can point to a different route. True if a choice went away.
-    fn forget_route_choice(&mut self) -> bool {
+    pub(super) fn forget_route_choice(&mut self) -> bool {
         let pick = matches!(self.popup, Some(Popup::Pick { .. }));
         if pick {
             self.popup = None;

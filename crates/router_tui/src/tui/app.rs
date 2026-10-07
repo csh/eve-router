@@ -1,6 +1,6 @@
 //! The TUI state and the key handling.
 
-use super::pilots::{LOCKED, route_setting};
+use super::pilots::{LOCKED, WORMHOLES_CHANGED, route_setting};
 use petgraph::graph::NodeIndex;
 use ratatui::crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::widgets::{ListState, TableState};
@@ -8,6 +8,7 @@ use router_core::config::{self, ApiKey, Config, RunOverrides};
 use router_core::esi::active::{ActiveRoute, active_path};
 use router_core::esi::pilots::{PilotRow, Pilots, StartPlan};
 use router_core::labels::Shortcuts;
+use router_core::refresh::{Snapshot, kept_route, route_note};
 use router_core::route::{Mode, Route};
 use router_core::settings::{HullSource, Settings, parse_max_cap, resolve_all, split_systems};
 use router_core::sources::{
@@ -15,6 +16,7 @@ use router_core::sources::{
     nexum::{self, MapInfo},
 };
 use router_core::universe::Universe;
+use router_core::wormhole::SourceData;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
@@ -108,6 +110,9 @@ pub struct App {
     pub focus: Focus,
     pub popup: Option<Popup>,
     pub routes: Vec<Route>,
+    /// The systems of the last search. A wormhole refresh searches again with them, not with
+    /// the text in the input box.
+    pub searched: Vec<NodeIndex>,
     pub selected: ListState,
     /// The selected step in the step table.
     pub detail: TableState,
@@ -123,6 +128,9 @@ pub struct App {
     pub hubs: Vec<(NodeIndex, Option<u64>)>,
     pub status: String,
     pub shortcuts: Shortcuts,
+    /// The wormhole data of each source, from the startup or the last refresh.
+    #[allow(dead_code)] // Read after the run loop gets the refresh worker.
+    pub wormhole_data: Vec<SourceData>,
     pub quit: bool,
     /// True after Enter on the map row. The run loop draws, then calls `load_maps`.
     pub load_maps_pending: bool,
@@ -148,6 +156,7 @@ impl App {
             input,
             popup: None,
             routes: Vec::new(),
+            searched: Vec::new(),
             selected: ListState::default(),
             detail: TableState::default(),
             detail_page: 10,
@@ -158,6 +167,7 @@ impl App {
             hubs: Vec::new(),
             status: String::new(),
             shortcuts,
+            wormhole_data: Vec::new(),
             quit: false,
             load_maps_pending: false,
             map_names: Vec::new(),
@@ -176,8 +186,30 @@ impl App {
         self.selected.selected().and_then(|i| self.routes.get(i))
     }
 
-    /// Find the routes and the hub distances again.
+    /// Find the routes and the hub distances again, for the systems in the input box.
     pub fn recompute(&mut self) {
+        self.reset_routes();
+        let names = split_systems(&self.input);
+        if names.is_empty() {
+            self.searched.clear();
+            self.hubs.clear();
+            self.hub_origin = None;
+            return;
+        }
+        match resolve_all(&self.uni, &names) {
+            Ok(nodes) => {
+                self.searched = nodes;
+                self.search();
+            }
+            Err(e) => {
+                self.searched.clear();
+                self.status = e;
+            }
+        }
+    }
+
+    /// Clear the routes, the selection and the status. The status gets the jump bridge problem, if any.
+    fn reset_routes(&mut self) {
         self.routes.clear();
         self.selected.select(None);
         self.detail = TableState::default();
@@ -185,21 +217,13 @@ impl App {
         if let Some(reason) = self.settings.rules.blocked_reason() {
             self.status = format!("Jump bridges off: {reason}");
         }
-        let names = split_systems(&self.input);
-        if names.is_empty() {
-            self.hubs.clear();
-            self.hub_origin = None;
-            return;
-        }
-        let nodes = match resolve_all(&self.uni, &names) {
-            Ok(nodes) => nodes,
-            Err(e) => {
-                self.status = e;
-                return;
-            }
-        };
+    }
+
+    /// Find the routes and the hub distances for `searched`, which has one system or more.
+    fn search(&mut self) {
         let started = Instant::now();
         self.now = router_core::wormhole::now();
+        let nodes = &self.searched;
         let router = self.settings.router(&self.uni, self.now);
         self.hub_origin = Some(self.uni.name(nodes[0]).to_string());
         // The sidebar search and the route search are independent, so they run at the same time.
@@ -207,7 +231,7 @@ impl App {
             || router.jumps_to(nodes[0], &self.settings.favourites),
             || {
                 (nodes.len() >= 2).then(|| {
-                    let (order, changed) = self.settings.order(&router, &nodes)?;
+                    let (order, changed) = self.settings.order(&router, nodes)?;
                     router.routes(&order, self.settings.top).map(|routes| (routes, changed))
                 })
             },
@@ -220,10 +244,48 @@ impl App {
                 self.routes = routes;
                 self.selected.select(Some(0));
                 if let Some(text) = changed {
-                    self.status = if self.status.is_empty() { text } else { format!("{} · {text}", self.status) };
+                    self.append_status(&text);
                 }
             }
             Some(Err(e)) => self.status = e,
+        }
+    }
+
+    /// Add a text to the status line, after a " · ".
+    fn append_status(&mut self, text: &str) {
+        self.status = if self.status.is_empty() { text.to_string() } else { format!("{} · {text}", self.status) };
+    }
+
+    /// Swap in a new map from the refresh worker. Search again with the systems of the last
+    /// search. Keep the selected route and step if the new list has the same path. Else select
+    /// the first route. With no search, only swap the map.
+    #[allow(dead_code)] // Called after the run loop gets the refresh worker.
+    pub fn apply_snapshot(&mut self, snap: Snapshot) {
+        let old_uni = std::mem::replace(&mut self.uni, snap.uni);
+        self.shortcuts = snap.shortcuts;
+        self.wormhole_data = snap.all;
+        if !self.searched.is_empty() {
+            let old = self.selected_route().map(|r| r.path.clone());
+            let old_detail = self.detail;
+            self.reset_routes();
+            self.search();
+            let kept = old.as_ref().and_then(|path| kept_route(&self.routes, path));
+            if let Some(i) = kept {
+                self.selected.select(Some(i));
+                self.detail = old_detail;
+            }
+            // A route number of the old list can point to another route now.
+            let forgot = self.forget_route_choice();
+            let note = old.and_then(|path| route_note(&old_uni, &path, &self.uni, kept.is_some()));
+            for text in note.into_iter().chain(forgot.then(|| WORMHOLES_CHANGED.to_string())) {
+                self.append_status(&text);
+            }
+        }
+        // The status line shows a fetch problem, as at startup, but only one time.
+        if let Some(warning) = self.shortcuts.warning.clone()
+            && !self.status.contains(&warning)
+        {
+            self.append_status(&warning);
         }
     }
 
@@ -743,13 +805,109 @@ pub(crate) mod tests {
     use router_core::config::ApiKey;
     use router_core::config::RunOverrides;
     use router_core::route::Mode;
-    use router_core::test_support::{serve, universe};
-    use std::sync::OnceLock;
+    use router_core::test_support::{hole, serve, shared_universe, snapshot, universe};
+    use router_core::wormhole::Wormhole;
 
-    // Stand-in until `router_core::test_support::shared_universe` (Task 3) is merged.
-    fn shared_universe() -> Arc<Universe> {
-        static UNI: OnceLock<Arc<Universe>> = OnceLock::new();
-        Arc::clone(UNI.get_or_init(|| Arc::new(universe().clone())))
+    const JITA: u32 = 30000142;
+    const AMARR: u32 = 30002187;
+
+    /// A wormhole from Jita to Amarr, with the signature ABC at Jita. It gives a 1-jump route.
+    fn jita_amarr() -> Wormhole {
+        Wormhole { sig_a: Some("ABC-123".into()), ..hole(JITA, AMARR) }
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_same_path_and_step() {
+        let mut app = app("refresh-keep", Config::default());
+        app.settings.top = 3;
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        assert!(app.routes.len() >= 2, "{}", app.status);
+        app.selected.select(Some(1));
+        app.detail.select(Some(3));
+        let nodes = app.selected_route().unwrap().path.nodes.clone();
+        app.apply_snapshot(snapshot(Vec::new()));
+        assert_eq!(app.selected_route().unwrap().path.nodes, nodes);
+        assert_eq!(app.detail.selected(), Some(3));
+        assert!(!app.status.contains("Wormhole"), "{}", app.status);
+    }
+
+    #[test]
+    fn a_closed_wormhole_gives_a_note() {
+        let mut app = app("refresh-closed", Config::default());
+        app.uni = snapshot(vec![jita_amarr()]).uni;
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        assert_eq!(app.routes[0].wormholes, 1, "{}", app.status);
+        app.detail.select(Some(1));
+        app.apply_snapshot(snapshot(Vec::new()));
+        assert_eq!(app.routes[0].wormholes, 0);
+        assert_eq!((app.selected.selected(), app.detail.selected()), (Some(0), None));
+        // The note does not replace the jump bridge text. The two join with " · ".
+        assert!(app.status.starts_with("Jump bridges off: "), "{}", app.status);
+        assert!(app.status.ends_with(" · Wormhole ABC closed: the route changed"), "{}", app.status);
+    }
+
+    #[test]
+    fn a_new_first_route_gives_a_note() {
+        let mut app = app("refresh-new", Config::default());
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        assert_eq!(app.routes[0].wormholes, 0);
+        app.apply_snapshot(snapshot(vec![jita_amarr()]));
+        assert_eq!(app.routes[0].wormholes, 1);
+        assert!(app.status.ends_with(" · Wormholes updated: a new route is first"), "{}", app.status);
+    }
+
+    #[test]
+    fn a_refresh_ignores_half_typed_input() {
+        let mut app = app("refresh-typing", Config::default());
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        // "Ama" matches more than one system. The refresh uses the systems of the last search.
+        app.input = "Jita > Ama".into();
+        app.apply_snapshot(snapshot(Vec::new()));
+        assert_eq!(app.input, "Jita > Ama");
+        assert_eq!(app.routes.len(), 1);
+        assert!(!app.status.contains("more than one system"), "{}", app.status);
+    }
+
+    #[test]
+    fn a_refresh_with_no_search_only_swaps_the_map() {
+        let mut app = app("refresh-none", Config::default());
+        app.status = "keep".into();
+        let snap = snapshot(vec![jita_amarr()]);
+        let uni = Arc::clone(&snap.uni);
+        app.apply_snapshot(snap);
+        assert!(Arc::ptr_eq(&app.uni, &uni));
+        assert_eq!((app.shortcuts.wormholes, app.wormhole_data.len()), (1, 1));
+        assert!(app.routes.is_empty());
+        assert_eq!(app.status, "keep");
+    }
+
+    /// Review focus: the same fetch warning at each refresh, with no search.
+    #[test]
+    fn a_fetch_warning_shows_one_time() {
+        let mut app = app("refresh-warning", Config::default());
+        app.status = "keep".into();
+        for _ in 0..2 {
+            let mut snap = snapshot(Vec::new());
+            snap.shortcuts.warning = Some("EVE-Scout offline".into());
+            app.apply_snapshot(snap);
+        }
+        assert_eq!(app.status, "keep · EVE-Scout offline");
+    }
+
+    /// Review focus: a refresh while the character picker of a route start is open.
+    #[test]
+    fn a_refresh_forgets_the_pick() {
+        let mut app = app("refresh-pick", Config::default());
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        app.popup = Some(Popup::Pick { route: 0, ids: vec![7], state: ListState::default() });
+        app.apply_snapshot(snapshot(Vec::new()));
+        assert!(app.popup.is_none());
+        assert!(app.status.ends_with(WORMHOLES_CHANGED), "{}", app.status);
     }
 
     pub(crate) fn app(name: &str, cfg: Config) -> App {
