@@ -46,13 +46,20 @@ pub struct Setup {
     pub base: Arc<Universe>,
     /// The jump bridge report of the startup, for the Shortcuts box.
     pub report: OverlayReport,
+    /// The wormhole types, for the size and the class of each wormhole.
     pub types: WormholeTypes,
+    /// The Nexum settings. A `Control::Nexum` message replaces them.
     pub nexum: NexumConfig,
+    /// The cache file of the Nexum data.
     pub nexum_cache: PathBuf,
+    /// The URL of the EVE-Scout feed.
     pub scout_url: String,
+    /// The cache file of the EVE-Scout data.
     pub scout_cache: PathBuf,
     /// The time between two refreshes.
     pub interval: Duration,
+    /// The source data of the startup. A failed first refresh with no cache uses it.
+    pub last: Vec<SourceData>,
 }
 
 impl Setup {
@@ -68,6 +75,7 @@ impl Setup {
             scout_url: evescout::URL.into(),
             scout_cache: sources::cache_path(SourceId::EveScout, cfg_path),
             interval: INTERVAL,
+            last: Vec::new(),
         }
     }
 }
@@ -90,7 +98,7 @@ impl Refresher {
     pub fn start(setup: Setup, clock: impl Fn() -> u64 + Send + 'static, wake: impl Fn() + Send + 'static) -> Refresher {
         let (control, control_rx) = mpsc::channel();
         let (snapshot_tx, snapshots) = mpsc::channel();
-        let worker = Worker { setup, last_nexum: None, last_scout: None };
+        let worker = Worker::new(setup);
         std::thread::spawn(move || worker.run(control_rx, snapshot_tx, clock, wake));
         Refresher { control, snapshots }
     }
@@ -133,6 +141,12 @@ struct Worker {
 }
 
 impl Worker {
+    /// A worker that keeps the startup data of `setup.last` as the data of the last refresh.
+    fn new(setup: Setup) -> Worker {
+        let last = |source| setup.last.iter().find(|d| d.source == source).cloned();
+        Worker { last_nexum: last(SourceId::Nexum), last_scout: last(SourceId::EveScout), setup }
+    }
+
     fn run(mut self, control: Receiver<Control>, snapshots: Sender<Snapshot>, clock: impl Fn() -> u64, wake: impl Fn()) {
         loop {
             let force = match control.recv_timeout(self.setup.interval) {
@@ -164,9 +178,10 @@ impl Worker {
         let mut wh = nexum::finish(pending, known, &s.types);
         let mut scout = evescout::finish(scout_pending, known, &s.types);
         // A failed fetch with no cache keeps the data of the last refresh. As for the cache,
-        // the data of another Nexum map does not count.
+        // the data of another Nexum map does not count. Incomplete settings are not a failed fetch.
         let origin = nexum::map_url(&s.nexum);
-        wh.data = wh.data.take().or_else(|| self.last_nexum.take().filter(|d| d.origin == origin));
+        let complete = s.nexum.complete().is_some();
+        wh.data = wh.data.take().or_else(|| self.last_nexum.take().filter(|d| complete && d.origin == origin));
         scout.data = scout.data.take().or_else(|| self.last_scout.take());
         self.last_nexum.clone_from(&wh.data);
         self.last_scout.clone_from(&scout.data);
@@ -234,6 +249,7 @@ mod tests {
             scout_url,
             scout_cache: dir.join("eve-scout.json"),
             interval,
+            last: Vec::new(),
         }
     }
 
@@ -344,11 +360,7 @@ mod tests {
     fn kept_data_of_another_nexum_map_is_not_used() {
         // The server has no routes, so each fetch gets a 500, and no cache file exists.
         let (url, _) = serve_routes(HashMap::new());
-        let mut worker = Worker {
-            setup: setup("eve-router-test-refresh-other-map", format!("{url}/scout"), INTERVAL),
-            last_nexum: None,
-            last_scout: None,
-        };
+        let mut worker = Worker::new(setup("eve-router-test-refresh-other-map", format!("{url}/scout"), INTERVAL));
         worker.setup.nexum = NexumConfig { url: Some(url.clone()), key: Some(ApiKey("nxm_test".into())), map_id: Some("m1".into()) };
         let kept = |map: &str| SourceData {
             source: SourceId::Nexum,
@@ -363,6 +375,23 @@ mod tests {
         // The kept data of the old map does not.
         worker.last_nexum = Some(kept("m2"));
         assert!(worker.tick(FIXTURE_TIME, false).all.is_empty());
+        // With no key, the settings are not complete. The kept data of the same map does not fill the gap.
+        worker.last_nexum = Some(kept("m1"));
+        worker.setup.nexum.key = None;
+        assert!(!worker.tick(FIXTURE_TIME, false).all.iter().any(|d| d.source == SourceId::Nexum));
+    }
+
+    /// Spec Errors 2: an offline source does not remove the wormholes of the startup.
+    #[test]
+    fn a_failed_first_refresh_keeps_the_startup_data() {
+        // The server has no routes, so the fetch gets a 500, and no cache file exists.
+        let (url, _) = serve_routes(HashMap::new());
+        let mut setup = setup("eve-router-test-refresh-startup", format!("{url}/scout"), Duration::from_millis(50));
+        setup.last = vec![scout_load().data.unwrap()];
+        let r = Refresher::start(setup, moving_clock(), || {});
+        let snap = r.recv_timeout(Duration::from_secs(10)).expect("no first refresh");
+        assert_eq!(snap.shortcuts.warning.as_deref(), Some("EVE-Scout offline"));
+        assert!(has_hole(&snap.uni, THERA, JITA));
     }
 
     /// Review focus: several snapshots wait while the app is busy.
@@ -382,13 +411,25 @@ mod tests {
     /// Review focus: the app quits while a fetch runs.
     #[test]
     fn a_drop_does_not_wait_for_a_fetch() {
-        // The server answers after 3 s, so the first refresh is in its fetch at the drop.
-        let (url, _) = serve("200 OK", "[]", Duration::from_secs(3));
-        let r = Refresher::start(setup("eve-router-test-refresh-slow", url, Duration::from_millis(10)), moving_clock(), || {});
-        std::thread::sleep(Duration::from_millis(200));
+        // The server answers 1 s after the request.
+        let (url, request) = serve("200 OK", "[]", Duration::from_secs(1));
+        let (alive, stopped) = mpsc::channel::<()>();
+        // The worker owns `wake`, so the channel closes when the thread ends.
+        let wake = move || {
+            let _ = alive.send(());
+        };
+        let r = Refresher::start(setup("eve-router-test-refresh-slow", url, Duration::from_millis(10)), moving_clock(), wake);
+        // The server has the request, so the first refresh is in its fetch.
+        request.recv_timeout(Duration::from_secs(10)).expect("no request");
         let started = Instant::now();
         drop(r);
         assert!(started.elapsed() < Duration::from_millis(100));
+        // After the slow response, the worker cannot send its snapshot, so it stops with no wake.
+        match stopped.recv_timeout(Duration::from_secs(6)) {
+            Err(RecvTimeoutError::Disconnected) => {}
+            Ok(()) => panic!("the worker sent a snapshot after the drop"),
+            Err(RecvTimeoutError::Timeout) => panic!("the worker did not stop"),
+        }
     }
 
     #[test]
