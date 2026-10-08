@@ -72,17 +72,17 @@ enum Tab {
     #[default]
     Plan,
     Route,
-    Pilots,
+    Extra,
 }
 
 impl Tab {
-    const ALL: [Tab; 3] = [Tab::Plan, Tab::Route, Tab::Pilots];
+    const ALL: [Tab; 3] = [Tab::Plan, Tab::Route, Tab::Extra];
 
     fn title(self) -> &'static str {
         match self {
             Tab::Plan => "Plan",
             Tab::Route => "Route",
-            Tab::Pilots => "Pilots",
+            Tab::Extra => "Extra",
         }
     }
 }
@@ -302,7 +302,7 @@ impl View {
         match self.tab {
             Tab::Plan => self.plan_column(ui, s, false, true),
             Tab::Route => route_table(ui, s, &mut self.pilots, true),
-            Tab::Pilots => sidebar(ui, s, &mut self.pilots, true),
+            Tab::Extra => sidebar(ui, s, &mut self.pilots, true),
         }
     }
 
@@ -704,21 +704,19 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 let top = rect.top() + 4.0;
                 let text_color = theme::TEXT_SOFT;
                 let number = painter.layout_no_wrap(format!("#{}  ", i + 1), font.clone(), theme::TEXT_DIM);
-                let summary = painter.layout_no_wrap(route_summary(route), font.clone(), text_color);
+                let legs: Vec<usize> = route.legs().iter().map(|&(a, b)| b - a).collect();
+                let legs_text = (legs.len() > 1).then(|| legs.iter().map(usize::to_string).collect::<Vec<_>>().join(" + "));
+                let legs_galley = legs_text.map(|text| painter.layout_no_wrap(text, font.clone(), theme::TEXT_DIM));
                 let summary_left = left + number.size().x;
-                let summary_end = summary_left + summary.size().x;
+                // The summary ends in "…" before it reaches the jumps of the legs. The tooltip has the whole text.
+                let reserve = legs_galley.as_ref().map_or(0.0, |g| g.size().x + 22.0);
                 let summary_text = route_summary(route);
+                let summary = fit_text(&painter, &summary_text, font.clone(), text_color, rect.right() - 10.0 - reserve - summary_left);
                 painter.galley(egui::pos2(left, top), number, theme::TEXT_DIM);
                 painter.galley(egui::pos2(summary_left, top), summary, text_color);
-                let legs: Vec<usize> = route.legs().iter().map(|&(a, b)| b - a).collect();
-                if legs.len() > 1 {
-                    let text = legs.iter().map(usize::to_string).collect::<Vec<_>>().join(" + ");
-                    let galley = painter.layout_no_wrap(text, font, theme::TEXT_DIM);
+                if let Some(galley) = legs_galley {
                     let at = egui::pos2(rect.right() - galley.size().x - 10.0, top);
-                    // In a narrow list the jumps of the legs would draw over the summary: the tooltip has them.
-                    if at.x > summary_end + 12.0 {
-                        painter.galley(at, galley, theme::TEXT_DIM);
-                    }
+                    painter.galley(at, galley, theme::TEXT_DIM);
                 }
                 // Line 2: the strip.
                 let line_y = rect.top() + 22.0;
@@ -740,6 +738,13 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
             }
         });
     });
+}
+
+/// A text on one line that ends in "…" when it is wider than `width`.
+fn fit_text(painter: &egui::Painter, text: &str, font: egui::FontId, color: Color32, width: f32) -> std::sync::Arc<egui::Galley> {
+    let mut job = egui::text::LayoutJob::single_section(text.to_string(), egui::TextFormat::simple(font, color));
+    job.wrap = egui::text::TextWrapping::truncate_at_width(width.max(40.0));
+    painter.layout_job(job)
 }
 
 /// A row of the route table: a step, or the heading of a leg.
@@ -956,7 +961,8 @@ fn summary_strip(ui: &mut Ui, s: &Session) {
     let painter = ui.painter_at(rect);
     let font = egui::TextStyle::Body.resolve(ui.style());
     let text = format!("#{}  {}", s.selected + 1, route_summary(route));
-    painter.text(rect.left_top() + vec2(2.0, 2.0), egui::Align2::LEFT_TOP, text, font, theme::TEXT_SOFT);
+    let galley = fit_text(&painter, &text, font, theme::TEXT_SOFT, rect.width() - 4.0);
+    painter.galley(rect.left_top() + vec2(2.0, 2.0), galley, theme::TEXT_SOFT);
     let strip_rect = egui::Rect::from_min_max(rect.left_top() + vec2(2.0, 20.0), rect.right_bottom() - vec2(2.0, 2.0));
     strip::paint(&painter, &s.uni, route, strip_rect);
     ui.add_space(4.0);
@@ -973,6 +979,8 @@ fn sidebar(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, pilots_first: bo
         }
         favourites_panel(ui, s, false);
         ui.add_space(8.0);
+        sources_panel(ui, s);
+        ui.add_space(8.0);
         connections_panel(ui, s);
         return;
     }
@@ -985,6 +993,38 @@ fn sidebar(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, pilots_first: bo
         ui.add_space(8.0);
         pilots.sidebar_panel(ui, s);
     }
+}
+
+/// The sync state of a wormhole source: the dot color and the text, for example "2 min ago".
+/// The dot is green for data from the last 15 minutes, else amber. A source with no data is gray.
+fn source_state(s: &Session, source: SourceId) -> (Color32, String) {
+    const FRESH_SECS: u64 = 15 * 60;
+    let now = router_core::wormhole::now();
+    let fetched = s.shortcuts.sources.iter().find(|(id, _)| *id == source).map(|&(_, at)| at);
+    match fetched {
+        Some(at) if now.saturating_sub(at) <= FRESH_SECS => (theme::OK, age_text(at, now)),
+        Some(at) => (theme::WARN, age_text(at, now)),
+        None if source == SourceId::Nexum && s.cfg.nexum.complete().is_none() => (theme::TEXT_DIM, "not set".into()),
+        None => (theme::TEXT_DIM, "no data".into()),
+    }
+}
+
+/// The wormhole sources with the age of their data. The status bar shows only dots in a narrow window.
+fn sources_panel(ui: &mut Ui, s: &Session) {
+    // The ages change with time, so the panel draws again each minute.
+    ui.ctx().request_repaint_after(Duration::from_secs(60));
+    panel(ui, "Data sources", "", false, |ui| {
+        for source in [SourceId::EveScout, SourceId::Nexum] {
+            let (dot, text) = source_state(s, source);
+            ui.horizontal(|ui| {
+                // A painted dot: the fonts have no circle glyph.
+                let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+                ui.painter().circle_filled(rect.center(), 3.5, dot);
+                ui.label(RichText::new(source.label()).color(theme::TEXT));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(text).color(theme::TEXT_DIM)));
+            });
+        }
+    });
 }
 
 /// The wormholes and the jump bridges that the overlays loaded. It shows only when an overlay
@@ -1096,19 +1136,11 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool, compact: bool) 
 /// The wormhole sources and the age of their data, for example "Nexum 2 min ago" after a dot.
 /// The dot is green for data from the last 15 minutes, else amber. A source with no data is gray.
 fn sync_status(ui: &mut Ui, s: &Session, compact: bool) {
-    const FRESH_SECS: u64 = 15 * 60;
-    let now = router_core::wormhole::now();
     // The ages change with time, so the bar draws again each minute.
     ui.ctx().request_repaint_after(std::time::Duration::from_secs(60));
     // The layout is right to left: EVE-Scout goes first, so Nexum shows on its left.
     for source in [SourceId::EveScout, SourceId::Nexum] {
-        let fetched = s.shortcuts.sources.iter().find(|(id, _)| *id == source).map(|&(_, at)| at);
-        let (dot, text) = match fetched {
-            Some(at) if now.saturating_sub(at) <= FRESH_SECS => (theme::OK, age_text(at, now)),
-            Some(at) => (theme::WARN, age_text(at, now)),
-            None if source == SourceId::Nexum && s.cfg.nexum.complete().is_none() => (theme::TEXT_DIM, "not set".into()),
-            None => (theme::TEXT_DIM, "no data".into()),
-        };
+        let (dot, text) = source_state(s, source);
         // In a narrow window only the dot shows, with the text on hover.
         let tip = format!("{} {text}", source.label());
         if !compact {

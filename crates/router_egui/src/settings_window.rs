@@ -319,12 +319,24 @@ fn label(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text).color(theme::TEXT_DIM));
 }
 
+/// The label of a settings row. With `narrow`, the row ends after the label, so the control gets its own row.
+fn row_label(ui: &mut Ui, narrow: bool, text: &str) {
+    label(ui, text);
+    if narrow {
+        ui.end_row();
+    }
+}
+
 /// The hover text of a control that a route start locks.
 pub const LOCKED: &str = "Locked while route is active — stop the route to change this";
 
 fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool) -> Option<Action> {
     let mut action = None;
-    ui.set_width(crate::theme::modal_width(ui, 560.0));
+    let width = crate::theme::modal_width(ui, 560.0);
+    ui.set_width(width);
+    // In a narrow window each label sits above its control, in one column.
+    let narrow = width < 500.0;
+    let field = if narrow { (width - 110.0).max(120.0) } else { 300.0 };
     title(ui, "Settings");
     // While a route is active, only the favourites can change.
     let locked = s.pilots.active.is_some();
@@ -332,12 +344,12 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
         ui.label(RichText::new("Routing settings are locked while a route is active. Favourites stay editable.").color(theme::WARN));
     }
     ScrollArea::vertical().max_height(ui.ctx().content_rect().height() - 160.0).show(ui, |ui| {
-        egui::Grid::new("settings-grid").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        egui::Grid::new("settings-grid").num_columns(if narrow { 1 } else { 2 }).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
             // The alliance capital.
-            label(ui, "Alliance capital");
+            row_label(ui, narrow, "Alliance capital");
             ui.add_enabled_ui(!locked, |ui| {
                 ui.vertical(|ui| {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let text = s.settings.rules.capital.map_or("none (jump bridges off)".into(), |n| s.uni.name(n).to_string());
                         ui.label(RichText::new(text).color(Color32::WHITE));
                         if s.settings.rules.capital.is_some() && ui.small_button("Clear").clicked() {
@@ -346,7 +358,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                             s.save();
                         }
                     });
-                    if let Some((_, node)) = form.capital.show(ui, &s.uni, 300.0, "Search system…", &[]) {
+                    if let Some((_, node)) = form.capital.show(ui, &s.uni, field, "Search system…", &[]) {
                         s.settings.rules.capital = Some(node);
                         s.recompute();
                         s.save();
@@ -358,9 +370,9 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             ui.end_row();
 
             // The max TJ for one bridge jump.
-            label(ui, "Max TJ per bridge jump");
+            row_label(ui, narrow, "Max TJ per bridge jump");
             ui.add_enabled_ui(!locked, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let response = ui.add(TextEdit::singleline(&mut form.max_cap).hint_text("no limit").desired_width(120.0));
                     let enter = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                     if ui.button("Apply").clicked() || enter {
@@ -381,7 +393,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             ui.end_row();
 
             // The soft costs of a route: the bridge capacitor and the unknown wormhole signature.
-            label(ui, "Bridge capacitor cost");
+            row_label(ui, narrow, "Bridge capacitor cost");
             ui.add_enabled_ui(!locked, |ui| {
                 let drag = egui::DragValue::new(&mut s.settings.costs.cap_weight)
                     .speed(0.05)
@@ -400,9 +412,9 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             .on_disabled_hover_text(LOCKED);
             ui.end_row();
 
-            label(ui, "Unknown signature cost");
+            row_label(ui, narrow, "Unknown signature cost");
             ui.add_enabled_ui(!locked, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let costs = &mut s.settings.costs;
                     let drag = egui::DragValue::new(&mut costs.unknown_sig_penalty)
                         .speed(0.1)
@@ -432,12 +444,12 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             ui.end_row();
 
             // The favourites, in the order of the sidebar.
-            label(ui, "Favourites");
+            row_label(ui, narrow, "Favourites");
             ui.vertical(|ui| {
                 let mut edit: Option<(usize, i32)> = None;
                 let count = s.settings.favourites.len();
                 for (i, &fav) in s.settings.favourites.iter().enumerate() {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let name = egui::Label::new(RichText::new(s.uni.name(fav)).color(theme::TEXT)).truncate();
                         ui.allocate_ui_with_layout(vec2(180.0, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(name));
                         if ui.add_enabled(i > 0, Button::new("⏶").small()).clicked() {
@@ -461,17 +473,17 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                     s.recompute();
                     s.save();
                 }
-                if let Some((_, node)) = form.favourite.show(ui, &s.uni, 300.0, "Add favourite…", &[]) {
+                if let Some((_, node)) = form.favourite.show(ui, &s.uni, field, "Add favourite…", &[]) {
                     s.add_favourite(node);
                 }
             });
             ui.end_row();
 
             // Nexum: the URL, the key and the map. A change applies at the next start.
-            label(ui, "Nexum URL");
+            row_label(ui, narrow, "Nexum URL");
             ui.add_enabled_ui(!locked, |ui| {
-                ui.horizontal(|ui| {
-                    ui.add(TextEdit::singleline(&mut form.url).hint_text("https://nexum.example").desired_width(300.0));
+                ui.horizontal_wrapped(|ui| {
+                    ui.add(TextEdit::singleline(&mut form.url).hint_text("https://nexum.example").desired_width(field));
                     if ui.button("Save").clicked() {
                         match config::parse_nexum_url(&form.url) {
                             Ok(url) => {
@@ -488,17 +500,17 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             .on_disabled_hover_text(LOCKED);
             ui.end_row();
 
-            label(ui, "Nexum key");
+            row_label(ui, narrow, "Nexum key");
             ui.add_enabled_ui(!locked, |ui| {
                 ui.vertical(|ui| {
                     let current = s.cfg.nexum.key.as_ref().map_or("none".into(), ApiKey::masked);
                     ui.label(RichText::new(current).color(theme::TEXT));
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         ui.add(
                             TextEdit::singleline(&mut form.key)
                                 .password(true)
                                 .hint_text("paste a key with the read scope")
-                                .desired_width(300.0),
+                                .desired_width(field),
                         );
                         if ui.add_enabled(!form.key.trim().is_empty(), Button::new("Save")).clicked() {
                             s.cfg.nexum.key = Some(ApiKey(form.key.trim().to_string()));
@@ -516,9 +528,9 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             .on_disabled_hover_text(LOCKED);
             ui.end_row();
 
-            label(ui, "Nexum map");
+            row_label(ui, narrow, "Nexum map");
             ui.add_enabled_ui(!locked, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let name = s.map_name();
                     ui.label(RichText::new(name).color(theme::TEXT));
                     if loading {
@@ -538,9 +550,9 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             ui.end_row();
 
             // The EVE-Scout hub switches act at route time.
-            label(ui, "EVE-Scout");
+            row_label(ui, narrow, "EVE-Scout");
             ui.add_enabled_ui(!locked, |ui| {
-                ui.horizontal(|ui| {
+                ui.horizontal_wrapped(|ui| {
                     let hubs = &mut s.settings.hubs;
                     let thera_text = format!("Thera: {}", on_off(hubs.thera));
                     let thera = ui.checkbox(&mut hubs.thera, thera_text).changed();
