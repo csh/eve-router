@@ -572,14 +572,14 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
             .cell_layout(Layout::left_to_right(Align::Center))
             .column(Column::exact(36.0))
             .column(Column::exact(110.0))
-            .column(Column::initial(150.0).at_least(90.0).resizable(true));
+            .column(Column::initial(150.0).at_least(90.0).resizable(true).clip(true));
         if show_pilots {
             table = table.column(Column::initial(190.0).at_least(70.0).resizable(true).clip(true));
         }
         table = table
             .column(Column::exact(72.0))
-            .column(Column::initial(170.0).at_least(90.0).resizable(true))
-            .column(Column::remainder().at_least(120.0))
+            .column(Column::initial(170.0).at_least(90.0).resizable(true).clip(true))
+            .column(Column::remainder().at_least(120.0).clip(true))
             .auto_shrink(false);
         table
             .header(20.0, |mut row| {
