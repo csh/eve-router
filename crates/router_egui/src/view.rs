@@ -483,7 +483,7 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 let small = egui::TextStyle::Small.resolve(ui.style());
                 let risk_galley = painter.layout_no_wrap(risk.clone(), small, risk_color);
                 let risk_width = risk_galley.size().x;
-                let line_y = rect.top() + 24.0;
+                let line_y = rect.top() + 22.0;
                 painter.galley(egui::pos2(rect.right() - risk_width - 10.0, line_y + 1.0), risk_galley, risk_color);
                 let strip_rect = egui::Rect::from_min_max(
                     egui::pos2(left, line_y),

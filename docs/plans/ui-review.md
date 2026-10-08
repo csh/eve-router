@@ -258,7 +258,8 @@ Measured in the release build with 6 waypoints. The 1260 x 560 window used to sh
 
 What changed:
 
-- The route strip draws in the route table and in each route list row. A click on a dot selects the step and scrolls the table to it. A hover shows the system, its security and the link kind.
+- The route strip draws in the route table and in each route list row. It follows the game: one square for each system (10 px, 2 px gap), and a plus in place of the square for each system the pilot gave (start, midpoints, destination). The strip has no border. A wormhole or bridge jump shows as a purple or blue bar below the square. The selected step shows as a bar above its square. A click on a square selects the step and scrolls the table to it. A hover shows the system, its security and the link kind.
+- The plus is white. The game's plus color is not confirmed. Change `theme::TEXT` in `strip.rs` if the game uses another color.
 - Each route list row has two lines. Line 1 gives the summary and how the route differs from #1, for example "Leaves #1 at Onga, via Pator". Line 2 gives the strip and the risk in words, for example "7 lowsec".
 - The route table header shows the same risk text.
 - The planner closes its waypoint list when a route exists. A button opens it again. The Pilot button moved to the search row.
@@ -269,4 +270,4 @@ Open points:
 
 - At 560 px high the table shows 3 rows, not the 200 px target. The rest needs the layout change of step 4.
 - F19 (the empty Pilots column) is not done.
-- The strip uses a fixed pitch of 3 to 12 px. A route of more than 280 systems draws past its box at 840 px wide. Routes of that length are not in the test data.
+- The strip uses a space of 4 to 12 px for each system. A route of more than 210 systems draws past its box at 840 px wide. Routes of that length are not in the test data.
