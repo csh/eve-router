@@ -14,6 +14,7 @@ use router_core::sources::{
     self,
     nexum::{self, MapInfo},
 };
+use std::time::Instant;
 
 pub enum Popup {
     /// The Pilot picker. The rows are `Pilots::pilot_rows(filter)`.
@@ -86,6 +87,7 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
             None => {}
         }
         if view.settings.is_none() {
+            s.flush_apply();
             s.save();
         }
     }
@@ -215,8 +217,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                     .on_hover_text("A bridge jump with a hull costs this much for each percent of the gate capacitor it uses")
                     .changed()
                 {
-                    s.recompute();
-                    s.save();
+                    s.apply_later(Instant::now());
                 }
             })
             .response
@@ -232,15 +233,19 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                         .range(0.0..=RouteCosts::MAX)
                         .max_decimals(1)
                         .suffix(" jumps");
-                    let mut changed = ui
+                    if ui
                         .add_enabled(!costs.unknown_sig_broken, drag)
                         .on_hover_text("A wormhole with no known signature costs this much extra, for the scan")
-                        .changed();
-                    changed |= ui
-                        .checkbox(&mut costs.unknown_sig_broken, "Treat as broken")
-                        .on_hover_text("Skip these wormholes. Stale data can then cut the map")
-                        .changed();
-                    if changed {
+                        .changed()
+                    {
+                        s.apply_later(Instant::now());
+                    }
+                    let costs = &mut s.settings.costs;
+                    if ui
+                        .checkbox(&mut costs.unknown_sig_broken, "Skip these wormholes instead")
+                        .on_hover_text("Never route through a wormhole with no known signature. Stale data can then cut the map")
+                        .changed()
+                    {
                         s.recompute();
                         s.save();
                     }

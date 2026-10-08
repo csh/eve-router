@@ -89,6 +89,10 @@ impl View {
     pub fn show(&mut self, ui: &mut Ui, s: &mut Session) {
         self.poll_maps(s);
         self.pilots.update(ui.ctx(), s);
+        // A dragged value in the settings waits for a quiet time, then the app searches and saves.
+        if let Some(left) = s.apply_due(Instant::now()) {
+            ui.ctx().request_repaint_after(left);
+        }
         // The status text and the startup lines clear after `STATUS_TIME`.
         let text = std::iter::once(&s.status).chain(&s.startup_lines).filter(|t| !t.is_empty()).cloned().collect::<Vec<_>>().join(" · ");
         match self.status_timer.update(&text, Instant::now()) {

@@ -36,6 +36,9 @@ pub struct RouterApp {
 /// only after input or a repaint request, so the window draws no frames while it is idle.
 const MIN_FRAME_TIME: Duration = Duration::from_millis(16);
 
+/// The quiet time after the last change of a dragged value, before the app searches and saves.
+pub const APPLY_DELAY: Duration = Duration::from_millis(500);
+
 /// The error when the load thread stops without a result. A panic in the load does this.
 const LOAD_STOPPED: &str = "The startup load stopped with an internal error. Start the router from a terminal to see the cause.";
 
@@ -137,6 +140,8 @@ pub struct Session {
     /// The clock of the route search. The tests set a fixed time.
     clock: fn() -> u64,
     pub status: String,
+    /// The time of the last change that waits for `APPLY_DELAY`, for example a drag in the settings.
+    apply_at: Option<Instant>,
     /// The last Nexum map list, for the map name in the settings.
     pub map_names: Vec<MapInfo>,
     /// The logins, the tracking and the active route.
@@ -164,6 +169,7 @@ impl Session {
             now: router_core::wormhole::now(),
             clock: router_core::wormhole::now,
             status: String::new(),
+            apply_at: None,
             map_names: Vec::new(),
             pilots: Pilots::offline(active_path(&cfg_path)),
         };
@@ -188,6 +194,31 @@ impl Session {
             0 => Stop::Start,
             i if i + 1 == self.waypoints.len() => Stop::Destination,
             i => Stop::Midpoint(i),
+        }
+    }
+
+    /// Search and save after the last change of a value that a pilot drags. Each call at `now`
+    /// restarts the quiet time, so a drag gives one search and one write.
+    pub fn apply_later(&mut self, now: Instant) {
+        self.apply_at = Some(now);
+    }
+
+    /// Search and save if the quiet time of `apply_later` is over at `now`. Return the time left,
+    /// or `None` if nothing waits.
+    pub fn apply_due(&mut self, now: Instant) -> Option<Duration> {
+        let left = APPLY_DELAY.saturating_sub(now.saturating_duration_since(self.apply_at?));
+        if left.is_zero() {
+            self.flush_apply();
+            return None;
+        }
+        Some(left)
+    }
+
+    /// Search and save at once if a change waits. Call this before a window closes.
+    pub fn flush_apply(&mut self) {
+        if self.apply_at.take().is_some() {
+            self.recompute();
+            self.save();
         }
     }
 
@@ -583,6 +614,43 @@ mod tests {
         let origin = router_core::sources::nexum::map_url(&s.cfg.nexum);
         s.wormhole_data = vec![SourceData { source: SourceId::Nexum, fetched_at: 0, origin, name: Some("Home".into()), holes: Vec::new() }];
         assert_eq!(s.map_name(), "Home");
+    }
+
+    #[test]
+    fn a_dragged_value_applies_once_after_the_quiet_time() {
+        let mut s = session("apply-later");
+        let _ = std::fs::remove_file(&s.cfg_path);
+        s.add_list("Jita, Amarr");
+        s.status = "unread".into();
+        let start = Instant::now();
+        s.settings.costs.cap_weight = 1.0;
+        s.apply_later(start);
+        // A second change restarts the quiet time.
+        s.settings.costs.cap_weight = 2.0;
+        s.apply_later(start + Duration::from_millis(300));
+        assert_eq!(s.apply_due(start + Duration::from_millis(600)), Some(APPLY_DELAY - Duration::from_millis(300)));
+        assert_eq!(s.status, "unread", "no search yet");
+        assert!(!s.cfg_path.exists(), "no write yet");
+        assert_eq!(s.apply_due(start + APPLY_DELAY + Duration::from_millis(300)), None);
+        assert_eq!(s.status, "Config saved!");
+        assert!(std::fs::read_to_string(&s.cfg_path).unwrap().contains("2.0"));
+        // Nothing waits now.
+        s.status.clear();
+        assert_eq!(s.apply_due(start + Duration::from_secs(10)), None);
+        assert_eq!(s.status, "");
+    }
+
+    #[test]
+    fn closing_a_window_applies_a_waiting_change_at_once() {
+        let mut s = session("apply-flush");
+        let _ = std::fs::remove_file(&s.cfg_path);
+        s.flush_apply();
+        assert!(!s.cfg_path.exists(), "nothing waited");
+        s.settings.costs.unknown_sig_penalty = 7.0;
+        s.apply_later(Instant::now());
+        s.flush_apply();
+        assert!(std::fs::read_to_string(&s.cfg_path).unwrap().contains("7.0"));
+        assert_eq!(s.apply_due(Instant::now() + Duration::from_secs(10)), None);
     }
 
     fn names(s: &Session) -> Vec<&str> {
