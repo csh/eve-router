@@ -174,7 +174,7 @@ fn region_matches(uni: &router_core::universe::Universe, text: &str, limit: usiz
 /// Returns true when the window must close.
 fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_text: &mut String, s: &mut Session) -> bool {
     title(ui, "Avoid");
-    ui.set_width(680.0);
+    ui.set_width(760.0);
     ui.horizontal(|ui| {
         if let Some((_, node)) = search.show(ui, &s.uni, 300.0, "Add a system…", &[])
             && !s.settings.avoid.has_system(node)
@@ -213,14 +213,14 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
             .striped(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(egui_extras::Column::remainder().at_least(160.0).clip(true))
-            .column(egui_extras::Column::exact(48.0))
-            .column(egui_extras::Column::initial(160.0).at_least(100.0).clip(true))
+            .column(egui_extras::Column::exact(120.0))
+            .column(egui_extras::Column::initial(200.0).at_least(120.0).clip(true))
             .column(egui_extras::Column::exact(84.0))
             .column(egui_extras::Column::exact(84.0))
             .max_scroll_height(280.0)
             .auto_shrink([false, true])
             .header(22.0, |mut header| {
-                for text in ["System", "Sec", "Region", "", ""] {
+                for text in ["System", "System Security", "Region", "", ""] {
                     header.col(|ui| _ = ui.label(theme::header_text(text)));
                 }
             })
