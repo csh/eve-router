@@ -202,9 +202,9 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
         let never_switch = |ui: &mut Ui, never: bool| -> bool {
             let (text, color) = if never { ("Never", theme::ERROR) } else { ("Prefer", theme::WARN) };
             let hover = if never {
-                "Never: no route enters it, and a trip to it finds no route"
+                "Never go through here, even if that means no route at all"
             } else {
-                "Prefer: a route enters it only if no other route exists, or the other routes are much longer"
+                "Steer clear if possible, but go through if there's no other way"
             };
             ui.add(Button::new(RichText::new(text).color(color)).min_size(vec2(64.0, 0.0))).on_hover_text(hover).clicked()
         };

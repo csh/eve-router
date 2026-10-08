@@ -59,6 +59,9 @@ impl RouteCosts {
     }
 }
 
+/// The sentence that follows a "No route" error while a "Never" entry could cause it.
+pub const NO_ROUTE_HINT: &str = "Your avoid list might be in the way.";
+
 /// One entry of the avoid list.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Entry<T> {
@@ -248,6 +251,13 @@ impl Settings {
         cfg.favourites = Some(self.favourites.iter().map(|&n| uni.name(n).to_string()).collect());
         cfg.avoid_systems = self.avoid.systems.iter().map(|e| AvoidName::new(uni.name(e.item), e.never)).collect();
         cfg.avoid_regions = self.avoid.regions.iter().map(|e| AvoidName::new(&e.item, e.never)).collect();
+    }
+
+    /// The text of a route error. A "No route" error gets a hint while a "Never" entry is on the
+    /// avoid list, because only such an entry can block every route.
+    pub fn explain(&self, error: String) -> String {
+        let never = self.avoid.systems.iter().any(|e| e.never) || self.avoid.regions.iter().any(|e| e.never);
+        if never && error.starts_with("No route") { format!("{error}. {NO_ROUTE_HINT}") } else { error }
     }
 
     /// The waypoints in the order to route them, and a status text if the order changed.
@@ -465,6 +475,22 @@ mod tests {
         assert!(s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).is_err());
         s.avoid.set_system_never(nodes[1], false);
         assert!(s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).is_ok());
+    }
+
+    #[test]
+    fn a_no_route_error_points_at_a_never_entry() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let error = "No route from Jita to Perimeter".to_string();
+        assert_eq!(s.explain(error.clone()), error);
+        // A "prefer" entry never blocks a route, so it gets no hint.
+        let perimeter = uni.exact("Perimeter").unwrap();
+        s.avoid.add_system(perimeter);
+        assert_eq!(s.explain(error.clone()), error);
+        s.avoid.set_system_never(perimeter, true);
+        assert_eq!(s.explain(error.clone()), format!("{error}. {NO_ROUTE_HINT}"));
+        // Another error stays as it is.
+        assert_eq!(s.explain("Give two or more systems".into()), "Give two or more systems");
     }
 
     #[test]

@@ -274,7 +274,7 @@ impl Session {
         self.recompute();
         self.save_quietly();
         if self.status.is_empty() {
-            self.status = if never { format!("Never entering {entry}") } else { format!("Preferring to avoid {entry}") };
+            self.status = if never { format!("Never going through {entry}") } else { format!("Steering clear of {entry} if possible") };
         }
     }
 
@@ -334,7 +334,7 @@ impl Session {
             None => {}
             // The route table shows the optimized order, so the status line does not.
             Some(Ok((routes, _))) => self.routes = routes,
-            Some(Err(e)) => self.status = e,
+            Some(Err(e)) => self.status = self.settings.explain(e),
         }
     }
 
@@ -784,14 +784,27 @@ mod tests {
         assert_eq!(s.status, format!("Avoiding {region}"));
         // The "never" switch keeps the region out of every route, and the file keeps the switch.
         s.set_avoid_never_region(&region, true);
-        assert_eq!(s.status, format!("Never entering {region}"));
+        assert_eq!(s.status, format!("Never going through {region}"));
         assert!(s.routes.iter().all(|r| r.path.nodes.iter().all(|&n| s.uni.system(n).region != region)));
         assert!(std::fs::read_to_string(&s.cfg_path).unwrap().contains("\"never\": true"));
         s.set_avoid_never_region(&region, false);
-        assert_eq!(s.status, format!("Preferring to avoid {region}"));
+        assert_eq!(s.status, format!("Steering clear of {region} if possible"));
         s.clear_avoid();
         assert!(s.settings.avoid.is_empty());
         assert!(s.routes[0].path.nodes.contains(&middle));
+    }
+
+    #[test]
+    fn a_never_destination_says_the_avoid_list_is_in_the_way() {
+        let mut s = session("avoid-no-route");
+        let _ = std::fs::remove_file(&s.cfg_path);
+        s.add_list("Jita, Perimeter");
+        let perimeter = *s.waypoints.last().unwrap();
+        s.toggle_avoid_system(perimeter);
+        assert!(!s.routes.is_empty(), "prefer still gives a route");
+        s.set_avoid_never_system(perimeter, true);
+        assert!(s.routes.is_empty());
+        assert_eq!(s.status, "No route from Jita to Perimeter. Your avoid list might be in the way.");
     }
 
     #[test]

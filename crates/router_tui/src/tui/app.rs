@@ -252,7 +252,7 @@ impl App {
                     self.append_status(&text);
                 }
             }
-            Some(Err(e)) => self.status = e,
+            Some(Err(e)) => self.status = self.settings.explain(e),
         }
     }
 
