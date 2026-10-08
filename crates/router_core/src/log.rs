@@ -14,7 +14,7 @@ pub struct LogEntry {
     /// The operation, for example `nexum.fetch`.
     pub op: &'static str,
     pub ok: bool,
-    /// For a success, a short result such as "12 wormholes". For a failure, the cause.
+    /// For a success, a short result such as "Loaded 12 wormhole connections". For a failure, the cause.
     pub reason: String,
 }
 
@@ -39,9 +39,9 @@ pub fn local_clock_text(t: u64) -> String {
     clock_text(t, &Local)
 }
 
-/// "1 wormhole", "12 wormholes".
-pub fn wormholes(count: usize) -> String {
-    format!("{count} wormhole{}", if count == 1 { "" } else { "s" })
+/// The message of a load: "Loaded 1 wormhole connection", "Loaded 12 wormhole connections".
+pub fn loaded(count: usize) -> String {
+    format!("Loaded {count} wormhole connection{}", if count == 1 { "" } else { "s" })
 }
 
 #[cfg(test)]
@@ -68,7 +68,7 @@ mod tests {
     }
 
     #[test]
-    fn the_count_text_has_a_singular() {
-        assert_eq!((wormholes(1).as_str(), wormholes(12).as_str()), ("1 wormhole", "12 wormholes"));
+    fn the_load_message_has_a_singular() {
+        assert_eq!((loaded(1).as_str(), loaded(12).as_str()), ("Loaded 1 wormhole connection", "Loaded 12 wormhole connections"));
     }
 }

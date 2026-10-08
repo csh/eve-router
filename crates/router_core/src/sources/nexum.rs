@@ -469,7 +469,7 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
             let row = |op, ok, reason: String| LogEntry { time: started, op, ok, reason };
             let mut log = vec![match (&chosen.error, &chosen.data) {
                 (Some(cause), _) => row("nexum.fetch", false, cause.clone()),
-                (None, data) => row("nexum.fetch", true, log::wormholes(data.as_ref().map_or(0, |d| d.holes.len()))),
+                (None, data) => row("nexum.fetch", true, log::loaded(data.as_ref().map_or(0, |d| d.holes.len()))),
             }];
             if sig_failures > 0 {
                 let reason = if sig_failures == 1 { "1 system not loaded".into() } else { format!("{sig_failures} systems not loaded") };
@@ -864,10 +864,7 @@ mod tests {
         let load = finish(start(&cfg(&url), temp("eve-router-test-log-ok"), FETCHED), |id| id != 39_999_999, &types());
         let holes = load.data.as_ref().unwrap().holes.len();
         let row = |op, ok, reason: &str| LogEntry { time: FETCHED, op, ok, reason: reason.into() };
-        assert_eq!(
-            load.log,
-            [row("nexum.fetch", true, &format!("{holes} wormholes")), row("nexum.signatures", false, "1 system not loaded")]
-        );
+        assert_eq!(load.log, [row("nexum.fetch", true, &log::loaded(holes)), row("nexum.signatures", false, "1 system not loaded")]);
     }
 
     #[test]

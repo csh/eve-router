@@ -163,7 +163,7 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
             let chosen = sources::choose(SourceId::EveScout, converted, cache, &cache_path);
             let (ok, reason) = match &chosen.error {
                 Some(cause) => (false, cause.clone()),
-                None => (true, log::wormholes(chosen.data.as_ref().map_or(0, |d| d.holes.len()))),
+                None => (true, log::loaded(chosen.data.as_ref().map_or(0, |d| d.holes.len()))),
             };
             let log = vec![LogEntry { time: started, op: "evescout.fetch", ok, reason }];
             Load { data: chosen.data, report, warning: chosen.warning, log }
@@ -302,7 +302,7 @@ mod tests {
         let (url, _) = serve("200 OK", &fixture_text(), Duration::ZERO);
         let load = finish(start(&url, temp("eve-router-test-scout-log-ok"), FETCHED), |_| true, &types());
         let holes = load.data.as_ref().unwrap().holes.len();
-        assert_eq!(load.log, [LogEntry { time: FETCHED, op: "evescout.fetch", ok: true, reason: format!("{holes} wormholes") }]);
+        assert_eq!(load.log, [LogEntry { time: FETCHED, op: "evescout.fetch", ok: true, reason: log::loaded(holes) }]);
     }
 
     #[test]

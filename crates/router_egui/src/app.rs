@@ -631,7 +631,7 @@ mod tests {
     #[test]
     fn a_refresh_adds_its_rows_to_the_log() {
         let mut s = session("log-rows");
-        let row = |time| LogEntry { time, op: "nexum.fetch", ok: true, reason: "1 wormhole".into() };
+        let row = |time| LogEntry { time, op: "nexum.fetch", ok: true, reason: "Loaded 1 wormhole connection".into() };
         let mut snap = snapshot(Vec::new());
         snap.log = vec![row(1)];
         s.apply_snapshot(snap);

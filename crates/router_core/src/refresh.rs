@@ -399,10 +399,10 @@ mod tests {
     #[test]
     fn build_collects_the_log_rows_of_both_sources() {
         let row = |op, reason: &str| LogEntry { time: 7, op, ok: true, reason: reason.into() };
-        let wh = nexum::Load { log: vec![row("nexum.fetch", "2 wormholes")], ..Default::default() };
-        let scout = evescout::Load { log: vec![row("evescout.fetch", "1 wormhole")], ..Default::default() };
+        let wh = nexum::Load { log: vec![row("nexum.fetch", "Loaded 2 wormhole connections")], ..Default::default() };
+        let scout = evescout::Load { log: vec![row("evescout.fetch", "Loaded 1 wormhole connection")], ..Default::default() };
         let (snap, _) = build(universe(), &OverlayReport::default(), &wh, &scout, 0);
-        assert_eq!(snap.log, [row("nexum.fetch", "2 wormholes"), row("evescout.fetch", "1 wormhole")]);
+        assert_eq!(snap.log, [row("nexum.fetch", "Loaded 2 wormhole connections"), row("evescout.fetch", "Loaded 1 wormhole connection")]);
     }
 
     /// An EVE-Scout feed with one Thera wormhole to `to`. It has no expiry, so the test clock cannot end it.
@@ -528,7 +528,7 @@ mod tests {
         r.refresh();
         let snap = r.recv_timeout(Duration::from_secs(10)).expect("no refresh after the message");
         assert!(has_hole(&snap.uni, THERA, JITA));
-        let fetch = LogEntry { time: FIXTURE_TIME, op: "evescout.fetch", ok: true, reason: "1 wormhole".into() };
+        let fetch = LogEntry { time: FIXTURE_TIME, op: "evescout.fetch", ok: true, reason: "Loaded 1 wormhole connection".into() };
         assert_eq!(snap.log, [fetch]);
     }
 

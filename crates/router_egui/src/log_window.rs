@@ -44,7 +44,7 @@ fn table(ui: &mut egui::Ui, log: &[LogEntry]) {
         .column(Column::remainder().at_least(120.0).clip(true))
         .auto_shrink(false)
         .header(20.0, |mut row| {
-            for text in ["Time", "Operation", "Result", "Reason"] {
+            for text in ["Time", "Operation", "Result", "Message"] {
                 row.col(|ui| header(ui, text));
             }
         })
