@@ -22,6 +22,10 @@ pub enum Popup {
         filter: String,
     },
     Maps(Vec<MapInfo>),
+    /// The avoid list. `confirm` is true while the window asks to clear all entries.
+    Avoid {
+        confirm: bool,
+    },
     Message(String),
     /// A pasted list of systems. `problems` holds the names that the last try did not add.
     List {
@@ -114,6 +118,10 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
             });
             response.inner || response.should_close()
         }
+        Some(Popup::Avoid { confirm }) => {
+            let response = Modal::new(Id::new("avoid")).frame(modal_frame()).show(ui.ctx(), |ui| avoid_list(ui, confirm, s));
+            response.inner || response.should_close()
+        }
         Some(Popup::List { text, problems }) => {
             let response = Modal::new(Id::new("list")).frame(modal_frame()).show(ui.ctx(), |ui| paste_list(ui, text, problems, s));
             response.inner || response.should_close()
@@ -132,6 +140,79 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
     if close {
         view.popup = None;
     }
+}
+
+/// The avoid list: a table of system, region and a remove button, and a clear-all button that asks first.
+/// Returns true when the window must close.
+fn avoid_list(ui: &mut Ui, confirm: &mut bool, s: &mut Session) -> bool {
+    title(ui, "Avoid");
+    ui.set_width(460.0);
+    let avoid = &s.settings.avoid;
+    if avoid.is_empty() {
+        ui.label(
+            RichText::new("Nothing is avoided. Right-click a system in the route table to avoid it or its region.").color(theme::TEXT_DIM),
+        );
+    }
+    let mut remove_system = None;
+    let mut remove_region = None;
+    ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
+        if avoid.is_empty() {
+            return;
+        }
+        egui::Grid::new("avoid-grid").num_columns(3).spacing(vec2(18.0, 8.0)).striped(true).show(ui, |ui| {
+            for text in ["System", "Region", ""] {
+                ui.label(theme::header_text(text));
+            }
+            ui.end_row();
+            for &node in &avoid.systems {
+                ui.label(RichText::new(s.uni.name(node)).color(theme::TEXT));
+                ui.label(RichText::new(&s.uni.system(node).region).color(theme::TEXT_DIM));
+                if ui.small_button("Remove").clicked() {
+                    remove_system = Some(node);
+                }
+                ui.end_row();
+            }
+            for region in &avoid.regions {
+                ui.label(RichText::new("All systems").color(theme::TEXT_DIM));
+                ui.label(RichText::new(region).color(theme::TEXT));
+                if ui.small_button("Remove").clicked() {
+                    remove_region = Some(region.clone());
+                }
+                ui.end_row();
+            }
+        });
+    });
+    let count = avoid.len();
+    ui.add_space(8.0);
+    let mut close = false;
+    let mut clear = false;
+    ui.horizontal(|ui| {
+        if *confirm {
+            ui.label(RichText::new(format!("Remove all {count} entries?")).color(theme::WARN));
+            if ui.button("Clear all").clicked() {
+                clear = true;
+            }
+            if ui.button("Cancel").clicked() {
+                *confirm = false;
+            }
+        } else {
+            if ui.add_enabled(count > 0, Button::new("Clear all")).clicked() {
+                *confirm = true;
+            }
+            close = ui.button("Close").clicked();
+        }
+    });
+    if let Some(node) = remove_system {
+        s.toggle_avoid_system(node);
+    }
+    if let Some(region) = remove_region {
+        s.toggle_avoid_region(&region);
+    }
+    if clear {
+        s.clear_avoid();
+        *confirm = false;
+    }
+    close
 }
 
 enum Action {

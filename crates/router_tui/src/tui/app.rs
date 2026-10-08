@@ -1066,6 +1066,7 @@ pub(crate) mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: Vec::new(),
+            avoid: Default::default(),
         };
         let path = std::env::temp_dir().join(format!("eve-router-test-{name}.json"));
         let shortcuts = Shortcuts::new(universe(), &Default::default(), &Default::default(), &Default::default());

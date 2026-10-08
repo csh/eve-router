@@ -68,6 +68,12 @@ pub struct View {
     pilots: PilotsUi,
 }
 
+/// A change of the avoid list, from the context menu of a route step.
+enum Toggle {
+    System(NodeIndex),
+    Region(String),
+}
+
 /// A change to the waypoints, from a click in the route planner.
 enum Edit {
     SetStart(usize),
@@ -188,6 +194,16 @@ impl View {
                 if ui.button("⚙ Settings").clicked() {
                     self.settings = Some(SettingsForm::new(s));
                 }
+                let avoid = match s.settings.avoid.len() {
+                    0 => "Avoid".to_string(),
+                    n => format!("Avoid ({n})"),
+                };
+                let locked = s.pilots.active.is_some();
+                let button = ui.add_enabled(!locked, Button::new(avoid)).on_hover_text("Systems and regions that routes avoid");
+                if button.clicked() {
+                    self.popup = Some(Popup::Avoid { confirm: false });
+                }
+                button.on_disabled_hover_text(settings_window::LOCKED);
                 self.pilots.characters_button(ui, s);
                 ui.separator();
                 // While a route is active, the controls that change the route are off.
@@ -417,6 +433,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     let title = format!("Route #{}", s.selected + 1);
     let info = format!("{}{}", jumps_label(route.jumps), route_extras(route));
     let mut clicked = None;
+    let mut toggle = None;
     let mut copy = false;
     let characters = s.pilots.characters();
     // The Pilots column shows only when a character is logged in.
@@ -496,12 +513,36 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                     });
                     row.col(|ui| _ = ui.add(Label::new(RichText::new(&sys.region).color(theme::TEXT_DIM)).truncate()));
                     row.col(|ui| _ = ui.add(Label::new(RichText::new(&via).color(via_color)).truncate()).on_hover_text(&via));
+                    let node = route.path.nodes[step];
+                    row.response().context_menu(|ui| {
+                        let avoid = &s.settings.avoid;
+                        let system =
+                            if avoid.has_system(node) { format!("Stop avoiding {}", sys.name) } else { format!("Avoid {}", sys.name) };
+                        if ui.button(system).clicked() {
+                            toggle = Some(Toggle::System(node));
+                            ui.close();
+                        }
+                        let region = if avoid.has_region(&sys.region) {
+                            format!("Stop avoiding {}", sys.region)
+                        } else {
+                            format!("Avoid {}", sys.region)
+                        };
+                        if ui.button(region).clicked() {
+                            toggle = Some(Toggle::Region(sys.region.clone()));
+                            ui.close();
+                        }
+                    });
                     if row.response().clicked() {
                         clicked = Some(step);
                     }
                 });
             });
     });
+    match toggle {
+        Some(Toggle::System(node)) => s.toggle_avoid_system(node),
+        Some(Toggle::Region(region)) => s.toggle_avoid_region(&region),
+        None => {}
+    }
     if clicked.is_some() {
         s.selected_step = clicked;
     }

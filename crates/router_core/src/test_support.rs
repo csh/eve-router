@@ -72,6 +72,7 @@ pub fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
         min_life: 0,
         costs: Default::default(),
         favourites: Vec::new(),
+        avoid: Default::default(),
     }
 }
 

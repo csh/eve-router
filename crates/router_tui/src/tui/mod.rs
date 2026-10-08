@@ -85,6 +85,7 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
+            avoid: Default::default(),
         };
         let uni = Arc::new(uni);
         let mut app = App::new(
@@ -200,6 +201,7 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
+            avoid: Default::default(),
         };
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
         let cfg_path = std::env::temp_dir().join("eve-router-test-snapshot.json");
@@ -233,6 +235,7 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap()],
+            avoid: Default::default(),
         };
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
         let cfg_path = std::env::temp_dir().join("eve-router-test-active-snapshot.json");
@@ -266,6 +269,7 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap()],
+            avoid: Default::default(),
         };
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
         let cfg_path = std::env::temp_dir().join("eve-router-test-loop-pilot.json");
@@ -313,6 +317,7 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: Vec::new(),
+            avoid: Default::default(),
         };
         let cfg_path = std::env::temp_dir().join("eve-router-test-hubs").join("eve-router.json");
         let _ = std::fs::remove_dir_all(cfg_path.parent().unwrap());
@@ -369,6 +374,7 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: Vec::new(),
+            avoid: Default::default(),
         };
         let input = "UALX-3 > Dodixie > UALX-3 > Jita > Turnur > Hek > Rens > Jita > C-J6MT > UALX-3";
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());

@@ -116,6 +116,10 @@ pub struct Config {
     pub unknown_sig_penalty: Option<f32>,
     /// Drop a wormhole with no known signature, instead of a penalty.
     pub unknown_sig_broken: bool,
+    /// The systems that a route avoids, by name.
+    pub avoid_systems: Vec<String>,
+    /// The regions that a route avoids, by name.
+    pub avoid_regions: Vec<String>,
     pub nexum: NexumConfig,
     /// The Thera and Turnur switches. Both are on in a file without them.
     pub eve_scout: Hubs,
@@ -259,6 +263,8 @@ mod tests {
             cap_weight: Some(0.6),
             unknown_sig_penalty: Some(4.0),
             unknown_sig_broken: true,
+            avoid_systems: vec!["Rens".into()],
+            avoid_regions: vec!["Lonetrek".into()],
             nexum: NexumConfig {
                 url: Some("https://nexum.example".into()),
                 key: Some(ApiKey("nxm_key".into())),

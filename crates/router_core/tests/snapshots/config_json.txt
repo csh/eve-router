@@ -13,6 +13,12 @@
   "cap_weight": 0.6,
   "unknown_sig_penalty": 4.0,
   "unknown_sig_broken": true,
+  "avoid_systems": [
+    "Rens"
+  ],
+  "avoid_regions": [
+    "Lonetrek"
+  ],
   "nexum": {
     "url": "https://nexum.example",
     "key": "nxm_key",
