@@ -133,6 +133,12 @@ impl Route {
             k => Stop::Midpoint(k),
         })
     }
+
+    /// The legs of the route: the step of each stop and the step of the next stop, in order.
+    /// A leg has `end - start` jumps.
+    pub fn legs(&self) -> Vec<(usize, usize)> {
+        self.stops.windows(2).map(|w| (w[0], w[1])).collect()
+    }
 }
 
 /// True if the wormhole has no known signature in the system `from`.
@@ -652,6 +658,24 @@ impl<'a> Router<'a> {
 mod tests {
     use super::*;
     use crate::test_support::{hole, sde_dir, universe};
+
+    #[test]
+    fn the_legs_run_from_stop_to_stop() {
+        let route = Route {
+            path: Path { nodes: Vec::new(), edges: Vec::new(), cost: 0 },
+            jumps: 9,
+            wormholes: 0,
+            bridges: 0,
+            bridge_tj: None,
+            bridge_cap_pct: None,
+            unknown_sigs: 0,
+            avoided: 0,
+            stops: vec![0, 3, 5, 9],
+        };
+        assert_eq!(route.legs(), [(0, 3), (3, 5), (5, 9)]);
+        let one = Route { stops: vec![0, 4], ..route };
+        assert_eq!(one.legs(), [(0, 4)]);
+    }
 
     fn router(mode: Mode) -> Router<'static> {
         Router::new(universe(), RouterOptions { mode, ..Default::default() })

@@ -11,9 +11,7 @@ use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers,
 use egui_extras::{Column, TableBuilder};
 use petgraph::graph::NodeIndex;
 use router_core::esi::pilots::pilots_by_step;
-use router_core::labels::{
-    band_counts, band_text, jumps_label, link_label, on_off, pilot_label, route_difference, route_extras, route_text,
-};
+use router_core::labels::{band_counts, band_text, jumps_label, link_label, on_off, pilot_label, route_extras, route_notes, route_text};
 use router_core::route::{Mode, Stop};
 use router_core::sources::FetchError;
 use router_core::sources::nexum::MapInfo;
@@ -315,31 +313,34 @@ impl View {
             n => format!("{n} waypoints"),
         };
         panel(ui, "Route planner", &info, false, |ui| {
+            // The buttons stay at the right edge. The search box takes the space that is left.
             ui.horizontal(|ui| {
-                let width = (ui.available_width() - 480.0).max(200.0);
-                let menu = [Pick::AddWaypoint, Pick::SetStart, Pick::AddFavourite];
-                let picked = self.search.show(ui, &s.uni, width, "Search system…  (Ctrl+F)", &menu);
-                if let Some((pick, node)) = picked {
-                    apply_pick(s, pick, node);
-                }
-                if let Some(list) = self.search.take_list() {
-                    s.add_list(&list);
-                }
-                if ui.button("+ Add waypoint").clicked() {
-                    match self.search.take_highlighted() {
-                        Some(node) => s.add_waypoint(node),
-                        None => self.search.focus(ui),
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    let hint = "Plan for the ship of a character, or for a hull that you pick";
+                    if ui.button(pilot_label(&s.settings, &s.pilots)).on_hover_text(hint).clicked() {
+                        self.popup = Some(Popup::Pilot { filter: String::new() });
                     }
-                }
-                let hint = "Add many systems at once: one name for each line, or names separated by commas";
-                if ui.button("Paste list…").on_hover_text(hint).clicked() {
-                    self.popup = Some(Popup::List { text: String::new(), problems: Vec::new() });
-                }
-                ui.label(theme::header_text("Pilot"));
-                let hint = "Plan for the ship of a character, or for a hull that you pick";
-                if ui.button(pilot_label(&s.settings, &s.pilots)).on_hover_text(hint).clicked() {
-                    self.popup = Some(Popup::Pilot { filter: String::new() });
-                }
+                    ui.label(theme::header_text("Pilot"));
+                    let hint = "Add many systems at once: one name for each line, or names separated by commas";
+                    if ui.button("Paste list…").on_hover_text(hint).clicked() {
+                        self.popup = Some(Popup::List { text: String::new(), problems: Vec::new() });
+                    }
+                    if ui.button("+ Add waypoint").clicked() {
+                        match self.search.take_highlighted() {
+                            Some(node) => s.add_waypoint(node),
+                            None => self.search.focus(ui),
+                        }
+                    }
+                    let width = (ui.available_width() - ui.spacing().item_spacing.x).max(120.0);
+                    let menu = [Pick::AddWaypoint, Pick::SetStart, Pick::AddFavourite];
+                    let picked = self.search.show(ui, &s.uni, width, "Search system…  (Ctrl+F)", &menu);
+                    if let Some((pick, node)) = picked {
+                        apply_pick(s, pick, node);
+                    }
+                    if let Some(list) = self.search.take_list() {
+                        s.add_list(&list);
+                    }
+                });
             });
             ui.add_space(6.0);
             if s.waypoints.is_empty() {
@@ -409,12 +410,14 @@ impl View {
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
-                if ui.add_enabled(s.waypoints.len() > 1, Button::new("Reverse")).clicked() {
-                    s.reverse();
-                }
-                if ui.button("Clear route").clicked() {
-                    s.clear();
-                }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.button("Clear route").clicked() {
+                        s.clear();
+                    }
+                    if ui.add_enabled(s.waypoints.len() > 1, Button::new("Reverse")).clicked() {
+                        s.reverse();
+                    }
+                });
             });
             match edit {
                 Some(Edit::SetStart(i)) => s.set_start(s.waypoints[i]),
@@ -463,34 +466,50 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 }
                 let painter = ui.painter_at(rect);
                 let font = egui::TextStyle::Body.resolve(ui.style());
-                let color = if selected { Color32::WHITE } else { theme::TEXT };
-                // Line 1: the summary, then how the route differs from the first one.
-                let head = format!("#{}  {}{}", i + 1, jumps_label(route.jumps), route_extras(route));
-                let left = rect.left() + 12.0;
-                let top = rect.top() + 4.0;
-                let galley = painter.layout_no_wrap(head.clone(), font.clone(), color);
-                let width = galley.size().x;
-                painter.galley(egui::pos2(left, top), galley, color);
-                let diff = if i == 0 { None } else { route_difference(&s.uni, route, &s.routes[0], 1) };
-                if let Some(diff) = &diff {
-                    let at = egui::pos2(left + width + 10.0, top);
-                    painter.text(at, egui::Align2::LEFT_TOP, diff, font, theme::TEXT_DIM);
-                }
-                // Line 2: the strip, and the risk in words at the right.
-                let counts = band_counts(&s.uni, route);
-                let risk = band_text(counts);
-                let risk_color = if counts.low + counts.null + counts.wormhole == 0 { theme::TEXT_DIM } else { theme::WARN };
                 let small = egui::TextStyle::Small.resolve(ui.style());
-                let risk_galley = painter.layout_no_wrap(risk.clone(), small, risk_color);
-                let risk_width = risk_galley.size().x;
+                let left = rect.left() + 12.0;
+                // Line 1: the number, the jumps and the overlay facts. The jumps of each leg are at the right.
+                let mut x = left;
+                let top = rect.top() + 4.0;
+                let mut put = |text: String, font: &egui::FontId, color: Color32| {
+                    let galley = painter.layout_no_wrap(text, font.clone(), color);
+                    let width = galley.size().x;
+                    painter.galley(egui::pos2(x, top), galley, color);
+                    x += width;
+                };
+                put(format!("#{}  ", i + 1), &font, theme::TEXT_DIM);
+                put(jumps_label(route.jumps), &font, if selected { Color32::WHITE } else { theme::TEXT });
+                let notes = route_notes(route).join(" · ");
+                if !notes.is_empty() {
+                    put(format!("  {notes}"), &small, theme::TEXT_DIM);
+                }
+                let legs: Vec<usize> = route.legs().iter().map(|&(a, b)| b - a).collect();
+                if legs.len() > 1 {
+                    let text = legs.iter().map(usize::to_string).collect::<Vec<_>>().join(" + ");
+                    let galley = painter.layout_no_wrap(text, small.clone(), theme::TEXT_DIM);
+                    let at = egui::pos2(rect.right() - galley.size().x - 10.0, top + 2.0);
+                    painter.galley(at, galley, theme::TEXT_DIM);
+                }
+                // Line 2: the strip. The risk shows at the right only when the route leaves highsec.
+                let counts = band_counts(&s.uni, route);
+                let risk = if counts.low + counts.null + counts.wormhole == 0 { String::new() } else { band_text(counts) };
                 let line_y = rect.top() + 22.0;
-                painter.galley(egui::pos2(rect.right() - risk_width - 10.0, line_y + 1.0), risk_galley, risk_color);
-                let strip_rect = egui::Rect::from_min_max(
-                    egui::pos2(left, line_y),
-                    egui::pos2((rect.right() - risk_width - 20.0).max(left + 20.0), rect.bottom() - 4.0),
-                );
-                strip::paint(&painter, &s.uni, route, strip_rect, None);
-                let tip = [Some(head), diff, Some(risk)].into_iter().flatten().collect::<Vec<_>>().join("\n");
+                let mut strip_right = rect.right() - 10.0;
+                if !risk.is_empty() {
+                    let galley = painter.layout_no_wrap(risk.clone(), small, theme::WARN);
+                    strip_right -= galley.size().x + 10.0;
+                    painter.galley(egui::pos2(rect.right() - galley.size().x - 10.0, line_y + 1.0), galley, theme::WARN);
+                }
+                let strip_rect =
+                    egui::Rect::from_min_max(egui::pos2(left, line_y), egui::pos2(strip_right.max(left + 20.0), rect.bottom() - 4.0));
+                strip::paint(&painter, &s.uni, route, strip_rect);
+                let names = |k: usize| s.uni.name(route.path.nodes[k]);
+                let mut tip = vec![format!("#{}  {}{}", i + 1, jumps_label(route.jumps), route_extras(route))];
+                if legs.len() > 1 {
+                    tip.extend(route.legs().iter().map(|&(a, b)| format!("{} » {}: {}", names(a), names(b), jumps_label(b - a))));
+                }
+                tip.push(band_text(counts));
+                let tip = tip.join("\n");
                 if response.on_hover_text(tip).clicked() {
                     s.selected = i;
                     s.selected_step = None;
@@ -498,6 +517,34 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
             }
         });
     });
+}
+
+/// A row of the route table: a step, or the heading of a leg.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum TableItem {
+    Leg(usize),
+    Step(usize),
+}
+
+/// The rows of the table. A route with two or more legs gets a heading before each leg. The stop
+/// that ends a leg stays in that leg, and the next leg starts with the step after it.
+fn table_items(route: &router_core::route::Route) -> Vec<TableItem> {
+    let steps = route.path.nodes.len();
+    let legs = route.legs();
+    let mut items = Vec::new();
+    if legs.len() > 1 {
+        for (k, &(from, to)) in legs.iter().enumerate() {
+            items.push(TableItem::Leg(k));
+            let first = if k == 0 { from } else { from + 1 };
+            items.extend((first..=to).map(TableItem::Step));
+        }
+    }
+    // One leg, or stops that do not cover the steps: the plain list.
+    let covered = items.iter().filter(|i| matches!(i, TableItem::Step(_))).count();
+    if covered != steps {
+        items = (0..steps).map(TableItem::Step).collect();
+    }
+    items
 }
 
 fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
@@ -528,10 +575,8 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     };
     theme::panel_with(ui, &title, header, true, |ui| {
         let uni = &s.uni;
-        // A click on a dot selects the step, and the table scrolls to it.
-        let scroll = strip::show(ui, uni, route, 24.0, selected_step);
-        clicked = clicked.or(scroll);
-        ui.add_space(4.0);
+        let table_clip =
+            egui::Rect::from_x_y_ranges(ui.min_rect().left()..=ui.available_rect_before_wrap().right(), ui.clip_rect().y_range());
         let header = |ui: &mut Ui, text: &str| _ = ui.label(theme::header_text(text));
         let mut table = TableBuilder::new(ui)
             .id_salt("route-table")
@@ -549,9 +594,6 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
             .column(Column::initial(170.0).at_least(90.0).resizable(true))
             .column(Column::remainder().at_least(120.0))
             .auto_shrink(false);
-        if let Some(step) = scroll {
-            table = table.scroll_to_row(step, Some(Align::Center));
-        }
         table
             .header(20.0, |mut row| {
                 let pilots_header = show_pilots.then_some("Pilots");
@@ -562,8 +604,36 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
             .body(|body| {
                 let systems: Vec<u32> = route.path.nodes.iter().map(|&n| uni.system(n).id).collect();
                 let by_step = pilots_by_step(&systems, &characters, None);
-                body.rows(22.0, route.path.nodes.len(), |mut row| {
-                    let step = row.index();
+                let items = table_items(route);
+                let heights: Vec<f32> = items.iter().map(|item| if matches!(item, TableItem::Leg(_)) { 28.0 } else { 22.0 }).collect();
+                body.heterogeneous_rows(heights.into_iter(), |mut row| {
+                    let step = match items[row.index()] {
+                        TableItem::Step(step) => step,
+                        TableItem::Leg(k) => {
+                            // A heading for the leg: where it starts, where it ends and how many jumps it has.
+                            let (from, to) = route.legs()[k];
+                            let text = format!(
+                                "{} » {}  ·  {}",
+                                uni.name(route.path.nodes[from]),
+                                uni.name(route.path.nodes[to]),
+                                jumps_label(to - from)
+                            );
+                            // A table cell clips its text. The heading is wider than the first column, so
+                            // it draws on the layer of the cell with the clip of the whole table row.
+                            row.col(|ui| {
+                                let cell = ui.max_rect();
+                                let clip = egui::Rect::from_x_y_ranges(table_clip.x_range(), ui.clip_rect().y_range());
+                                let painter = ui.ctx().layer_painter(ui.layer_id()).with_clip_rect(clip);
+                                if k > 0 {
+                                    painter.hline(table_clip.x_range(), cell.top() + 1.0, egui::Stroke::new(1.0, theme::LINE));
+                                }
+                                let font = egui::FontId::proportional(11.0);
+                                let at = egui::pos2(cell.left(), cell.center().y + 3.0);
+                                painter.text(at, egui::Align2::LEFT_CENTER, text.to_uppercase(), font, theme::TEXT_DIM);
+                            });
+                            return;
+                        }
+                    };
                     let sys = uni.system(route.path.nodes[step]);
                     let via = match step.checked_sub(1).map(|i| route.path.edges[i]) {
                         // Oxanium and the egui fallback fonts have no right arrow glyph. Oxanium has "»".
@@ -813,6 +883,37 @@ pub fn splash(ui: &mut Ui, error: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn route_with_stops(steps: usize, stops: Vec<usize>) -> router_core::route::Route {
+        use router_core::route::{Path, Route};
+        let nodes = (0..steps).map(NodeIndex::new).collect();
+        let path = Path { nodes, edges: Vec::new(), cost: 0 };
+        Route {
+            path,
+            jumps: steps - 1,
+            wormholes: 0,
+            bridges: 0,
+            bridge_tj: None,
+            bridge_cap_pct: None,
+            unknown_sigs: 0,
+            avoided: 0,
+            stops,
+        }
+    }
+
+    #[test]
+    fn the_table_groups_the_steps_by_leg() {
+        use TableItem::{Leg, Step};
+        // Two legs: the stop in the middle ends the first leg.
+        let items = table_items(&route_with_stops(5, vec![0, 2, 4]));
+        assert_eq!(items, [Leg(0), Step(0), Step(1), Step(2), Leg(1), Step(3), Step(4)]);
+        // One leg: no heading.
+        let items = table_items(&route_with_stops(3, vec![0, 2]));
+        assert_eq!(items, [Step(0), Step(1), Step(2)]);
+        // Stops that do not reach the last step: the plain list.
+        let items = table_items(&route_with_stops(5, vec![0, 2, 3]));
+        assert_eq!(items, [Step(0), Step(1), Step(2), Step(3), Step(4)]);
+    }
 
     #[test]
     fn the_route_list_gives_way_to_the_table() {

@@ -253,21 +253,22 @@ Measured in the release build with 6 waypoints. The 1260 x 560 window used to sh
 
 | Window | Before | After |
 |---|---|---|
-| 1260 x 560 | 0 table rows. List cut at 2.5 rows. | 3 table rows, the strip, and the first route in full. |
+| 1260 x 560 | 0 table rows. List cut at 2.5 rows. | 3 table rows, and the first route in full. |
 | 1260 x 820 | 7 table rows. List cut at 2.5 rows. | 10 table rows. The list shows 3 routes in full. |
 
-What changed:
+What changed (after the first review of the result):
 
-- The route strip draws in the route table and in each route list row. It follows the game: one square for each system (10 px, 2 px gap), and a plus in place of the square for each system the pilot gave (start, midpoints, destination). The strip has no border. A wormhole or bridge jump shows as a purple or blue bar below the square. The selected step shows as a bar above its square. A click on a square selects the step and scrolls the table to it. A hover shows the system, its security and the link kind.
-- The plus is white. The game's plus color is not confirmed. Change `theme::TEXT` in `strip.rs` if the game uses another color.
-- Each route list row has two lines. Line 1 gives the summary and how the route differs from #1, for example "Leaves #1 at Onga, via Pator". Line 2 gives the strip and the risk in words, for example "7 lowsec".
-- The route table header shows the same risk text.
-- The planner closes its waypoint list when a route exists. A button opens it again. The Pilot button moved to the search row.
+- The route strip draws in each route list row. It follows the game: one square for each system (10 px, 2 px gap), and a plus in place of the square for each system the pilot gave (start, midpoints, destination). The plus has the color of the security of its system. The strip has no border. A wormhole or bridge jump shows as a purple or blue bar below the square. The route table has no strip.
+- A route list row has two lines. Line 1 gives the number, the jumps and the overlay facts. At the right it gives the jumps of each leg, for example "1 + 12 + 11 + 10 + 8". Line 2 gives the strip. The risk ("8 lowsec") shows only when the route leaves highsec.
+- The "Leaves #1 at ..." text is gone. A leg is the part of a route between two given systems.
+- The route table groups the steps by leg when the route has two or more legs. A heading before each leg reads "PERIMETER » AMARR · 12 JUMPS". The stop that ends a leg stays in that leg.
+- The planner closes its waypoint list when a route exists. A button opens it again. The buttons of the planner ("+ Add waypoint", "Paste list…", Pilot, Reverse, "Clear route") stay at the right edge.
 - The route list gives up height to the route table when the window is short. The search time label stays.
-- Core helpers `band_counts`, `band_text` and `route_difference` have tests.
+- Core helpers `band_counts`, `band_text`, `Route::legs` and `route_notes` have tests.
 
 Open points:
 
 - At 560 px high the table shows 3 rows, not the 200 px target. The rest needs the layout change of step 4.
 - F19 (the empty Pilots column) is not done.
+- Two routes can have the same jumps and the same legs. They then differ inside a leg, and the list does not show where. A later change can dim the squares that two routes share.
 - The strip uses a space of 4 to 12 px for each system. A route of more than 210 systems draws past its box at 840 px wide. Routes of that length are not in the test data.

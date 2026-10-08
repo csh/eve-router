@@ -150,8 +150,9 @@ pub fn jumps_label(jumps: usize) -> String {
     if jumps == 1 { "1 jump".into() } else { format!("{jumps} jumps") }
 }
 
-/// The overlay part of a route summary, for example " (2 wormholes, 1 jump bridge, 36 TJ)".
-pub fn route_extras(route: &Route) -> String {
+/// The overlay facts of a route, for example "2 wormholes", "1 jump bridge", "36 TJ". Empty for a
+/// route of gates only.
+pub fn route_notes(route: &Route) -> Vec<String> {
     let mut parts = Vec::new();
     if route.wormholes > 0 {
         let s = if route.wormholes == 1 { "" } else { "s" };
@@ -173,6 +174,12 @@ pub fn route_extras(route: &Route) -> String {
     if route.avoided > 0 {
         parts.push(format!("{} avoided system{}", route.avoided, if route.avoided == 1 { "" } else { "s" }));
     }
+    parts
+}
+
+/// The overlay part of a route summary, for example " (2 wormholes, 1 jump bridge, 36 TJ)".
+pub fn route_extras(route: &Route) -> String {
+    let parts = route_notes(route);
     if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
 }
 
@@ -211,23 +218,6 @@ pub fn band_text(c: BandCounts) -> String {
         .map(|(n, name)| format!("{n} {name}"))
         .collect();
     if parts.is_empty() { "highsec only".into() } else { parts.join(", ") }
-}
-
-/// How `route` differs from `first`, the route with number `first_number`, so that two routes with
-/// the same jump count read differently. `None` if the paths are equal.
-pub fn route_difference(uni: &Universe, route: &Route, first: &Route, first_number: usize) -> Option<String> {
-    let (a, b) = (&route.path, &first.path);
-    let i = a.edges.iter().zip(&b.edges).position(|(x, y)| x != y)?;
-    let (from, to) = (uni.name(a.nodes[i]), uni.name(a.nodes[i + 1]));
-    if a.nodes[i + 1] == b.nodes[i + 1] {
-        let kind = |e| match uni.graph[e] {
-            Link::Stargate => "gate",
-            Link::Wormhole(_) => "wormhole",
-            Link::JumpBridge => "jump bridge",
-        };
-        return Some(format!("{from} to {to} by {}, not {}", kind(a.edges[i]), kind(b.edges[i])));
-    }
-    Some(format!("Leaves #{first_number} at {from}, via {to}"))
 }
 
 /// The text of route number `index` (from 0), as `--print` writes it: the summary line, then
@@ -330,21 +320,6 @@ mod tests {
         let mixed = BandCounts { high: 5, low: 3, null: 1, wormhole: 2 };
         assert_eq!(band_text(mixed), "3 lowsec, 1 nullsec, 2 wormhole space");
         assert_eq!(band_text(BandCounts { low: 1, ..Default::default() }), "1 lowsec");
-    }
-
-    #[test]
-    fn a_route_differs_from_the_first_where_it_leaves_it() {
-        let (uni, routes) = jita_amarr_routes();
-        assert_eq!(route_difference(&uni, &routes[0], &routes[0], 1), None);
-        let text = route_difference(&uni, &routes[1], &routes[0], 1).unwrap();
-        assert!(text.starts_with("Leaves #1 at Jita, via "), "{text}");
-        // The same systems with another link: a gate and a wormhole between the same two systems.
-        let perimeter = crate::wormhole::Wormhole { sig_a: Some("ABC-123".into()), ..crate::test_support::hole(30000142, 30000144) };
-        let uni = crate::test_support::snapshot(vec![perimeter]).uni;
-        let nodes = [uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap()];
-        let routes = crate::test_support::settings(&uni, None).router(&uni, crate::test_support::FIXTURE_TIME).routes(&nodes, 2).unwrap();
-        assert_eq!(routes[0].path.nodes, routes[1].path.nodes);
-        assert_eq!(route_difference(&uni, &routes[1], &routes[0], 1).as_deref(), Some("Jita to Perimeter by wormhole, not gate"));
     }
 
     #[test]
