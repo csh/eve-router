@@ -7,6 +7,7 @@ use router_core::config::{self, Config};
 use router_core::esi::active::active_path;
 use router_core::esi::pilots::Pilots;
 use router_core::labels::Shortcuts;
+use router_core::log::{self, LogEntry};
 use router_core::refresh::{self, Refresher, Setup, Snapshot, kept_route, route_note};
 use router_core::route::{Route, Stop};
 use router_core::settings::{Settings, split_systems};
@@ -38,6 +39,12 @@ const MIN_FRAME_TIME: Duration = Duration::from_millis(16);
 
 /// The quiet time after the last change of a dragged value, before the app searches and saves.
 pub const APPLY_DELAY: Duration = Duration::from_millis(500);
+
+/// The least time between two manual refreshes. A Nexum map costs one request for each system.
+pub const REFRESH_GAP: Duration = Duration::from_secs(15);
+pub const REFRESHING: &str = "Refreshing the wormholes…";
+pub const REFRESH_WAIT: &str = "Refreshed less than 15 s ago";
+pub const REFRESH_STOPPED: &str = "The refresh worker stopped";
 
 /// The error when the load thread stops without a result. A panic in the load does this.
 const LOAD_STOPPED: &str = "The startup load stopped with an internal error. Start the router from a terminal to see the cause.";
@@ -87,7 +94,7 @@ fn load(ctx: egui::Context) -> Result<Session, String> {
     let mut startup_lines = Vec::new();
     let startup::Loaded { snapshot, base, report, types, .. } =
         startup::finish(pending, &sde_dir, None, |outcome| startup_lines.extend(outcome.message(&sde_dir)))?;
-    let Snapshot { uni, shortcuts, all } = snapshot;
+    let Snapshot { uni, shortcuts, all, log } = snapshot;
     let settings = Settings::from_config(&cfg, &uni)?;
     // The worker gets the wormholes again each 5 minutes, and wakes the window after each refresh.
     let wake = ctx.clone();
@@ -96,6 +103,7 @@ fn load(ctx: egui::Context) -> Result<Session, String> {
     let refresher = Refresher::start(setup, router_core::wormhole::now, move || wake.request_repaint());
     let mut session = Session::new(uni, settings, cfg, cfg_path.clone(), shortcuts);
     session.wormhole_data = all;
+    session.log = log;
     session.refresher = Some(refresher);
     session.startup_lines = startup_lines;
     // A tracker event or a login result repaints the window.
@@ -117,8 +125,12 @@ pub struct Session {
     pub shortcuts: Shortcuts,
     /// The wormhole data of each source, from the startup or the last refresh.
     pub wormhole_data: Vec<SourceData>,
+    /// The rows of the Log window: the fetches since the start, newest last.
+    pub log: Vec<LogEntry>,
     /// The refresh worker. `None` in the tests, and after the worker stops.
     refresher: Option<Refresher>,
+    /// The time of the last manual refresh.
+    refreshed_at: Option<Instant>,
     /// The note about the selected route after a refresh. It stays until the next search or
     /// refresh, because the status bar timer does not clear it.
     pub note: String,
@@ -157,7 +169,9 @@ impl Session {
             cfg_path: cfg_path.clone(),
             shortcuts,
             wormhole_data: Vec::new(),
+            log: Vec::new(),
             refresher: None,
+            refreshed_at: None,
             note: String::new(),
             startup_lines: Vec::new(),
             waypoints: Vec::new(),
@@ -268,6 +282,7 @@ impl Session {
         let old_uni = std::mem::replace(&mut self.uni, snap.uni);
         self.shortcuts = snap.shortcuts;
         self.wormhole_data = snap.all;
+        log::push(&mut self.log, snap.log);
         if !self.waypoints.is_empty() {
             let old = self.selected_route().map(|r| r.path.clone());
             let old_step = self.selected_step;
@@ -300,8 +315,26 @@ impl Session {
             Err(TryRecvError::Disconnected) => {
                 self.refresher = None;
                 self.note = refresh::STOPPED.into();
+                let row = LogEntry { time: router_core::wormhole::now(), op: "refresh", ok: false, reason: "the worker stopped".into() };
+                log::push(&mut self.log, [row]);
             }
         }
+    }
+
+    /// Ask the worker to refresh the wormholes now, also when a cache is fresh. Two calls in
+    /// `REFRESH_GAP` send one message.
+    pub fn refresh_now(&mut self, now: Instant) {
+        let Some(refresher) = &self.refresher else {
+            self.status = REFRESH_STOPPED.into();
+            return;
+        };
+        if self.refreshed_at.is_some_and(|at| now.saturating_duration_since(at) < REFRESH_GAP) {
+            self.status = REFRESH_WAIT.into();
+            return;
+        }
+        self.refreshed_at = Some(now);
+        refresher.refresh();
+        self.status = REFRESHING.into();
     }
 
     /// The text of the Nexum map row: the name in the map list, else the name in the Nexum
@@ -475,6 +508,7 @@ mod tests {
     use super::*;
     use router_core::config::NexumConfig;
     use router_core::labels::{jumps_label, route_extras};
+    use router_core::log::LogEntry;
     use router_core::refresh::{Control, NEXUM_LOADING, Refresher, STOPPED};
     use router_core::test_support::{FIXTURE_TIME, hole, overlay_universe, settings, snapshot};
     use router_core::wormhole::{SourceData, SourceId, Wormhole};
@@ -592,6 +626,55 @@ mod tests {
         s.poll_refresh();
         assert_eq!(s.note, STOPPED);
         assert!(s.refresher.is_none());
+    }
+
+    #[test]
+    fn a_refresh_adds_its_rows_to_the_log() {
+        let mut s = session("log-rows");
+        let row = |time| LogEntry { time, op: "nexum.fetch", ok: true, reason: "1 wormhole".into() };
+        let mut snap = snapshot(Vec::new());
+        snap.log = vec![row(1)];
+        s.apply_snapshot(snap);
+        let mut snap = snapshot(Vec::new());
+        snap.log = vec![row(2)];
+        s.apply_snapshot(snap);
+        assert_eq!(s.log, [row(1), row(2)]);
+    }
+
+    #[test]
+    fn a_stopped_worker_gives_a_log_row() {
+        let (refresher, snapshots, _control) = Refresher::fake();
+        let mut s = session("log-stopped");
+        s.refresher = Some(refresher);
+        drop(snapshots);
+        s.poll_refresh();
+        assert_eq!(s.log.len(), 1);
+        assert_eq!((s.log[0].op, s.log[0].ok, s.log[0].reason.as_str()), ("refresh", false, "the worker stopped"));
+    }
+
+    #[test]
+    fn refresh_now_asks_the_worker_and_waits_between_two_calls() {
+        let (refresher, _snapshots, control) = Refresher::fake();
+        let mut s = session("refresh-now");
+        s.refresher = Some(refresher);
+        let start = Instant::now();
+        s.refresh_now(start);
+        assert!(matches!(control.try_recv(), Ok(Control::Refresh)));
+        assert_eq!(s.status, REFRESHING);
+        // A second call soon after sends nothing.
+        s.refresh_now(start + Duration::from_secs(5));
+        assert!(control.try_recv().is_err());
+        assert_eq!(s.status, REFRESH_WAIT);
+        // After the gap, the call sends a message again.
+        s.refresh_now(start + REFRESH_GAP);
+        assert!(matches!(control.try_recv(), Ok(Control::Refresh)));
+    }
+
+    #[test]
+    fn refresh_now_without_a_worker_says_so() {
+        let mut s = session("refresh-none-worker");
+        s.refresh_now(Instant::now());
+        assert_eq!(s.status, REFRESH_STOPPED);
     }
 
     #[test]

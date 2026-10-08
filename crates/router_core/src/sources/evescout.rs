@@ -3,6 +3,7 @@
 //! The feed needs no key. The router fetches it at each startup, so the Thera and Turnur
 //! switches work at once, with no restart.
 
+use crate::log::{self, LogEntry};
 use crate::sources::{self, FetchError};
 use crate::wormhole::{Expiry, Size, SourceData, SourceId, Wormhole, parse_utc};
 use crate::wormhole_types::WormholeTypes;
@@ -108,6 +109,8 @@ pub struct Load {
     pub report: EveScoutReport,
     /// A problem for the status line, for example "EVE-Scout offline, feed from 14:02".
     pub warning: Option<String>,
+    /// The rows for the log: one for the fetch, and for Nexum one for the failed signatures.
+    pub log: Vec<LogEntry>,
 }
 
 /// The EVE-Scout load, between the start and the end of the SDE load.
@@ -120,9 +123,19 @@ pub enum Pending {
 
 /// Start the EVE-Scout load: a fresh cache, else a fetch of `url` on a thread.
 pub fn start(url: &str, cache_path: PathBuf, now: u64) -> Pending {
+    start_with(url, cache_path, now, true)
+}
+
+/// Start the EVE-Scout load, also when the cache is fresh. A manual refresh needs this.
+pub fn start_fetch(url: &str, cache_path: PathBuf, now: u64) -> Pending {
+    start_with(url, cache_path, now, false)
+}
+
+/// Start the EVE-Scout load. `use_fresh` false skips the fresh-cache check.
+fn start_with(url: &str, cache_path: PathBuf, now: u64, use_fresh: bool) -> Pending {
     let origin = url.to_string();
     let cache = sources::read_cache(&cache_path).filter(|d| d.source == SourceId::EveScout && d.origin.as_ref() == Some(&origin));
-    if let Some(data) = cache.as_ref().filter(|d| sources::cache_is_fresh(d, now)) {
+    if use_fresh && let Some(data) = cache.as_ref().filter(|d| sources::cache_is_fresh(d, now)) {
         return Pending::Cache(data.clone());
     }
     let thread_url = origin.clone();
@@ -133,7 +146,10 @@ pub fn start(url: &str, cache_path: PathBuf, now: u64) -> Pending {
 /// Finish the EVE-Scout load after the SDE loads. A fetch problem gives the cache and a warning.
 pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTypes) -> Load {
     match pending {
-        Pending::Cache(data) => Load { data: Some(data), ..Load::default() },
+        Pending::Cache(data) => {
+            let log = vec![LogEntry { time: crate::wormhole::now(), op: "evescout.fetch", ok: true, reason: "cache is fresh".into() }];
+            Load { data: Some(data), log, ..Load::default() }
+        }
         Pending::Fetch { thread, started, origin, cache, cache_path } => {
             let fetched = thread.join().unwrap_or_else(|_| Err(FetchError::Offline("the fetch thread failed".into())));
             let mut report = EveScoutReport::default();
@@ -145,7 +161,12 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
                 Ok(data)
             });
             let chosen = sources::choose(SourceId::EveScout, converted, cache, &cache_path);
-            Load { data: chosen.data, report, warning: chosen.warning }
+            let (ok, reason) = match &chosen.error {
+                Some(cause) => (false, cause.clone()),
+                None => (true, log::wormholes(chosen.data.as_ref().map_or(0, |d| d.holes.len()))),
+            };
+            let log = vec![LogEntry { time: started, op: "evescout.fetch", ok, reason }];
+            Load { data: chosen.data, report, warning: chosen.warning, log }
         }
     }
 }
@@ -269,6 +290,19 @@ mod tests {
         assert_eq!(load.data, Some(old));
         let warning = load.warning.unwrap();
         assert!(warning.starts_with("EVE-Scout offline, feed from "), "{warning}");
+    }
+
+    #[test]
+    fn the_log_records_each_fetch() {
+        let (url, _) = serve("503 Service Unavailable", "{}", Duration::ZERO);
+        let load = finish(start(&url, temp("eve-router-test-scout-log-bad"), FETCHED), |_| true, &types());
+        assert_eq!((load.log.len(), load.log[0].op, load.log[0].ok, load.log[0].time), (1, "evescout.fetch", false, FETCHED));
+        assert!(load.log[0].reason.contains("503"), "{}", load.log[0].reason);
+
+        let (url, _) = serve("200 OK", &fixture_text(), Duration::ZERO);
+        let load = finish(start(&url, temp("eve-router-test-scout-log-ok"), FETCHED), |_| true, &types());
+        let holes = load.data.as_ref().unwrap().holes.len();
+        assert_eq!(load.log, [LogEntry { time: FETCHED, op: "evescout.fetch", ok: true, reason: format!("{holes} wormholes") }]);
     }
 
     #[test]

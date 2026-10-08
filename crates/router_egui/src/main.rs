@@ -5,6 +5,7 @@
 //! system search in place of the text input.
 
 mod app;
+mod log_window;
 mod pilots_view;
 mod search;
 mod settings_window;

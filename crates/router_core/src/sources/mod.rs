@@ -27,6 +27,16 @@ pub enum FetchError {
 }
 
 impl FetchError {
+    /// The cause, for the log. The status line has a longer text.
+    pub fn reason(&self, source: SourceId) -> String {
+        match (self, source) {
+            (FetchError::Auth, SourceId::EveScout) => "request refused".into(),
+            (FetchError::Auth, SourceId::Nexum) => "bad API key or no access to the map".into(),
+            (FetchError::NotFound, _) => "map not found".into(),
+            (FetchError::Offline(cause), _) => cause.clone(),
+        }
+    }
+
     /// The status line text. `cached_at` is the fetch time of the cache in use.
     pub fn status(&self, source: SourceId, cached_at: Option<u64>) -> String {
         let name = source.label();
@@ -108,6 +118,8 @@ pub fn cache_is_fresh(data: &SourceData, now: u64) -> bool {
 pub struct Chosen {
     pub data: Option<SourceData>,
     pub warning: Option<String>,
+    /// The cause of a failed fetch, for the log.
+    pub error: Option<String>,
 }
 
 /// Choose between a fetch result and the cache. A success writes the cache.
@@ -116,11 +128,11 @@ pub fn choose(source: SourceId, fetched: Result<SourceData, FetchError>, cache: 
     match fetched {
         Ok(data) => {
             let warning = write_cache(cache_path, &data).err().map(|e| format!("Cannot write the wormhole cache: {e}"));
-            Chosen { data: Some(data), warning }
+            Chosen { data: Some(data), warning, error: None }
         }
         Err(e) => {
             let warning = Some(e.status(source, cache.as_ref().map(|c| c.fetched_at)));
-            Chosen { data: cache, warning }
+            Chosen { data: cache, warning, error: Some(e.reason(source)) }
         }
     }
 }

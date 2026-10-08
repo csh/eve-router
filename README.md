@@ -21,6 +21,7 @@ With this in mind, some of the code will inevitably be dogshit, however I am car
 - Wormhole connections from a Nexum map, fetched at startup. The router uses the wormhole size, mass status and expiry. This needs a hosted Nexum instance and an API key. Without them, the router uses only the EVE-Scout wormholes.
 - The signature of each wormhole jump, for example `Wormhole · Sig. ABC · XL`.
 - Thera and Turnur wormholes from the public [EVE-Scout](https://www.eve-scout.com/) feed, fetched at startup. Each hub has its own switch.
+- GUI: `F5` or the Refresh button fetches the wormholes at once, with at least 15 seconds between two fetches. The Log button opens a window with one row for each fetch and its result.
 
 ### Work in Progress
 

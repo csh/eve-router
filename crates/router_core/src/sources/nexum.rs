@@ -4,6 +4,7 @@
 //! `server/src/data/whLifetimes.ts`).
 
 use crate::config::NexumConfig;
+use crate::log::{self, LogEntry};
 use crate::sources::{self, FetchError};
 use crate::wormhole::{Expiry, HOUR, MassStatus, Size, SourceData, SourceId, Wormhole, parse_utc};
 use crate::wormhole_types::WormholeTypes;
@@ -376,6 +377,8 @@ pub struct Load {
     pub report: NexumReport,
     /// A problem for the status line, for example "Nexum offline, map from 14:02".
     pub warning: Option<String>,
+    /// The rows for the log: one for the fetch, and for Nexum one for the failed signatures.
+    pub log: Vec<LogEntry>,
 }
 
 /// The Nexum load, between the start and the end of the SDE load.
@@ -441,7 +444,10 @@ fn start_with(cfg: &NexumConfig, cache_path: PathBuf, now: u64, use_fresh: bool)
 pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTypes) -> Load {
     match pending {
         Pending::None => Load::default(),
-        Pending::Cache(data) => Load { data: Some(data), ..Load::default() },
+        Pending::Cache(data) => {
+            let log = vec![LogEntry { time: crate::wormhole::now(), op: "nexum.fetch", ok: true, reason: "cache is fresh".into() }];
+            Load { data: Some(data), log, ..Load::default() }
+        }
         Pending::Fetch { thread, started, origin, cache, cache_path } => {
             let fetched = thread.join().unwrap_or_else(|_| Err(FetchError::Offline("the fetch thread failed".into())));
             let mut report = NexumReport::default();
@@ -460,7 +466,16 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
                 n => Some(format!("Nexum signatures: {n} systems not loaded")),
             };
             let warnings: Vec<String> = chosen.warning.into_iter().chain(sig_warning).collect();
-            Load { data: chosen.data, report, warning: (!warnings.is_empty()).then(|| warnings.join(" · ")) }
+            let row = |op, ok, reason: String| LogEntry { time: started, op, ok, reason };
+            let mut log = vec![match (&chosen.error, &chosen.data) {
+                (Some(cause), _) => row("nexum.fetch", false, cause.clone()),
+                (None, data) => row("nexum.fetch", true, log::wormholes(data.as_ref().map_or(0, |d| d.holes.len()))),
+            }];
+            if sig_failures > 0 {
+                let reason = if sig_failures == 1 { "1 system not loaded".into() } else { format!("{sig_failures} systems not loaded") };
+                log.push(row("nexum.signatures", false, reason));
+            }
+            Load { data: chosen.data, report, warning: (!warnings.is_empty()).then(|| warnings.join(" · ")), log }
         }
     }
 }
@@ -841,6 +856,45 @@ mod tests {
         assert_eq!(load.warning.as_deref(), Some("Nexum signatures: 1 system not loaded"));
         // The cache holds the signatures.
         assert_eq!(crate::sources::read_cache(&path), Some(data));
+    }
+
+    #[test]
+    fn the_log_records_the_fetch_and_the_failed_signatures() {
+        let (url, _) = crate::test_support::serve_routes(sig_routes());
+        let load = finish(start(&cfg(&url), temp("eve-router-test-log-ok"), FETCHED), |id| id != 39_999_999, &types());
+        let holes = load.data.as_ref().unwrap().holes.len();
+        let row = |op, ok, reason: &str| LogEntry { time: FETCHED, op, ok, reason: reason.into() };
+        assert_eq!(
+            load.log,
+            [row("nexum.fetch", true, &format!("{holes} wormholes")), row("nexum.signatures", false, "1 system not loaded")]
+        );
+    }
+
+    #[test]
+    fn the_log_gives_the_reason_of_a_failed_fetch() {
+        let (url, _) = serve("401 Unauthorized", "{}", Duration::ZERO);
+        let load = finish(start(&cfg(&url), temp("eve-router-test-log-auth"), FETCHED), |_| true, &types());
+        let reason = "bad API key or no access to the map";
+        assert_eq!(load.log, [LogEntry { time: FETCHED, op: "nexum.fetch", ok: false, reason: reason.into() }]);
+    }
+
+    #[test]
+    fn the_log_notes_a_fresh_cache() {
+        let path = temp("eve-router-test-log-cache");
+        let url = "http://127.0.0.1:9";
+        let cached = SourceData {
+            source: SourceId::Nexum,
+            fetched_at: crate::wormhole::now() - 60,
+            origin: map_url(&cfg(url)),
+            name: None,
+            holes: Vec::new(),
+        };
+        crate::sources::write_cache(&path, &cached).unwrap();
+        let load = finish(start(&cfg(url), path, crate::wormhole::now()), |_| true, &types());
+        let row = &load.log[..];
+        assert_eq!((row.len(), row[0].op, row[0].ok, row[0].reason.as_str()), (1, "nexum.fetch", true, "cache is fresh"));
+        // No settings: no request, no row.
+        assert!(finish(Pending::None, |_| true, &types()).log.is_empty());
     }
 
     #[test]

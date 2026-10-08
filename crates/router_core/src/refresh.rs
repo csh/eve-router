@@ -3,6 +3,7 @@
 
 use crate::config::NexumConfig;
 use crate::labels::Shortcuts;
+use crate::log::LogEntry;
 use crate::overlay::OverlayReport;
 use crate::route::{Path, Route};
 use crate::sources::{self, evescout, nexum};
@@ -30,6 +31,8 @@ pub struct Snapshot {
     pub shortcuts: Shortcuts,
     /// The wormhole data of each source.
     pub all: Vec<SourceData>,
+    /// The log rows of the fetches of this load.
+    pub log: Vec<LogEntry>,
 }
 
 /// Build a map: a copy of `base` with the merged wormholes of `wh` and `scout` at `now`.
@@ -40,7 +43,8 @@ pub fn build(base: &Universe, report: &OverlayReport, wh: &nexum::Load, scout: &
     let all: Vec<SourceData> = wh.data.iter().chain(&scout.data).cloned().collect();
     let count = uni.add_wormholes(&wormhole::merge(&all, now));
     let shortcuts = Shortcuts::new(&uni, report, wh, scout);
-    (Snapshot { uni: Arc::new(uni), shortcuts, all }, count)
+    let log = wh.log.iter().chain(&scout.log).cloned().collect();
+    (Snapshot { uni: Arc::new(uni), shortcuts, all, log }, count)
 }
 
 /// The identity of a route that two maps share: each system, and each link between them.
@@ -155,6 +159,8 @@ impl Setup {
 pub enum Control {
     /// Use these Nexum settings. Refresh at once with no fresh-cache check, then start a new interval.
     Nexum(NexumConfig),
+    /// Refresh at once with no fresh-cache check, then start a new interval.
+    Refresh,
 }
 
 /// The handle of the refresh worker. A drop of the handle stops the worker.
@@ -186,6 +192,11 @@ impl Refresher {
     /// Use new Nexum settings, and refresh at once. A stopped worker ignores the message.
     pub fn nexum(&self, cfg: NexumConfig) {
         let _ = self.control.send(Control::Nexum(cfg));
+    }
+
+    /// Refresh at once, also when a cache is fresh. A stopped worker ignores the message.
+    pub fn refresh(&self) {
+        let _ = self.control.send(Control::Refresh);
     }
 
     /// The newest snapshot since the last call. An older snapshot that waits goes away.
@@ -225,6 +236,7 @@ impl Worker {
                     self.setup.nexum = cfg;
                     true
                 }
+                Ok(Control::Refresh) => true,
                 Err(RecvTimeoutError::Timeout) => false,
                 // The app dropped the Refresher.
                 Err(RecvTimeoutError::Disconnected) => return,
@@ -236,7 +248,7 @@ impl Worker {
         }
     }
 
-    /// One refresh at `now`. `force` skips the fresh-cache check of Nexum.
+    /// One refresh at `now`. `force` skips the fresh-cache check of both sources.
     fn tick(&mut self, now: u64, force: bool) -> Snapshot {
         let s = &self.setup;
         let pending = if force {
@@ -244,7 +256,11 @@ impl Worker {
         } else {
             nexum::start(&s.nexum, s.nexum_cache.clone(), now)
         };
-        let scout_pending = evescout::start(&s.scout_url, s.scout_cache.clone(), now);
+        let scout_pending = if force {
+            evescout::start_fetch(&s.scout_url, s.scout_cache.clone(), now)
+        } else {
+            evescout::start(&s.scout_url, s.scout_cache.clone(), now)
+        };
         let known = |id: u32| s.base.by_id.contains_key(&id);
         let mut wh = nexum::finish(pending, known, &s.types);
         let mut scout = evescout::finish(scout_pending, known, &s.types);
@@ -264,6 +280,7 @@ impl Worker {
 mod tests {
     use super::*;
     use crate::config::ApiKey;
+    use crate::log::LogEntry;
     use crate::sources::CACHE_FRESH_SECS;
     use crate::test_support::{FIXTURE_TIME, hole, serve, serve_live, serve_routes, shared_universe, universe};
     use crate::universe::Link;
@@ -379,6 +396,15 @@ mod tests {
         assert_eq!(snap.all.len(), 1);
     }
 
+    #[test]
+    fn build_collects_the_log_rows_of_both_sources() {
+        let row = |op, reason: &str| LogEntry { time: 7, op, ok: true, reason: reason.into() };
+        let wh = nexum::Load { log: vec![row("nexum.fetch", "2 wormholes")], ..Default::default() };
+        let scout = evescout::Load { log: vec![row("evescout.fetch", "1 wormhole")], ..Default::default() };
+        let (snap, _) = build(universe(), &OverlayReport::default(), &wh, &scout, 0);
+        assert_eq!(snap.log, [row("nexum.fetch", "2 wormholes"), row("evescout.fetch", "1 wormhole")]);
+    }
+
     /// An EVE-Scout feed with one Thera wormhole to `to`. It has no expiry, so the test clock cannot end it.
     fn feed(to: u32) -> String {
         format!(
@@ -481,6 +507,29 @@ mod tests {
         let data = snap.all.iter().find(|d| d.source == SourceId::Nexum).expect("no Nexum data");
         assert!(!data.holes.is_empty());
         assert_eq!(data.name.as_deref(), Some("Test Map"));
+    }
+
+    #[test]
+    fn a_refresh_message_fetches_both_sources_and_skips_the_fresh_caches() {
+        let (url, _) = serve_routes(HashMap::from([("/scout".to_string(), feed(JITA))]));
+        let scout_url = format!("{url}/scout");
+        // One hour: a snapshot in this test comes from the message, not from the interval.
+        let setup = setup("eve-router-test-refresh-now", scout_url.clone(), Duration::from_secs(3600));
+        // A fresh cache of the same feed, with no wormholes. A normal start uses it.
+        let cached = SourceData {
+            source: SourceId::EveScout,
+            fetched_at: FIXTURE_TIME - 60,
+            origin: Some(scout_url),
+            name: None,
+            holes: Vec::new(),
+        };
+        sources::write_cache(&setup.scout_cache, &cached).unwrap();
+        let r = Refresher::start(setup, || FIXTURE_TIME, || {});
+        r.refresh();
+        let snap = r.recv_timeout(Duration::from_secs(10)).expect("no refresh after the message");
+        assert!(has_hole(&snap.uni, THERA, JITA));
+        let fetch = LogEntry { time: FIXTURE_TIME, op: "evescout.fetch", ok: true, reason: "1 wormhole".into() };
+        assert_eq!(snap.log, [fetch]);
     }
 
     #[test]

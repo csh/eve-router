@@ -24,7 +24,7 @@ pub fn run(
     input: String,
     overrides: RunOverrides,
 ) -> Result<(), String> {
-    let Snapshot { uni, shortcuts, all } = start;
+    let Snapshot { uni, shortcuts, all, .. } = start;
     let mut app = App::new(uni, settings, cfg, cfg_path.clone(), input, shortcuts);
     app.overrides = overrides;
     app.wormhole_data = all;

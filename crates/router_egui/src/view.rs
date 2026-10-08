@@ -59,6 +59,8 @@ pub struct View {
     search: SearchBox,
     pub popup: Option<Popup>,
     pub settings: Option<SettingsForm>,
+    /// True while the Log window is open.
+    log_open: bool,
     /// The Nexum map list fetch, while it runs.
     pub maps: Option<Receiver<Result<Vec<MapInfo>, FetchError>>>,
     status_timer: StatusTimer,
@@ -80,6 +82,7 @@ impl View {
             search: SearchBox::new("system-search").with_lists(),
             popup: None,
             settings: None,
+            log_open: false,
             maps: None,
             status_timer: StatusTimer::default(),
             pilots: PilotsUi::default(),
@@ -103,6 +106,9 @@ impl View {
             Some(_) if text.is_empty() => {}
             Some(left) => ui.ctx().request_repaint_after(left),
         }
+        if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F5)) {
+            s.refresh_now(Instant::now());
+        }
         let modal_open = self.popup.is_some() || self.settings.is_some();
         if !modal_open {
             if ui.input_mut(|i| i.consume_key(Modifiers::COMMAND, Key::F)) {
@@ -125,7 +131,7 @@ impl View {
 
         let bar = Frame::new().fill(theme::HEADER).inner_margin(Margin::symmetric(12, 6)).stroke(Stroke::new(1.0, theme::LINE));
         egui::Panel::top("top-bar").frame(bar).show(ui, |ui| self.top_bar(ui, s));
-        egui::Panel::bottom("status-bar").frame(bar).show(ui, |ui| status_bar(ui, s));
+        egui::Panel::bottom("status-bar").frame(bar).show(ui, |ui| status_bar(ui, s, &mut self.log_open));
         let side = Frame::new().fill(theme::BG).inner_margin(Margin { left: 0, right: 10, top: 10, bottom: 10 });
         egui::Panel::right("sidebar").resizable(false).exact_size(280.0).frame(side).show(ui, |ui| sidebar(ui, s, &mut self.pilots));
         let central = Frame::new().fill(theme::BG).inner_margin(Margin::same(10));
@@ -145,6 +151,7 @@ impl View {
 
         settings_window::show(ui, self, s);
         self.pilots.windows(ui, s);
+        crate::log_window::show(ui.ctx(), &mut self.log_open, s);
     }
 
     /// Take the result of the Nexum map list fetch, if the thread sent it.
@@ -581,10 +588,20 @@ fn sidebar(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     }
 }
 
-fn status_bar(ui: &mut Ui, s: &Session) {
+fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool) {
     // The sync status goes first, at the right. The status text gets the space that is left,
     // and a text that is too long ends in "…". The full text shows on hover.
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+        // The Log button shows in the warning color while the newest row is a failure.
+        let failed = s.log.last().is_some_and(|e| !e.ok);
+        let log_text = RichText::new("Log").small().color(if failed { theme::WARN } else { theme::TEXT });
+        if ui.add(Button::new(log_text).small()).on_hover_text("Show the fetch log in a window").clicked() {
+            *log_open = true;
+        }
+        if ui.add(Button::new(RichText::new("Refresh").small()).small()).on_hover_text("Fetch the wormholes now (F5)").clicked() {
+            s.refresh_now(Instant::now());
+        }
+        ui.add_space(6.0);
         sync_status(ui, s);
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             // The refresh note stays: the status timer clears only the status and the startup lines.
