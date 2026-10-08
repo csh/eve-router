@@ -494,17 +494,27 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                     let stop = route.stop_at(step);
                     row.set_selected(s.selected_step == Some(step));
                     // The start, the midpoints and the destination stand out from the other steps.
-                    let name = match stop {
-                        Some(_) => RichText::new(&sys.name).family(theme::bold()).color(Color32::WHITE),
-                        None => RichText::new(&sys.name).color(theme::TEXT),
+                    // A step that the pilot would rather avoid, and the route enters it anyway, gets an amber tag.
+                    let avoided = step > 0 && stop.is_none() && s.settings.avoid.covers(uni, route.path.nodes[step]);
+                    let name = match (stop, avoided) {
+                        (Some(_), _) => RichText::new(&sys.name).family(theme::bold()).color(Color32::WHITE),
+                        (None, true) => RichText::new(&sys.name).color(theme::WARN),
+                        (None, false) => RichText::new(&sys.name).color(theme::TEXT),
                     };
                     row.col(|ui| _ = ui.label(RichText::new(step.to_string()).color(theme::TEXT_DIM)));
                     row.col(|ui| {
                         if let Some(stop) = stop {
                             ui.label(RichText::new(stop.label().to_uppercase()).color(theme::ACCENT).size(11.0).extra_letter_spacing(1.0));
+                        } else if avoided {
+                            ui.label(RichText::new("AVOID").color(theme::WARN).size(11.0).extra_letter_spacing(1.0));
                         }
                     });
-                    row.col(|ui| _ = ui.add(Label::new(name).truncate()));
+                    row.col(|ui| {
+                        let label = ui.add(Label::new(name).truncate());
+                        if avoided {
+                            label.on_hover_text("You'd rather skip this one, but there was no better way through");
+                        }
+                    });
                     if show_pilots {
                         row.col(|ui| avatar_row(ui, &mut pilots.portraits, &by_step[step]));
                     }

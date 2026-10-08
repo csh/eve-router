@@ -132,6 +132,11 @@ impl Avoid {
         self.regions.iter().any(|e| e.item == region)
     }
 
+    /// True if an entry covers the system: the system itself, or its region.
+    pub fn covers(&self, uni: &Universe, node: NodeIndex) -> bool {
+        self.has_system(node) || self.has_region(&uni.system(node).region)
+    }
+
     /// The cost of a jump into each system, by `NodeIndex`: `PENALTY` for a "prefer" entry.
     /// The result is for `Router::set_danger`.
     pub fn danger(&self, uni: &Universe) -> Vec<u64> {
@@ -491,6 +496,18 @@ mod tests {
         assert_eq!(s.explain(error.clone()), format!("{error}. {NO_ROUTE_HINT}"));
         // Another error stays as it is.
         assert_eq!(s.explain("Give two or more systems".into()), "Give two or more systems");
+    }
+
+    #[test]
+    fn an_entry_covers_its_system_and_the_systems_of_its_region() {
+        let uni = overlay_universe();
+        let mut avoid = Avoid::default();
+        let (jita, perimeter, amarr) = (uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap(), uni.exact("Amarr").unwrap());
+        assert!(!avoid.covers(&uni, jita));
+        avoid.add_system(jita);
+        avoid.add_region(&uni.system(amarr).region);
+        assert!(avoid.covers(&uni, jita) && avoid.covers(&uni, amarr));
+        assert!(!avoid.covers(&uni, perimeter) || uni.system(perimeter).region == uni.system(amarr).region);
     }
 
     #[test]

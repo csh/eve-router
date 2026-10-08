@@ -98,6 +98,8 @@ pub struct Route {
     pub bridge_cap_pct: Option<f32>,
     /// The number of wormhole jumps with no known signature at the departure system.
     pub unknown_sigs: usize,
+    /// The number of systems that the route enters although they are on the avoid list.
+    pub avoided: usize,
     /// The step index of each given system: the start, the midpoints, the destination.
     pub stops: Vec<usize>,
 }
@@ -592,9 +594,11 @@ impl<'a> Router<'a> {
             bridge_tj: None,
             bridge_cap_pct: None,
             unknown_sigs: 0,
+            avoided: 0,
             stops: Vec::new(),
             path,
         };
+        route.avoided = route.path.nodes[1..].iter().filter(|n| self.node_danger[n.index()] >= PENALTY).count();
         let mut tj = Some(0.0);
         let mut cap_pct = Some(0.0);
         for &e in &route.path.edges {
@@ -941,6 +945,20 @@ mod tests {
             paths.iter().map(|p| (p.edges.clone(), p.cost)).collect::<Vec<_>>(),
             [(vec![hole], JUMP), (vec![gate], JUMP + JUMP / 2)]
         );
+    }
+
+    #[test]
+    fn a_route_counts_the_avoided_systems() {
+        let uni = parallel_universe();
+        let mut r = Router::new(uni, RouterOptions::default());
+        let nodes = [uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap()];
+        assert_eq!(r.routes(&nodes, 1).unwrap()[0].avoided, 0);
+        let mut danger = vec![0; uni.graph.node_count()];
+        danger[nodes[1].index()] = PENALTY;
+        r.set_danger(danger);
+        let route = r.routes(&nodes, 1).unwrap().remove(0);
+        assert_eq!(route.avoided, 1);
+        assert_eq!(crate::labels::route_extras(&route), " (1 avoided system)");
     }
 
     #[test]

@@ -238,13 +238,12 @@ impl Session {
 
     /// Add the system to the avoid list, or take it off if it is in the list. Search again and save.
     pub fn toggle_avoid_system(&mut self, node: NodeIndex) {
-        let name = self.uni.name(node).to_string();
         if self.settings.avoid.has_system(node) {
             self.settings.avoid.remove_system(node);
         } else {
             self.settings.avoid.add_system(node);
         }
-        self.avoid_changed(name);
+        self.avoid_changed();
     }
 
     /// Add the region to the avoid list, or take it off if it is in the list. Search again and save.
@@ -254,49 +253,32 @@ impl Session {
         } else {
             self.settings.avoid.add_region(region);
         }
-        self.avoid_changed(region.to_string());
+        self.avoid_changed();
     }
 
     /// Set the "never" switch of a system on the avoid list. Search again and save.
     pub fn set_avoid_never_system(&mut self, node: NodeIndex, never: bool) {
         self.settings.avoid.set_system_never(node, never);
-        let name = self.uni.name(node).to_string();
-        self.never_changed(name, never);
+        self.avoid_changed();
     }
 
     /// Set the "never" switch of a region on the avoid list. Search again and save.
     pub fn set_avoid_never_region(&mut self, region: &str, never: bool) {
         self.settings.avoid.set_region_never(region, never);
-        self.never_changed(region.to_string(), never);
-    }
-
-    fn never_changed(&mut self, entry: String, never: bool) {
-        self.recompute();
-        self.save_quietly();
-        if self.status.is_empty() {
-            self.status = if never { format!("Never going through {entry}") } else { format!("Steering clear of {entry} if possible") };
-        }
+        self.avoid_changed();
     }
 
     /// Empty the avoid list. Search again and save.
     pub fn clear_avoid(&mut self) {
         self.settings.avoid.clear();
-        self.avoid_changed(String::new());
+        self.avoid_changed();
     }
 
-    /// Search again and save after a change of the avoid list. The status names the entry that changed:
-    /// "Avoiding Rens", or "Not avoiding Rens". An empty `entry` gives "Avoid list cleared".
-    fn avoid_changed(&mut self, entry: String) {
-        let avoiding = self.settings.avoid.systems.iter().any(|e| self.uni.name(e.item) == entry) || self.settings.avoid.has_region(&entry);
+    /// Search again and save after a change of the avoid list. The status stays quiet: the pilot
+    /// just made the change, and the route table shows the result.
+    fn avoid_changed(&mut self) {
         self.recompute();
         self.save_quietly();
-        if self.status.is_empty() {
-            self.status = match (entry.is_empty(), avoiding) {
-                (true, _) => "Avoid list cleared".into(),
-                (false, true) => format!("Avoiding {entry}"),
-                (false, false) => format!("Not avoiding {entry}"),
-            };
-        }
     }
 
     /// Find the routes and the favourite distances again.
@@ -774,21 +756,17 @@ mod tests {
 
         s.toggle_avoid_system(middle);
         assert!(!s.routes[0].path.nodes.contains(&middle));
-        assert_eq!(s.status, format!("Avoiding {name}"));
         assert!(std::fs::read_to_string(&s.cfg_path).unwrap().contains(&name));
         s.toggle_avoid_system(middle);
         assert_eq!((s.settings.avoid.len(), s.routes[0].path.nodes.clone()), (0, first));
 
         s.toggle_avoid_region(&region);
         assert!(s.routes[0].path.nodes.iter().all(|&n| s.uni.system(n).region != region));
-        assert_eq!(s.status, format!("Avoiding {region}"));
         // The "never" switch keeps the region out of every route, and the file keeps the switch.
         s.set_avoid_never_region(&region, true);
-        assert_eq!(s.status, format!("Never going through {region}"));
         assert!(s.routes.iter().all(|r| r.path.nodes.iter().all(|&n| s.uni.system(n).region != region)));
         assert!(std::fs::read_to_string(&s.cfg_path).unwrap().contains("\"never\": true"));
         s.set_avoid_never_region(&region, false);
-        assert_eq!(s.status, format!("Steering clear of {region} if possible"));
         s.clear_avoid();
         assert!(s.settings.avoid.is_empty());
         assert!(s.routes[0].path.nodes.contains(&middle));

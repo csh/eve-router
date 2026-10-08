@@ -170,6 +170,9 @@ pub fn route_extras(route: &Route) -> String {
     if route.unknown_sigs > 0 {
         parts.push(format!("{} unknown sig{}", route.unknown_sigs, if route.unknown_sigs == 1 { "" } else { "s" }));
     }
+    if route.avoided > 0 {
+        parts.push(format!("{} avoided system{}", route.avoided, if route.avoided == 1 { "" } else { "s" }));
+    }
     if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
 }
 

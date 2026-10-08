@@ -315,6 +315,7 @@ mod tests {
             bridge_tj: None,
             bridge_cap_pct: None,
             unknown_sigs: 0,
+            avoided: 0,
             stops: Vec::new(),
         }
     }
