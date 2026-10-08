@@ -11,7 +11,7 @@ use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers,
 use egui_extras::{Column, TableBuilder};
 use petgraph::graph::NodeIndex;
 use router_core::esi::pilots::pilots_by_step;
-use router_core::labels::{band_counts, band_text, jumps_label, link_label, on_off, pilot_label, route_extras, route_notes, route_text};
+use router_core::labels::{jumps_label, link_label, on_off, pilot_label, route_summary, route_text};
 use router_core::route::{Mode, Stop};
 use router_core::sources::FetchError;
 use router_core::sources::nexum::MapInfo;
@@ -466,49 +466,36 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 }
                 let painter = ui.painter_at(rect);
                 let font = egui::TextStyle::Body.resolve(ui.style());
-                let small = egui::TextStyle::Small.resolve(ui.style());
                 let left = rect.left() + 12.0;
-                // Line 1: the number, the jumps and the overlay facts. The jumps of each leg are at the right.
-                let mut x = left;
+                // Line 1: the number, then the summary in one font and one color. The jumps of each leg
+                // are at the right, in the same font.
                 let top = rect.top() + 4.0;
-                let mut put = |text: String, font: &egui::FontId, color: Color32| {
-                    let galley = painter.layout_no_wrap(text, font.clone(), color);
-                    let width = galley.size().x;
-                    painter.galley(egui::pos2(x, top), galley, color);
-                    x += width;
-                };
-                put(format!("#{}  ", i + 1), &font, theme::TEXT_DIM);
-                put(jumps_label(route.jumps), &font, if selected { Color32::WHITE } else { theme::TEXT });
-                let notes = route_notes(route).join(" · ");
-                if !notes.is_empty() {
-                    put(format!("  {notes}"), &small, theme::TEXT_DIM);
-                }
+                let text_color = if selected { Color32::WHITE } else { theme::TEXT };
+                let number = painter.layout_no_wrap(format!("#{}  ", i + 1), font.clone(), theme::TEXT_DIM);
+                let summary = painter.layout_no_wrap(route_summary(route), font.clone(), text_color);
+                let summary_left = left + number.size().x;
+                let summary_text = route_summary(route);
+                painter.galley(egui::pos2(left, top), number, theme::TEXT_DIM);
+                painter.galley(egui::pos2(summary_left, top), summary, text_color);
                 let legs: Vec<usize> = route.legs().iter().map(|&(a, b)| b - a).collect();
                 if legs.len() > 1 {
                     let text = legs.iter().map(usize::to_string).collect::<Vec<_>>().join(" + ");
-                    let galley = painter.layout_no_wrap(text, small.clone(), theme::TEXT_DIM);
-                    let at = egui::pos2(rect.right() - galley.size().x - 10.0, top + 2.0);
+                    let galley = painter.layout_no_wrap(text, font, theme::TEXT_DIM);
+                    let at = egui::pos2(rect.right() - galley.size().x - 10.0, top);
                     painter.galley(at, galley, theme::TEXT_DIM);
                 }
-                // Line 2: the strip. The risk shows at the right only when the route leaves highsec.
-                let counts = band_counts(&s.uni, route);
-                let risk = if counts.low + counts.null + counts.wormhole == 0 { String::new() } else { band_text(counts) };
+                // Line 2: the strip.
                 let line_y = rect.top() + 22.0;
-                let mut strip_right = rect.right() - 10.0;
-                if !risk.is_empty() {
-                    let galley = painter.layout_no_wrap(risk.clone(), small, theme::WARN);
-                    strip_right -= galley.size().x + 10.0;
-                    painter.galley(egui::pos2(rect.right() - galley.size().x - 10.0, line_y + 1.0), galley, theme::WARN);
-                }
-                let strip_rect =
-                    egui::Rect::from_min_max(egui::pos2(left, line_y), egui::pos2(strip_right.max(left + 20.0), rect.bottom() - 4.0));
+                let strip_rect = egui::Rect::from_min_max(
+                    egui::pos2(left, line_y),
+                    egui::pos2((rect.right() - 10.0).max(left + 20.0), rect.bottom() - 4.0),
+                );
                 strip::paint(&painter, &s.uni, route, strip_rect);
                 let names = |k: usize| s.uni.name(route.path.nodes[k]);
-                let mut tip = vec![format!("#{}  {}{}", i + 1, jumps_label(route.jumps), route_extras(route))];
+                let mut tip = vec![format!("#{}  {summary_text}", i + 1)];
                 if legs.len() > 1 {
                     tip.extend(route.legs().iter().map(|&(a, b)| format!("{} » {}: {}", names(a), names(b), jumps_label(b - a))));
                 }
-                tip.push(band_text(counts));
                 let tip = tip.join("\n");
                 if response.on_hover_text(tip).clicked() {
                     s.selected = i;
@@ -553,7 +540,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
         return;
     };
     let title = format!("Route #{}", s.selected + 1);
-    let info = format!("{}{} · {}", jumps_label(route.jumps), route_extras(route), band_text(band_counts(&s.uni, route)));
+    let info = route_summary(route);
     let selected_step = s.selected_step;
     let mut clicked = None;
     let mut toggle = None;

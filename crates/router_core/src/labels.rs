@@ -8,7 +8,7 @@ use crate::overlay::OverlayReport;
 use crate::route::Route;
 use crate::settings::{HullSource, Settings};
 use crate::sources::{evescout, nexum};
-use crate::universe::{Band, Link, Universe, band, display_sec};
+use crate::universe::{Link, Universe, display_sec};
 use crate::wormhole::{MassStatus, SourceId, THERA, TURNUR, Wormhole, expiry_text};
 use petgraph::graph::EdgeIndex;
 
@@ -183,41 +183,11 @@ pub fn route_extras(route: &Route) -> String {
     if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
 }
 
-/// The systems that a route enters, by security band. Wormhole space has its own count.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
-pub struct BandCounts {
-    pub high: usize,
-    pub low: usize,
-    pub null: usize,
-    pub wormhole: usize,
-}
-
-/// The first system ID of wormhole space.
-const WORMHOLE_SPACE: u32 = 31_000_000;
-
-/// Count the systems that the route enters. The start does not count.
-pub fn band_counts(uni: &Universe, route: &Route) -> BandCounts {
-    let mut counts = BandCounts::default();
-    for &node in route.path.nodes.iter().skip(1) {
-        let sys = uni.system(node);
-        match band(sys.security) {
-            _ if sys.id >= WORMHOLE_SPACE => counts.wormhole += 1,
-            Band::High => counts.high += 1,
-            Band::Low => counts.low += 1,
-            Band::Null => counts.null += 1,
-        }
-    }
-    counts
-}
-
-/// The risk of a route in words: "highsec only", or the counts of the other bands.
-pub fn band_text(c: BandCounts) -> String {
-    let parts: Vec<String> = [(c.low, "lowsec"), (c.null, "nullsec"), (c.wormhole, "wormhole space")]
-        .into_iter()
-        .filter(|&(n, _)| n > 0)
-        .map(|(n, name)| format!("{n} {name}"))
-        .collect();
-    if parts.is_empty() { "highsec only".into() } else { parts.join(", ") }
+/// The summary of a route on one line, for example "10 jumps · 2 wormholes · 1 jump bridge".
+pub fn route_summary(route: &Route) -> String {
+    let mut parts = vec![jumps_label(route.jumps)];
+    parts.extend(route_notes(route));
+    parts.join(" · ")
 }
 
 /// The text of route number `index` (from 0), as `--print` writes it: the summary line, then
@@ -310,16 +280,10 @@ mod tests {
     }
 
     #[test]
-    fn band_counts_skip_the_start_and_count_each_band() {
-        let (uni, routes) = jita_amarr_routes();
-        // The wormhole route has one jump: Amarr, a highsec system.
-        assert_eq!(band_counts(&uni, &routes[0]), BandCounts { high: 1, ..Default::default() });
-        assert_eq!(band_text(band_counts(&uni, &routes[0])), "highsec only");
-        let gates = band_counts(&uni, &routes[1]);
-        assert_eq!(gates.high + gates.low + gates.null + gates.wormhole, routes[1].jumps);
-        let mixed = BandCounts { high: 5, low: 3, null: 1, wormhole: 2 };
-        assert_eq!(band_text(mixed), "3 lowsec, 1 nullsec, 2 wormhole space");
-        assert_eq!(band_text(BandCounts { low: 1, ..Default::default() }), "1 lowsec");
+    fn the_summary_is_one_line() {
+        let (_, routes) = jita_amarr_routes();
+        assert_eq!(route_summary(&routes[0]), "1 jump · 1 wormhole");
+        assert!(route_summary(&routes[1]).ends_with(" jumps"), "{}", route_summary(&routes[1]));
     }
 
     #[test]
