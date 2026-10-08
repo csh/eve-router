@@ -220,7 +220,7 @@ Do not copy CCP art or font files. Draw the icons and choose an open font.
 |---|---|---|
 | 0 | Done. Screenshot pass at 1260 x 560, 1260 x 820 and 900 x 700. Confirms F13 and F1, and adds F17 to F19. | 30 minutes |
 | 1 | Message levels and message cleanup (M1 to M8, M13). Pure text and color. | 3 hours |
-| 2 | Route strip and route list rows (the bold element, F2, F13, F17, F18). | 1 day |
+| 2 | Done. Route strip and route list rows (the bold element, F2, F13, F17, F18). | 1 day |
 | 3 | Responsive shell: remove the minimum size, width classes, tab strip (F1, F3, F5). | 2 days |
 | 4 | Settings popover (S1 to S5, M9). Needs the layout from step 3. | 1.5 days |
 | 5 | From / To fields and the current-location default (F8, F11). | 0.5 day |
@@ -246,3 +246,27 @@ Added after the check:
 - The Log button turns amber on a failure, and the status text is always amber. The two signals clash (part of M1).
 - `ui.disable()` in `top_bar` also disables the route count buttons and the mode combo while a route is active. This is the intended lock, but it shows as greyed controls (F5).
 - The screenshot pass (step 0) found F17, F18 and F19, which the code reading did not.
+
+## Step 2 result
+
+Measured in the release build with 6 waypoints. The 1260 x 560 window used to show no route table rows.
+
+| Window | Before | After |
+|---|---|---|
+| 1260 x 560 | 0 table rows. List cut at 2.5 rows. | 3 table rows, the strip, and the first route in full. |
+| 1260 x 820 | 7 table rows. List cut at 2.5 rows. | 10 table rows. The list shows 3 routes in full. |
+
+What changed:
+
+- The route strip draws in the route table and in each route list row. A click on a dot selects the step and scrolls the table to it. A hover shows the system, its security and the link kind.
+- Each route list row has two lines. Line 1 gives the summary and how the route differs from #1, for example "Leaves #1 at Onga, via Pator". Line 2 gives the strip and the risk in words, for example "7 lowsec".
+- The route table header shows the same risk text.
+- The planner closes its waypoint list when a route exists. A button opens it again. The Pilot button moved to the search row.
+- The route list gives up height to the route table when the window is short. The search time label stays.
+- Core helpers `band_counts`, `band_text` and `route_difference` have tests.
+
+Open points:
+
+- At 560 px high the table shows 3 rows, not the 200 px target. The rest needs the layout change of step 4.
+- F19 (the empty Pilots column) is not done.
+- The strip uses a fixed pitch of 3 to 12 px. A route of more than 280 systems draws past its box at 840 px wide. Routes of that length are not in the test data.

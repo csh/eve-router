@@ -5,12 +5,15 @@ use crate::app::Session;
 use crate::pilots_view::{PilotsUi, avatar_row};
 use crate::search::{Pick, SearchBox};
 use crate::settings_window::{self, Popup, SettingsForm};
+use crate::strip;
 use crate::theme::{self, panel};
 use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
 use petgraph::graph::NodeIndex;
 use router_core::esi::pilots::pilots_by_step;
-use router_core::labels::{jumps_label, link_label, on_off, pilot_label, route_extras, route_text};
+use router_core::labels::{
+    band_counts, band_text, jumps_label, link_label, on_off, pilot_label, route_difference, route_extras, route_text,
+};
 use router_core::route::{Mode, Stop};
 use router_core::sources::FetchError;
 use router_core::sources::nexum::MapInfo;
@@ -18,6 +21,32 @@ use router_core::universe::display_sec;
 use router_core::wormhole::{SourceId, age_text};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
+
+/// The height of a row of the route list: the summary line and the strip, and the space below.
+const ROUTE_ROW: f32 = 44.0;
+const ROUTE_PITCH: f32 = ROUTE_ROW + 4.0;
+/// The height that a panel adds around its content: the header strip, the margins and the lines.
+const PANEL_CHROME: f32 = 46.0;
+/// The most rows that the route list shows before it scrolls.
+const LIST_ROWS: usize = 3;
+/// The least height that the route table keeps, in pixels. The planner and the list give way.
+const TABLE_MIN: f32 = 200.0;
+/// The height of the planner with the waypoint list closed.
+const PLANNER_CLOSED: f32 = 110.0;
+/// The height of the planner with the waypoint list open, without the list.
+const PLANNER_CHROME: f32 = 140.0;
+/// The least height of the waypoint list, when it is open.
+const GRID_MIN: f32 = 52.0;
+/// The space between two panels.
+const GAP: f32 = 8.0;
+
+/// The height of the route list panel for `routes` routes. `spare` is the height that is left
+/// when the planner and the route table have their share. The list shows at least one row and a
+/// half, so a scroll bar is a sign that more routes follow.
+fn route_list_height(routes: usize, spare: f32) -> f32 {
+    let full = routes.clamp(1, LIST_ROWS) as f32 * ROUTE_PITCH + PANEL_CHROME;
+    spare.clamp(full.min(ROUTE_PITCH * 1.5 + PANEL_CHROME), full)
+}
 
 /// How long the status bar shows a status text.
 const STATUS_TIME: Duration = Duration::from_secs(4);
@@ -66,6 +95,9 @@ pub struct View {
     status_timer: StatusTimer,
     /// The login, the route start, the active route and the avatars.
     pilots: PilotsUi,
+    /// True if the pilot opened the waypoint list, false if the pilot closed it. With `None`, the
+    /// list is open until the first route shows, so the route gets the room.
+    waypoints_open: Option<bool>,
 }
 
 /// A change of the avoid list, from the context menu of a route step.
@@ -92,6 +124,7 @@ impl View {
             maps: None,
             status_timer: StatusTimer::default(),
             pilots: PilotsUi::default(),
+            waypoints_open: None,
         }
     }
 
@@ -147,10 +180,14 @@ impl View {
                 self.pilots.active_view(ui, s);
                 return;
             }
-            self.planner(ui, s);
+            let available = ui.available_height();
+            let open = self.waypoints_open.unwrap_or(s.routes.is_empty());
+            let planner = if open { PLANNER_CHROME + GRID_MIN } else { PLANNER_CLOSED };
+            let list_height = route_list_height(s.routes.len(), available - TABLE_MIN - planner - 2.0 * GAP);
+            let grid_max = (available - list_height - TABLE_MIN - PLANNER_CHROME - 2.0 * GAP).clamp(GRID_MIN, 200.0);
+            self.planner(ui, s, open, grid_max);
             ui.add_space(8.0);
-            let routes_height = (ui.available_height() * 0.3).clamp(90.0, 220.0);
-            ui.allocate_ui(vec2(ui.available_width(), routes_height), |ui| route_list(ui, s));
+            ui.allocate_ui(vec2(ui.available_width(), list_height), |ui| route_list(ui, s));
             ui.add_space(8.0);
             route_table(ui, s, &mut self.pilots);
         });
@@ -271,7 +308,7 @@ impl View {
     }
 
     /// The search box and the waypoint list. They take the place of the route input of the TUI.
-    fn planner(&mut self, ui: &mut Ui, s: &mut Session) {
+    fn planner(&mut self, ui: &mut Ui, s: &mut Session, open: bool, grid_max: f32) {
         let info = match s.waypoints.len() {
             0 => String::new(),
             1 => "1 waypoint".into(),
@@ -279,7 +316,7 @@ impl View {
         };
         panel(ui, "Route planner", &info, false, |ui| {
             ui.horizontal(|ui| {
-                let width = (ui.available_width() - 260.0).max(200.0);
+                let width = (ui.available_width() - 480.0).max(200.0);
                 let menu = [Pick::AddWaypoint, Pick::SetStart, Pick::AddFavourite];
                 let picked = self.search.show(ui, &s.uni, width, "Search system…  (Ctrl+F)", &menu);
                 if let Some((pick, node)) = picked {
@@ -298,8 +335,6 @@ impl View {
                 if ui.button("Paste list…").on_hover_text(hint).clicked() {
                     self.popup = Some(Popup::List { text: String::new(), problems: Vec::new() });
                 }
-            });
-            ui.horizontal(|ui| {
                 ui.label(theme::header_text("Pilot"));
                 let hint = "Plan for the ship of a character, or for a hull that you pick";
                 if ui.button(pilot_label(&s.settings, &s.pilots)).on_hover_text(hint).clicked() {
@@ -317,7 +352,21 @@ impl View {
                 return;
             }
             let mut edit = None;
-            ScrollArea::vertical().max_height(200.0).auto_shrink([false, true]).show(ui, |ui| {
+            let arrow = if open { "⏷" } else { "▶" };
+            let chain = s.waypoints.iter().map(|&n| s.uni.name(n)).collect::<Vec<_>>().join(" » ");
+            ui.horizontal(|ui| {
+                let hint = if open { "Hide the waypoint list" } else { "Show the waypoint list, to move or remove a waypoint" };
+                if ui.add(Button::new(arrow).small()).on_hover_text(hint).clicked() {
+                    self.waypoints_open = Some(!open);
+                }
+                if !open {
+                    ui.add(Label::new(RichText::new(&chain).color(theme::TEXT)).truncate()).on_hover_text(&chain);
+                }
+            });
+            if !open {
+                return;
+            }
+            ScrollArea::vertical().max_height(grid_max).auto_shrink([false, true]).show(ui, |ui| {
                 egui::Grid::new("waypoints").num_columns(6).spacing(vec2(14.0, 4.0)).show(ui, |ui| {
                     let last = s.waypoints.len() - 1;
                     for (i, &node) in s.waypoints.iter().enumerate() {
@@ -404,7 +453,7 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
         }
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             for (i, route) in s.routes.iter().enumerate() {
-                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
+                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROUTE_ROW), Sense::click());
                 let selected = i == s.selected;
                 if selected {
                     ui.painter().rect_filled(rect, 0.0, theme::ROW_FILL);
@@ -412,11 +461,37 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 } else if response.hovered() {
                     ui.painter().rect_filled(rect, 0.0, theme::ACCENT_DIM);
                 }
-                let color = if selected { Color32::WHITE } else { theme::TEXT };
-                let text = format!("#{}  {}{}", i + 1, jumps_label(route.jumps), route_extras(route));
+                let painter = ui.painter_at(rect);
                 let font = egui::TextStyle::Body.resolve(ui.style());
-                ui.painter().text(rect.left_center() + vec2(12.0, 0.0), egui::Align2::LEFT_CENTER, text, font, color);
-                if response.clicked() {
+                let color = if selected { Color32::WHITE } else { theme::TEXT };
+                // Line 1: the summary, then how the route differs from the first one.
+                let head = format!("#{}  {}{}", i + 1, jumps_label(route.jumps), route_extras(route));
+                let left = rect.left() + 12.0;
+                let top = rect.top() + 4.0;
+                let galley = painter.layout_no_wrap(head.clone(), font.clone(), color);
+                let width = galley.size().x;
+                painter.galley(egui::pos2(left, top), galley, color);
+                let diff = if i == 0 { None } else { route_difference(&s.uni, route, &s.routes[0], 1) };
+                if let Some(diff) = &diff {
+                    let at = egui::pos2(left + width + 10.0, top);
+                    painter.text(at, egui::Align2::LEFT_TOP, diff, font, theme::TEXT_DIM);
+                }
+                // Line 2: the strip, and the risk in words at the right.
+                let counts = band_counts(&s.uni, route);
+                let risk = band_text(counts);
+                let risk_color = if counts.low + counts.null + counts.wormhole == 0 { theme::TEXT_DIM } else { theme::WARN };
+                let small = egui::TextStyle::Small.resolve(ui.style());
+                let risk_galley = painter.layout_no_wrap(risk.clone(), small, risk_color);
+                let risk_width = risk_galley.size().x;
+                let line_y = rect.top() + 24.0;
+                painter.galley(egui::pos2(rect.right() - risk_width - 10.0, line_y + 1.0), risk_galley, risk_color);
+                let strip_rect = egui::Rect::from_min_max(
+                    egui::pos2(left, line_y),
+                    egui::pos2((rect.right() - risk_width - 20.0).max(left + 20.0), rect.bottom() - 4.0),
+                );
+                strip::paint(&painter, &s.uni, route, strip_rect, None);
+                let tip = [Some(head), diff, Some(risk)].into_iter().flatten().collect::<Vec<_>>().join("\n");
+                if response.on_hover_text(tip).clicked() {
                     s.selected = i;
                     s.selected_step = None;
                 }
@@ -431,7 +506,8 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
         return;
     };
     let title = format!("Route #{}", s.selected + 1);
-    let info = format!("{}{}", jumps_label(route.jumps), route_extras(route));
+    let info = format!("{}{} · {}", jumps_label(route.jumps), route_extras(route), band_text(band_counts(&s.uni, route)));
+    let selected_step = s.selected_step;
     let mut clicked = None;
     let mut toggle = None;
     let mut copy = false;
@@ -452,6 +528,10 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     };
     theme::panel_with(ui, &title, header, true, |ui| {
         let uni = &s.uni;
+        // A click on a dot selects the step, and the table scrolls to it.
+        let scroll = strip::show(ui, uni, route, 24.0, selected_step);
+        clicked = clicked.or(scroll);
+        ui.add_space(4.0);
         let header = |ui: &mut Ui, text: &str| _ = ui.label(theme::header_text(text));
         let mut table = TableBuilder::new(ui)
             .id_salt("route-table")
@@ -464,11 +544,15 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
         if show_pilots {
             table = table.column(Column::initial(190.0).at_least(70.0).resizable(true).clip(true));
         }
-        table
+        table = table
             .column(Column::exact(72.0))
             .column(Column::initial(170.0).at_least(90.0).resizable(true))
             .column(Column::remainder().at_least(120.0))
-            .auto_shrink(false)
+            .auto_shrink(false);
+        if let Some(step) = scroll {
+            table = table.scroll_to_row(step, Some(Align::Center));
+        }
+        table
             .header(20.0, |mut row| {
                 let pilots_header = show_pilots.then_some("Pilots");
                 for text in ["#", "Stop", "System"].into_iter().chain(pilots_header).chain(["Security", "Region", "Via"]) {
@@ -492,7 +576,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                         _ => theme::TEXT_DIM,
                     };
                     let stop = route.stop_at(step);
-                    row.set_selected(s.selected_step == Some(step));
+                    row.set_selected(selected_step == Some(step));
                     // The start, the midpoints and the destination stand out from the other steps.
                     // A step that the pilot would rather avoid, and the route enters it anyway, gets an amber tag.
                     let avoided = step > 0 && stop.is_none() && s.settings.avoid.covers(uni, route.path.nodes[step]);
@@ -729,6 +813,18 @@ pub fn splash(ui: &mut Ui, error: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_route_list_gives_way_to_the_table() {
+        // Room for all rows of a short list.
+        assert_eq!(route_list_height(2, 500.0), 2.0 * ROUTE_PITCH + PANEL_CHROME);
+        // A long list stops at the rows that fit without a scroll.
+        assert_eq!(route_list_height(9, 900.0), LIST_ROWS as f32 * ROUTE_PITCH + PANEL_CHROME);
+        // Little room: one row and a half, so the table keeps its height.
+        assert_eq!(route_list_height(5, 40.0), 1.5 * ROUTE_PITCH + PANEL_CHROME);
+        // No routes: the empty text fits.
+        assert_eq!(route_list_height(0, 500.0), ROUTE_PITCH + PANEL_CHROME);
+    }
 
     #[test]
     fn status_text_clears_after_status_time() {

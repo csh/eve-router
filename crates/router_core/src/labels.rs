@@ -8,7 +8,7 @@ use crate::overlay::OverlayReport;
 use crate::route::Route;
 use crate::settings::{HullSource, Settings};
 use crate::sources::{evescout, nexum};
-use crate::universe::{Link, Universe, display_sec};
+use crate::universe::{Band, Link, Universe, band, display_sec};
 use crate::wormhole::{MassStatus, SourceId, THERA, TURNUR, Wormhole, expiry_text};
 use petgraph::graph::EdgeIndex;
 
@@ -176,6 +176,60 @@ pub fn route_extras(route: &Route) -> String {
     if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
 }
 
+/// The systems that a route enters, by security band. Wormhole space has its own count.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct BandCounts {
+    pub high: usize,
+    pub low: usize,
+    pub null: usize,
+    pub wormhole: usize,
+}
+
+/// The first system ID of wormhole space.
+const WORMHOLE_SPACE: u32 = 31_000_000;
+
+/// Count the systems that the route enters. The start does not count.
+pub fn band_counts(uni: &Universe, route: &Route) -> BandCounts {
+    let mut counts = BandCounts::default();
+    for &node in route.path.nodes.iter().skip(1) {
+        let sys = uni.system(node);
+        match band(sys.security) {
+            _ if sys.id >= WORMHOLE_SPACE => counts.wormhole += 1,
+            Band::High => counts.high += 1,
+            Band::Low => counts.low += 1,
+            Band::Null => counts.null += 1,
+        }
+    }
+    counts
+}
+
+/// The risk of a route in words: "highsec only", or the counts of the other bands.
+pub fn band_text(c: BandCounts) -> String {
+    let parts: Vec<String> = [(c.low, "lowsec"), (c.null, "nullsec"), (c.wormhole, "wormhole space")]
+        .into_iter()
+        .filter(|&(n, _)| n > 0)
+        .map(|(n, name)| format!("{n} {name}"))
+        .collect();
+    if parts.is_empty() { "highsec only".into() } else { parts.join(", ") }
+}
+
+/// How `route` differs from `first`, the route with number `first_number`, so that two routes with
+/// the same jump count read differently. `None` if the paths are equal.
+pub fn route_difference(uni: &Universe, route: &Route, first: &Route, first_number: usize) -> Option<String> {
+    let (a, b) = (&route.path, &first.path);
+    let i = a.edges.iter().zip(&b.edges).position(|(x, y)| x != y)?;
+    let (from, to) = (uni.name(a.nodes[i]), uni.name(a.nodes[i + 1]));
+    if a.nodes[i + 1] == b.nodes[i + 1] {
+        let kind = |e| match uni.graph[e] {
+            Link::Stargate => "gate",
+            Link::Wormhole(_) => "wormhole",
+            Link::JumpBridge => "jump bridge",
+        };
+        return Some(format!("{from} to {to} by {}, not {}", kind(a.edges[i]), kind(b.edges[i])));
+    }
+    Some(format!("Leaves #{first_number} at {from}, via {to}"))
+}
+
 /// The text of route number `index` (from 0), as `--print` writes it: the summary line, then
 /// one line for each step. The text has no final line break.
 pub fn route_text(uni: &Universe, rules: &BridgeRules, index: usize, route: &Route, now: u64) -> String {
@@ -253,6 +307,44 @@ mod tests {
         assert_eq!(sec_rgb(0.04), 0x732020);
         assert_eq!(sec_rgb(0.54), 0xF5FF83);
         assert_eq!(sec_rgb(-0.8), 0x8D3264);
+    }
+
+    /// Jita to Amarr: the wormhole route is first, and the gate route is second.
+    fn jita_amarr_routes() -> (std::sync::Arc<Universe>, Vec<Route>) {
+        use crate::test_support::{FIXTURE_TIME, hole, settings, snapshot};
+        let wormhole = crate::wormhole::Wormhole { sig_a: Some("ABC-123".into()), ..hole(30000142, 30002187) };
+        let uni = snapshot(vec![wormhole]).uni;
+        let nodes = [uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()];
+        let routes = settings(&uni, None).router(&uni, FIXTURE_TIME).routes(&nodes, 2).unwrap();
+        (uni, routes)
+    }
+
+    #[test]
+    fn band_counts_skip_the_start_and_count_each_band() {
+        let (uni, routes) = jita_amarr_routes();
+        // The wormhole route has one jump: Amarr, a highsec system.
+        assert_eq!(band_counts(&uni, &routes[0]), BandCounts { high: 1, ..Default::default() });
+        assert_eq!(band_text(band_counts(&uni, &routes[0])), "highsec only");
+        let gates = band_counts(&uni, &routes[1]);
+        assert_eq!(gates.high + gates.low + gates.null + gates.wormhole, routes[1].jumps);
+        let mixed = BandCounts { high: 5, low: 3, null: 1, wormhole: 2 };
+        assert_eq!(band_text(mixed), "3 lowsec, 1 nullsec, 2 wormhole space");
+        assert_eq!(band_text(BandCounts { low: 1, ..Default::default() }), "1 lowsec");
+    }
+
+    #[test]
+    fn a_route_differs_from_the_first_where_it_leaves_it() {
+        let (uni, routes) = jita_amarr_routes();
+        assert_eq!(route_difference(&uni, &routes[0], &routes[0], 1), None);
+        let text = route_difference(&uni, &routes[1], &routes[0], 1).unwrap();
+        assert!(text.starts_with("Leaves #1 at Jita, via "), "{text}");
+        // The same systems with another link: a gate and a wormhole between the same two systems.
+        let perimeter = crate::wormhole::Wormhole { sig_a: Some("ABC-123".into()), ..crate::test_support::hole(30000142, 30000144) };
+        let uni = crate::test_support::snapshot(vec![perimeter]).uni;
+        let nodes = [uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap()];
+        let routes = crate::test_support::settings(&uni, None).router(&uni, crate::test_support::FIXTURE_TIME).routes(&nodes, 2).unwrap();
+        assert_eq!(routes[0].path.nodes, routes[1].path.nodes);
+        assert_eq!(route_difference(&uni, &routes[1], &routes[0], 1).as_deref(), Some("Jita to Perimeter by wormhole, not gate"));
     }
 
     #[test]

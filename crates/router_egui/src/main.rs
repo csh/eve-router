@@ -9,6 +9,7 @@ mod log_window;
 mod pilots_view;
 mod search;
 mod settings_window;
+mod strip;
 mod theme;
 mod view;
 
