@@ -221,7 +221,7 @@ Do not copy CCP art or font files. Draw the icons and choose an open font.
 | 0 | Done. Screenshot pass at 1260 x 560, 1260 x 820 and 900 x 700. Confirms F13 and F1, and adds F17 to F19. | 30 minutes |
 | 1 | Message levels and message cleanup (M1 to M8, M13). Pure text and color. | 3 hours |
 | 2 | Done. Route strip and route list rows (the bold element, F2, F13, F17, F18). | 1 day |
-| 3 | Responsive shell: remove the minimum size, width classes, tab strip (F1, F3, F5). | 2 days |
+| 3 | Done, not yet checked on screen. Responsive shell: remove the minimum size, width classes, tab strip (F1, F3, F5). | 2 days |
 | 4 | Settings popover (S1 to S5, M9). Needs the layout from step 3. | 1.5 days |
 | 5 | From / To fields and the current-location default (F8, F11). | 0.5 day |
 | 6 | Warp overlay and the hint struct. | 1.5 days |
@@ -275,3 +275,22 @@ Open points:
 - F19 is done by a stronger change: the route table has no Pilots column. The active route table keeps it.
 - Two routes can have the same jumps and the same legs. They then differ inside a leg, and the list does not show where. A later change can dim the squares that two routes share.
 - The strip uses a space of 4 to 12 px for each system. A route of more than 210 systems draws past its box at 840 px wide. Routes of that length are not in the test data.
+
+## Step 3 result
+
+Built and unit tested. Nobody has looked at the result on screen yet.
+
+- The minimum window size is 320 x 420. Below 640 px the class is Sidebar, below 1100 px it is Half, else Full.
+- **Full:** as before. The route controls hide (not grey out) while a route is active (F5). The label "Routes" is now "Show up to" (F4).
+- **Half:** the planner and the route list sit in a left column. The route table fills the right side. A "☰" button in the top bar opens a drawer with the favourites and the pilots.
+- **Sidebar:** the route summary and strip stay above a Plan, Route and Pilots tab strip.
+- Below Full, the top bar wraps and the route options sit in one "Route options" menu (F3). Step 4 replaces the menu with the full popover.
+- The route table drops "#", "Stop" and "Region" below 560 px of width.
+- The planner puts the search box on its own row below 640 px. The status bar shows the sync sources as dots only.
+- Windows follow the app width, up to their old size (F7).
+
+Open points:
+
+- Check all three classes on screen: 320, 500, 800 and 1280 px wide.
+- The Characters and Avoid windows keep their own layout inside a small window.
+

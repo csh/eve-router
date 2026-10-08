@@ -45,6 +45,51 @@ fn route_list_height(routes: usize, spare: f32) -> f32 {
     spare.clamp(full.min(ROUTE_PITCH * 1.5 + PANEL_CHROME), full)
 }
 
+/// The width class of the window. One code path draws all three, with a layout switch.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WidthClass {
+    /// Under 640 px: one column with a tab strip.
+    Sidebar,
+    /// 640 to 1100 px: the planner at the left, the route table at the right.
+    Half,
+    /// 1100 px and up: the planner and the table in the middle, the sidebar at the right.
+    Full,
+}
+
+impl WidthClass {
+    pub fn of(width: f32) -> Self {
+        match width {
+            w if w < 640.0 => WidthClass::Sidebar,
+            w if w < 1100.0 => WidthClass::Half,
+            _ => WidthClass::Full,
+        }
+    }
+}
+
+/// The tabs of the Sidebar class.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
+enum Tab {
+    #[default]
+    Plan,
+    Route,
+    Pilots,
+}
+
+impl Tab {
+    const ALL: [Tab; 3] = [Tab::Plan, Tab::Route, Tab::Pilots];
+
+    fn title(self) -> &'static str {
+        match self {
+            Tab::Plan => "Plan",
+            Tab::Route => "Route",
+            Tab::Pilots => "Pilots",
+        }
+    }
+}
+
+/// The width under which the route table drops the columns "#", "Stop" and "Region".
+const TABLE_COMPACT: f32 = 560.0;
+
 /// How long the status bar shows a status text.
 const STATUS_TIME: Duration = Duration::from_secs(4);
 
@@ -95,6 +140,10 @@ pub struct View {
     /// True if the pilot opened the waypoint list, false if the pilot closed it. With `None`, the
     /// list is open until the first route shows, so the route gets the room.
     waypoints_open: Option<bool>,
+    /// The tab of the Sidebar class.
+    tab: Tab,
+    /// True while the drawer with the favourites and the pilots is open, in the Half class.
+    drawer_open: bool,
 }
 
 /// A change of the avoid list, from the context menu of a route step.
@@ -122,6 +171,8 @@ impl View {
             status_timer: StatusTimer::default(),
             pilots: PilotsUi::default(),
             waypoints_open: None,
+            tab: Tab::default(),
+            drawer_open: false,
         }
     }
 
@@ -165,33 +216,94 @@ impl View {
             }
         }
 
+        let class = WidthClass::of(ui.ctx().content_rect().width());
         let bar = Frame::new().fill(theme::HEADER).inner_margin(Margin::symmetric(12, 6)).stroke(Stroke::new(1.0, theme::LINE));
-        egui::Panel::top("top-bar").frame(bar).show(ui, |ui| self.top_bar(ui, s));
-        egui::Panel::bottom("status-bar").frame(bar).show(ui, |ui| status_bar(ui, s, &mut self.log_open));
-        let side = Frame::new().fill(theme::BG).inner_margin(Margin { left: 0, right: 10, top: 10, bottom: 10 });
-        egui::Panel::right("sidebar").resizable(false).exact_size(280.0).frame(side).show(ui, |ui| sidebar(ui, s, &mut self.pilots));
+        egui::Panel::top("top-bar").frame(bar).show(ui, |ui| self.top_bar(ui, s, class));
+        egui::Panel::bottom("status-bar").frame(bar).show(ui, |ui| status_bar(ui, s, &mut self.log_open, class == WidthClass::Sidebar));
+        let active = s.pilots.active.is_some();
+        match class {
+            WidthClass::Full => {
+                let side = Frame::new().fill(theme::BG).inner_margin(Margin { left: 0, right: 10, top: 10, bottom: 10 });
+                egui::Panel::right("sidebar").resizable(false).exact_size(280.0).frame(side).show(ui, |ui| {
+                    sidebar(ui, s, &mut self.pilots);
+                });
+            }
+            WidthClass::Half => {
+                if self.drawer_open {
+                    let side = Frame::new().fill(theme::BG).inner_margin(Margin { left: 10, right: 0, top: 10, bottom: 10 });
+                    egui::Panel::left("drawer").resizable(false).exact_size(250.0).frame(side).show(ui, |ui| {
+                        sidebar(ui, s, &mut self.pilots);
+                    });
+                }
+                // The active route fills the window, so the planner column goes.
+                if !active {
+                    let width = ui.available_width();
+                    let plan = (width * 0.42).clamp(280.0, (width - 260.0).max(280.0));
+                    let column = Frame::new().fill(theme::BG).inner_margin(Margin { left: 10, right: 0, top: 10, bottom: 10 });
+                    egui::Panel::left("plan-column").resizable(false).exact_size(plan).frame(column).show(ui, |ui| {
+                        self.plan_column(ui, s, false, true);
+                    });
+                }
+            }
+            WidthClass::Sidebar => {}
+        }
         let central = Frame::new().fill(theme::BG).inner_margin(Margin::same(10));
         egui::CentralPanel::default().frame(central).show(ui, |ui| {
             // The active route hides the planner and the route list.
-            if s.pilots.active.is_some() {
+            if active {
                 self.pilots.active_view(ui, s);
                 return;
             }
-            let available = ui.available_height();
-            let open = self.waypoints_open.unwrap_or(s.routes.is_empty());
-            let planner = if open { PLANNER_CHROME + GRID_MIN } else { PLANNER_CLOSED };
-            let list_height = route_list_height(s.routes.len(), available - TABLE_MIN - planner - 2.0 * GAP);
-            let grid_max = (available - list_height - TABLE_MIN - PLANNER_CHROME - 2.0 * GAP).clamp(GRID_MIN, 200.0);
-            self.planner(ui, s, open, grid_max);
-            ui.add_space(8.0);
-            ui.allocate_ui(vec2(ui.available_width(), list_height), |ui| route_list(ui, s));
-            ui.add_space(8.0);
-            route_table(ui, s, &mut self.pilots);
+            let compact = ui.available_width() < TABLE_COMPACT;
+            match class {
+                WidthClass::Full => {
+                    self.plan_column(ui, s, true, false);
+                    ui.add_space(8.0);
+                    route_table(ui, s, &mut self.pilots, compact);
+                }
+                WidthClass::Half => route_table(ui, s, &mut self.pilots, compact),
+                WidthClass::Sidebar => self.tabbed_view(ui, s),
+            }
         });
 
         settings_window::show(ui, self, s);
         self.pilots.windows(ui, s);
         crate::log_window::show(ui.ctx(), &mut self.log_open, s);
+    }
+
+    /// The planner and the route list. `table_below` keeps room for the route table under them.
+    /// `narrow` draws the planner for a width under 640 px.
+    fn plan_column(&mut self, ui: &mut Ui, s: &mut Session, table_below: bool, narrow: bool) {
+        let available = ui.available_height();
+        let open = self.waypoints_open.unwrap_or(s.routes.is_empty());
+        let planner = if open { PLANNER_CHROME + GRID_MIN } else { PLANNER_CLOSED };
+        let table = if table_below { TABLE_MIN + GAP } else { 0.0 };
+        let list_height = route_list_height(s.routes.len(), available - table - planner - GAP);
+        let grid_max = (available - list_height - table - PLANNER_CHROME - GAP).clamp(GRID_MIN, 200.0);
+        self.planner(ui, s, open, grid_max, narrow);
+        ui.add_space(8.0);
+        // With no table below, the list takes the height that is left.
+        let list_height = if table_below { list_height } else { ui.available_height().max(PANEL_CHROME + ROUTE_PITCH) };
+        ui.allocate_ui(vec2(ui.available_width(), list_height), |ui| route_list(ui, s));
+    }
+
+    /// The Sidebar class: the summary of the selected route, a tab strip and one tab.
+    fn tabbed_view(&mut self, ui: &mut Ui, s: &mut Session) {
+        summary_strip(ui, s);
+        ui.columns(Tab::ALL.len(), |columns| {
+            for (column, tab) in columns.iter_mut().zip(Tab::ALL) {
+                let size = vec2(column.available_width(), 26.0);
+                if column.add_sized(size, Button::selectable(self.tab == tab, tab.title())).clicked() {
+                    self.tab = tab;
+                }
+            }
+        });
+        ui.add_space(6.0);
+        match self.tab {
+            Tab::Plan => self.plan_column(ui, s, false, true),
+            Tab::Route => route_table(ui, s, &mut self.pilots, true),
+            Tab::Pilots => sidebar(ui, s, &mut self.pilots),
+        }
     }
 
     /// Take the result of the Nexum map list fetch, if the thread sent it.
@@ -219,12 +331,65 @@ impl View {
         });
     }
 
-    fn top_bar(&mut self, ui: &mut Ui, s: &mut Session) {
+    fn top_bar(&mut self, ui: &mut Ui, s: &mut Session, class: WidthClass) {
+        if class == WidthClass::Full {
+            self.top_bar_full(ui, s);
+            return;
+        }
+        // Below the full width the bar wraps, and the route options sit in one menu.
+        let locked = s.pilots.active.is_some();
+        ui.horizontal_wrapped(|ui| {
+            if class == WidthClass::Half {
+                let hint = "Show or hide the favourites and the pilots";
+                if ui.add(Button::selectable(self.drawer_open, "☰")).on_hover_text(hint).clicked() {
+                    self.drawer_open = !self.drawer_open;
+                }
+                ui.label(RichText::new("EVE ROUTER").family(theme::bold()).size(16.0).color(theme::ACCENT).extra_letter_spacing(3.0));
+            }
+            // While a route is active, the controls that change the route are hidden.
+            if !locked {
+                mode_combo(ui, s, if class == WidthClass::Half { 150.0 } else { 120.0 });
+                ui.menu_button("Route options", |ui| {
+                    ui.horizontal(|ui| {
+                        ui.label(theme::header_text("Show up to"));
+                        count_stepper(ui, s);
+                        ui.label(theme::header_text("routes"));
+                    });
+                    bridges_toggle(ui, s);
+                    wormholes_toggle(ui, s);
+                    optimize_box(ui, s);
+                });
+            }
+            self.app_buttons(ui, s, class == WidthClass::Sidebar);
+        });
+    }
+
+    /// The Avoid, Characters and Settings buttons. `short` draws the Settings button as an icon.
+    fn app_buttons(&mut self, ui: &mut Ui, s: &mut Session, short: bool) {
+        let avoid = match s.settings.avoid.len() {
+            0 => "Avoid".to_string(),
+            n => format!("Avoid ({n})"),
+        };
+        let locked = s.pilots.active.is_some();
+        let button = ui.add_enabled(!locked, Button::new(avoid)).on_hover_text("Systems and regions that routes avoid");
+        if button.clicked() {
+            self.popup = Some(Popup::Avoid { confirm: false, search: SearchBox::new("avoid-search"), region: String::new() });
+        }
+        button.on_disabled_hover_text(settings_window::LOCKED);
+        self.pilots.characters_button(ui, s);
+        let settings = ui.button(if short { "⚙" } else { "⚙ Settings" }).on_hover_text("Settings");
+        if settings.clicked() {
+            self.settings = Some(SettingsForm::new(s));
+        }
+    }
+
+    fn top_bar_full(&mut self, ui: &mut Ui, s: &mut Session) {
         ui.horizontal(|ui| {
             let title = RichText::new("EVE ROUTER").family(theme::bold()).size(16.0).color(theme::ACCENT).extra_letter_spacing(3.0);
             ui.label(title);
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                // The right-to-left layout draws the Settings button first, so it sits at the right edge.
                 if ui.button("⚙ Settings").clicked() {
                     self.settings = Some(SettingsForm::new(s));
                 }
@@ -239,108 +404,77 @@ impl View {
                 }
                 button.on_disabled_hover_text(settings_window::LOCKED);
                 self.pilots.characters_button(ui, s);
-                ui.separator();
-                // While a route is active, the controls that change the route are off.
-                let locked = s.pilots.active.is_some();
+                // While a route is active, the controls that change the route are hidden.
                 if locked {
-                    ui.disable();
-                }
-
-                // The number of routes.
-                if ui.add_enabled(true, Button::new("+")).clicked() {
-                    s.settings.top += 1;
-                    s.recompute();
-                    s.save_quietly();
-                }
-                ui.label(RichText::new(s.settings.top.to_string()).color(Color32::WHITE));
-                if ui.add_enabled(s.settings.top > 1, Button::new("−")).clicked() {
-                    s.settings.top -= 1;
-                    s.recompute();
-                    s.save_quietly();
-                }
-                ui.label(theme::header_text("Routes"));
-                ui.separator();
-
-                let blocked = s.settings.rules.blocked_reason();
-                let bridges = match &blocked {
-                    Some(_) => "off (no capital)",
-                    None => on_off(s.settings.bridges),
-                };
-                let response = ui.add(Button::selectable(s.settings.bridges && blocked.is_none(), format!("Jump bridges: {bridges}")));
-                if response.clicked() {
-                    s.settings.bridges = !s.settings.bridges;
-                    s.recompute();
-                }
-                if let Some(reason) = blocked {
-                    response.on_hover_text(reason);
-                }
-                if ui.add(Button::selectable(s.settings.wormholes, format!("Wormholes: {}", on_off(s.settings.wormholes)))).clicked() {
-                    s.settings.wormholes = !s.settings.wormholes;
-                    s.recompute();
+                    return;
                 }
                 ui.separator();
-
-                if ui
-                    .checkbox(&mut s.settings.optimize, "Optimize order")
-                    .on_hover_text("Visit each system once, in the cheapest order")
-                    .changed()
-                {
-                    s.recompute();
-                    s.save_quietly();
-                }
-                let mut mode = s.settings.mode;
-                egui::ComboBox::from_id_salt("mode").selected_text(mode.title()).width(150.0).show_ui(ui, |ui| {
-                    for m in Mode::ALL {
-                        ui.selectable_value(&mut mode, m, m.title()).on_hover_text(m.description());
-                    }
-                });
-                if mode != s.settings.mode {
-                    s.settings.mode = mode;
-                    s.recompute();
-                    s.save_quietly();
-                }
+                count_stepper(ui, s);
+                ui.label(theme::header_text("Show up to"));
+                ui.separator();
+                bridges_toggle(ui, s);
+                wormholes_toggle(ui, s);
+                ui.separator();
+                optimize_box(ui, s);
+                mode_combo(ui, s, 150.0);
                 ui.label(theme::header_text("Mode"));
             });
         });
     }
 
+    fn planner_buttons(&mut self, ui: &mut Ui, s: &mut Session) {
+        let hint = "Plan for the ship of a character, or for a hull that you pick";
+        if ui.button(pilot_label(&s.settings, &s.pilots)).on_hover_text(hint).clicked() {
+            self.popup = Some(Popup::Pilot { filter: String::new() });
+        }
+        ui.label(theme::header_text("Pilot"));
+        let hint = "Add many systems at once: one name for each line, or names separated by commas";
+        if ui.button("Paste list…").on_hover_text(hint).clicked() {
+            self.popup = Some(Popup::List { text: String::new(), problems: Vec::new() });
+        }
+        if ui.button("+ Add waypoint").clicked() {
+            match self.search.take_highlighted() {
+                Some(node) => s.add_waypoint(node),
+                None => self.search.focus(ui),
+            }
+        }
+    }
+
+    fn planner_search(&mut self, ui: &mut Ui, s: &mut Session, width: f32) {
+        let menu = [Pick::AddWaypoint, Pick::SetStart, Pick::AddFavourite];
+        let picked = self.search.show(ui, &s.uni, width, "Search system…  (Ctrl+F)", &menu);
+        if let Some((pick, node)) = picked {
+            apply_pick(s, pick, node);
+        }
+        if let Some(list) = self.search.take_list() {
+            s.add_list(&list);
+        }
+    }
+
     /// The search box and the waypoint list. They take the place of the route input of the TUI.
-    fn planner(&mut self, ui: &mut Ui, s: &mut Session, open: bool, grid_max: f32) {
+    fn planner(&mut self, ui: &mut Ui, s: &mut Session, open: bool, grid_max: f32, narrow: bool) {
         let info = match s.waypoints.len() {
             0 => String::new(),
             1 => "1 waypoint".into(),
             n => format!("{n} waypoints"),
         };
         panel(ui, "Route planner", &info, false, |ui| {
-            // The buttons stay at the right edge. The search box takes the space that is left.
-            ui.horizontal(|ui| {
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    let hint = "Plan for the ship of a character, or for a hull that you pick";
-                    if ui.button(pilot_label(&s.settings, &s.pilots)).on_hover_text(hint).clicked() {
-                        self.popup = Some(Popup::Pilot { filter: String::new() });
-                    }
-                    ui.label(theme::header_text("Pilot"));
-                    let hint = "Add many systems at once: one name for each line, or names separated by commas";
-                    if ui.button("Paste list…").on_hover_text(hint).clicked() {
-                        self.popup = Some(Popup::List { text: String::new(), problems: Vec::new() });
-                    }
-                    if ui.button("+ Add waypoint").clicked() {
-                        match self.search.take_highlighted() {
-                            Some(node) => s.add_waypoint(node),
-                            None => self.search.focus(ui),
-                        }
-                    }
-                    let width = (ui.available_width() - ui.spacing().item_spacing.x).max(120.0);
-                    let menu = [Pick::AddWaypoint, Pick::SetStart, Pick::AddFavourite];
-                    let picked = self.search.show(ui, &s.uni, width, "Search system…  (Ctrl+F)", &menu);
-                    if let Some((pick, node)) = picked {
-                        apply_pick(s, pick, node);
-                    }
-                    if let Some(list) = self.search.take_list() {
-                        s.add_list(&list);
-                    }
+            // The buttons stay at the right edge. The search box takes the space that is left. In a
+            // narrow window the search box has its own row and the buttons wrap below it.
+            if narrow {
+                let width = ui.available_width();
+                self.planner_search(ui, s, width);
+                ui.add_space(4.0);
+                ui.with_layout(Layout::right_to_left(Align::Center).with_main_wrap(true), |ui| self.planner_buttons(ui, s));
+            } else {
+                ui.horizontal(|ui| {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                        self.planner_buttons(ui, s);
+                        let width = (ui.available_width() - ui.spacing().item_spacing.x).max(120.0);
+                        self.planner_search(ui, s, width);
+                    });
                 });
-            });
+            }
             ui.add_space(6.0);
             if s.waypoints.is_empty() {
                 ui.label(
@@ -366,8 +500,8 @@ impl View {
             if !open {
                 return;
             }
-            ScrollArea::vertical().max_height(grid_max).auto_shrink([false, true]).show(ui, |ui| {
-                egui::Grid::new("waypoints").num_columns(6).spacing(vec2(14.0, 4.0)).show(ui, |ui| {
+            ScrollArea::both().max_height(grid_max).auto_shrink([false, true]).show(ui, |ui| {
+                egui::Grid::new("waypoints").num_columns(if narrow { 5 } else { 6 }).spacing(vec2(if narrow { 8.0 } else { 14.0 }, 4.0)).show(ui, |ui| {
                     let last = s.waypoints.len() - 1;
                     for (i, &node) in s.waypoints.iter().enumerate() {
                         let sys = s.uni.system(node);
@@ -378,7 +512,9 @@ impl View {
                         let name =
                             ui.add(Label::new(RichText::new(&sys.name).family(theme::bold()).color(Color32::WHITE)).sense(Sense::click()));
                         ui.label(RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)));
-                        ui.label(RichText::new(&sys.region).color(theme::TEXT_DIM));
+                        if !narrow {
+                            ui.label(RichText::new(&sys.region).color(theme::TEXT_DIM));
+                        }
                         ui.horizontal(|ui| {
                             if ui.add_enabled(i > 0, Button::new("⏶").small()).on_hover_text("Move up").clicked() {
                                 edit = Some(Edit::MoveUp(i));
@@ -429,6 +565,79 @@ impl View {
     }
 }
 
+/// The "- n +" stepper for the number of routes. In a right-to-left layout it draws backwards, so
+/// the "+" comes first.
+fn count_stepper(ui: &mut Ui, s: &mut Session) {
+    let rtl = ui.layout().prefer_right_to_left();
+    let minus = |ui: &mut Ui, s: &mut Session| {
+        if ui.add_enabled(s.settings.top > 1, Button::new("−")).clicked() {
+            s.settings.top -= 1;
+            s.recompute();
+            s.save_quietly();
+        }
+    };
+    let plus = |ui: &mut Ui, s: &mut Session| {
+        if ui.button("+").clicked() {
+            s.settings.top += 1;
+            s.recompute();
+            s.save_quietly();
+        }
+    };
+    if rtl {
+        plus(ui, s);
+        ui.label(RichText::new(s.settings.top.to_string()).color(Color32::WHITE));
+        minus(ui, s);
+    } else {
+        minus(ui, s);
+        ui.label(RichText::new(s.settings.top.to_string()).color(Color32::WHITE));
+        plus(ui, s);
+    }
+}
+
+fn bridges_toggle(ui: &mut Ui, s: &mut Session) {
+    let blocked = s.settings.rules.blocked_reason();
+    let bridges = match &blocked {
+        Some(_) => "off (no capital)",
+        None => on_off(s.settings.bridges),
+    };
+    let response = ui.add(Button::selectable(s.settings.bridges && blocked.is_none(), format!("Jump bridges: {bridges}")));
+    if response.clicked() {
+        s.settings.bridges = !s.settings.bridges;
+        s.recompute();
+    }
+    if let Some(reason) = blocked {
+        response.on_hover_text(reason);
+    }
+}
+
+fn wormholes_toggle(ui: &mut Ui, s: &mut Session) {
+    if ui.add(Button::selectable(s.settings.wormholes, format!("Wormholes: {}", on_off(s.settings.wormholes)))).clicked() {
+        s.settings.wormholes = !s.settings.wormholes;
+        s.recompute();
+    }
+}
+
+fn optimize_box(ui: &mut Ui, s: &mut Session) {
+    if ui.checkbox(&mut s.settings.optimize, "Optimize order").on_hover_text("Visit each system once, in the cheapest order").changed() {
+        s.recompute();
+        s.save_quietly();
+    }
+}
+
+fn mode_combo(ui: &mut Ui, s: &mut Session, width: f32) {
+    let mut mode = s.settings.mode;
+    egui::ComboBox::from_id_salt("mode").selected_text(mode.title()).width(width).show_ui(ui, |ui| {
+        for m in Mode::ALL {
+            ui.selectable_value(&mut mode, m, m.title()).on_hover_text(m.description());
+        }
+    });
+    if mode != s.settings.mode {
+        s.settings.mode = mode;
+        s.recompute();
+        s.save_quietly();
+    }
+}
+
 /// Do what a pick in the main search box asks.
 fn apply_pick(s: &mut Session, pick: Pick, node: NodeIndex) {
     match pick {
@@ -473,6 +682,7 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 let number = painter.layout_no_wrap(format!("#{}  ", i + 1), font.clone(), theme::TEXT_DIM);
                 let summary = painter.layout_no_wrap(route_summary(route), font.clone(), text_color);
                 let summary_left = left + number.size().x;
+                let summary_end = summary_left + summary.size().x;
                 let summary_text = route_summary(route);
                 painter.galley(egui::pos2(left, top), number, theme::TEXT_DIM);
                 painter.galley(egui::pos2(summary_left, top), summary, text_color);
@@ -481,7 +691,10 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                     let text = legs.iter().map(usize::to_string).collect::<Vec<_>>().join(" + ");
                     let galley = painter.layout_no_wrap(text, font, theme::TEXT_DIM);
                     let at = egui::pos2(rect.right() - galley.size().x - 10.0, top);
-                    painter.galley(at, galley, theme::TEXT_DIM);
+                    // In a narrow list the jumps of the legs would draw over the summary: the tooltip has them.
+                    if at.x > summary_end + 12.0 {
+                        painter.galley(at, galley, theme::TEXT_DIM);
+                    }
                 }
                 // Line 2: the strip.
                 let line_y = rect.top() + 22.0;
@@ -533,7 +746,7 @@ fn table_items(route: &router_core::route::Route) -> Vec<TableItem> {
     items
 }
 
-fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
+fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: bool) {
     let Some(route) = s.selected_route() else {
         panel(ui, "Route", "", true, |_| {});
         return;
@@ -548,37 +761,50 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     let mut start = false;
     let header = |ui: &mut Ui| {
         let has_pilot = characters.iter().any(|c| !c.live.expired);
-        let text = if has_pilot { format!("Start route #{}", s.selected + 1) } else { "Log in to start".into() };
+        let text = match (has_pilot, compact) {
+            (true, true) => "Start".to_string(),
+            (true, false) => format!("Start route #{}", s.selected + 1),
+            (false, true) => "Log in".into(),
+            (false, false) => "Log in to start".into(),
+        };
         let button = Button::new(RichText::new(text).size(11.0).color(Color32::WHITE)).fill(theme::ACCENT.gamma_multiply(0.35)).small();
         start = ui.add(button).on_hover_text("Send the waypoints of this route to a character in the game").clicked();
         ui.add_space(6.0);
         let button = Button::new(RichText::new("Copy route").size(11.0)).small();
         copy = ui.add(button).on_hover_text("Copy the route as text, in the format of --print").clicked();
-        ui.add_space(6.0);
-        ui.label(RichText::new(&info).color(theme::TEXT_DIM).size(11.0));
+        // In the Sidebar class the summary strip above the tabs has the summary.
+        if !compact {
+            ui.add_space(6.0);
+            ui.label(RichText::new(&info).color(theme::TEXT_DIM).size(11.0));
+        }
     };
     theme::panel_with(ui, &title, header, true, |ui| {
         let uni = &s.uni;
         let table_clip =
             egui::Rect::from_x_y_ranges(ui.min_rect().left()..=ui.available_rect_before_wrap().right(), ui.clip_rect().y_range());
         let header = |ui: &mut Ui, text: &str| _ = ui.label(theme::header_text(text));
-        let mut table = TableBuilder::new(ui)
-            .id_salt("route-table")
-            .striped(false)
-            .sense(Sense::click())
-            .cell_layout(Layout::left_to_right(Align::Center))
-            .column(Column::exact(36.0))
-            .column(Column::exact(110.0))
-            .column(Column::initial(150.0).at_least(90.0).resizable(true).clip(true));
+        let mut table =
+            TableBuilder::new(ui).id_salt("route-table").striped(false).sense(Sense::click()).cell_layout(Layout::left_to_right(Align::Center));
         // The table has no Pilots column: the active route shows where the pilots are.
-        table = table
-            .column(Column::exact(72.0))
-            .column(Column::initial(170.0).at_least(90.0).resizable(true).clip(true))
-            .column(Column::remainder().at_least(120.0).clip(true))
-            .auto_shrink(false);
+        if compact {
+            table = table
+                .column(Column::initial(130.0).at_least(80.0).resizable(true).clip(true))
+                .column(Column::exact(64.0))
+                .column(Column::remainder().at_least(80.0).clip(true));
+        } else {
+            table = table
+                .column(Column::exact(36.0))
+                .column(Column::exact(110.0))
+                .column(Column::initial(150.0).at_least(90.0).resizable(true).clip(true))
+                .column(Column::exact(72.0))
+                .column(Column::initial(170.0).at_least(90.0).resizable(true).clip(true))
+                .column(Column::remainder().at_least(120.0).clip(true));
+        }
+        table = table.auto_shrink(false);
         table
             .header(20.0, |mut row| {
-                for text in ["#", "Stop", "System", "Security", "Region", "Via"] {
+                let names: &[&str] = if compact { &["System", "Security", "Via"] } else { &["#", "Stop", "System", "Security", "Region", "Via"] };
+                for text in names {
                     row.col(|ui| header(ui, text));
                 }
             })
@@ -634,14 +860,16 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                         (None, true) => RichText::new(&sys.name).color(theme::WARN),
                         (None, false) => RichText::new(&sys.name).color(theme::TEXT),
                     };
-                    row.col(|ui| _ = ui.label(RichText::new(step.to_string()).color(theme::TEXT_DIM)));
-                    row.col(|ui| {
-                        if let Some(stop) = stop {
-                            ui.label(RichText::new(stop.label().to_uppercase()).color(theme::ACCENT).size(11.0).extra_letter_spacing(1.0));
-                        } else if avoided {
-                            ui.label(RichText::new("AVOID").color(theme::WARN).size(11.0).extra_letter_spacing(1.0));
-                        }
-                    });
+                    if !compact {
+                        row.col(|ui| _ = ui.label(RichText::new(step.to_string()).color(theme::TEXT_DIM)));
+                        row.col(|ui| {
+                            if let Some(stop) = stop {
+                                ui.label(RichText::new(stop.label().to_uppercase()).color(theme::ACCENT).size(11.0).extra_letter_spacing(1.0));
+                            } else if avoided {
+                                ui.label(RichText::new("AVOID").color(theme::WARN).size(11.0).extra_letter_spacing(1.0));
+                            }
+                        });
+                    }
                     row.col(|ui| {
                         let label = ui.add(Label::new(name).truncate());
                         if avoided {
@@ -651,7 +879,9 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                     row.col(|ui| {
                         _ = ui.label(RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)))
                     });
-                    row.col(|ui| _ = ui.add(Label::new(RichText::new(&sys.region).color(theme::TEXT_DIM)).truncate()));
+                    if !compact {
+                        row.col(|ui| _ = ui.add(Label::new(RichText::new(&sys.region).color(theme::TEXT_DIM)).truncate()));
+                    }
                     row.col(|ui| _ = ui.add(Label::new(RichText::new(&via).color(via_color)).truncate()).on_hover_text(&via));
                     let node = route.path.nodes[step];
                     row.response().context_menu(|ui| {
@@ -693,6 +923,19 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
         ui.ctx().copy_text(route_text(&s.uni, &s.settings.rules, s.selected, route, s.now));
         s.status = format!("Route #{} copied to the clipboard", s.selected + 1);
     }
+}
+
+/// The summary and the strip of the selected route. It stays above the tabs of the Sidebar class.
+fn summary_strip(ui: &mut Ui, s: &Session) {
+    let Some(route) = s.selected_route() else { return };
+    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
+    let painter = ui.painter_at(rect);
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    let text = format!("#{}  {}", s.selected + 1, route_summary(route));
+    painter.text(rect.left_top() + vec2(2.0, 2.0), egui::Align2::LEFT_TOP, text, font, theme::TEXT_SOFT);
+    let strip_rect = egui::Rect::from_min_max(rect.left_top() + vec2(2.0, 20.0), rect.right_bottom() - vec2(2.0, 2.0));
+    strip::paint(&painter, &s.uni, route, strip_rect);
+    ui.add_space(4.0);
 }
 
 fn sidebar(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
@@ -769,7 +1012,7 @@ fn sidebar(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     }
 }
 
-fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool) {
+fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool, compact: bool) {
     // The sync status goes first, at the right. The status text gets the space that is left,
     // and a text that is too long ends in "…". The full text shows on hover.
     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
@@ -783,7 +1026,7 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool) {
             s.refresh_now(Instant::now());
         }
         ui.add_space(6.0);
-        sync_status(ui, s);
+        sync_status(ui, s, compact);
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             // The refresh note stays: the status timer clears only the status and the startup lines.
             let parts: Vec<&str> = std::iter::once(&s.status)
@@ -803,7 +1046,7 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool) {
 
 /// The wormhole sources and the age of their data, for example "Nexum 2 min ago" after a dot.
 /// The dot is green for data from the last 15 minutes, else amber. A source with no data is gray.
-fn sync_status(ui: &mut Ui, s: &Session) {
+fn sync_status(ui: &mut Ui, s: &Session, compact: bool) {
     const FRESH_SECS: u64 = 15 * 60;
     let now = router_core::wormhole::now();
     // The ages change with time, so the bar draws again each minute.
@@ -817,11 +1060,16 @@ fn sync_status(ui: &mut Ui, s: &Session) {
             None if source == SourceId::Nexum && s.cfg.nexum.complete().is_none() => (theme::TEXT_DIM, "not set".into()),
             None => (theme::TEXT_DIM, "no data".into()),
         };
-        ui.label(RichText::new(text).color(theme::TEXT_DIM).small());
-        ui.label(RichText::new(source.label()).color(theme::TEXT).small());
+        // In a narrow window only the dot shows, with the text on hover.
+        let tip = format!("{} {text}", source.label());
+        if !compact {
+            ui.label(RichText::new(text).color(theme::TEXT_DIM).small());
+            ui.label(RichText::new(source.label()).color(theme::TEXT).small());
+        }
         // A painted dot: the fonts have no circle glyph.
-        let (rect, _) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
+        let (rect, response) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
         ui.painter().circle_filled(rect.center(), 3.5, dot);
+        response.on_hover_text(tip);
         ui.add_space(10.0);
     }
 }
@@ -901,6 +1149,15 @@ mod tests {
         assert_eq!(route_list_height(5, 40.0), 1.5 * ROUTE_PITCH + PANEL_CHROME);
         // No routes: the empty text fits.
         assert_eq!(route_list_height(0, 500.0), ROUTE_PITCH + PANEL_CHROME);
+    }
+
+    #[test]
+    fn the_width_decides_the_class() {
+        assert_eq!(WidthClass::of(320.0), WidthClass::Sidebar);
+        assert_eq!(WidthClass::of(639.0), WidthClass::Sidebar);
+        assert_eq!(WidthClass::of(640.0), WidthClass::Half);
+        assert_eq!(WidthClass::of(1099.0), WidthClass::Half);
+        assert_eq!(WidthClass::of(1100.0), WidthClass::Full);
     }
 
     #[test]

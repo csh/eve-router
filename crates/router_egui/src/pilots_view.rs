@@ -305,7 +305,7 @@ impl PilotsUi {
             return;
         }
         let response = Modal::new(Id::new("characters")).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
-            ui.set_width(520.0);
+            ui.set_width(crate::theme::modal_width(ui, 520.0));
             crate::settings_window::title(ui, "Characters");
             // No keyring: offer a login for this session only.
             if s.pilots.accounts.is_none() && s.pilots.keyring_error.is_some() {
@@ -438,7 +438,7 @@ impl PilotsUi {
         let mut close = false;
         let mut plan_for = None;
         let response = Modal::new(Id::new("start")).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
-            ui.set_width(480.0);
+            ui.set_width(crate::theme::modal_width(ui, 480.0));
             match start {
                 Start::Pick { chosen, .. } => {
                     crate::settings_window::title(ui, &format!("Send route #{} to…", route + 1));
@@ -540,7 +540,7 @@ impl PilotsUi {
         }
         let Some(send) = s.pilots.send.clone() else { return };
         Modal::new(Id::new("sending")).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
-            ui.set_width(420.0);
+            ui.set_width(crate::theme::modal_width(ui, 420.0));
             let total = send.systems.len();
             match &send.failed {
                 None => {
@@ -896,7 +896,7 @@ fn destination(s: &Session, route: &ActiveRoute) -> String {
 fn question(ui: &mut Ui, id: &str, title: &str, text: &str, buttons: &[(&str, bool)]) -> Option<usize> {
     let mut clicked = None;
     Modal::new(Id::new(id)).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
-        ui.set_width(440.0);
+        ui.set_width(crate::theme::modal_width(ui, 440.0));
         crate::settings_window::title(ui, title);
         ui.label(RichText::new(text).color(theme::TEXT));
         ui.add_space(6.0);

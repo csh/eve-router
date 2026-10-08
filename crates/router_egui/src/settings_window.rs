@@ -174,7 +174,7 @@ fn region_matches(uni: &router_core::universe::Universe, text: &str, limit: usiz
 /// Returns true when the window must close.
 fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_text: &mut String, s: &mut Session) -> bool {
     title(ui, "Avoid");
-    ui.set_width(760.0);
+    ui.set_width(crate::theme::modal_width(ui, 760.0));
     ui.horizontal(|ui| {
         if let Some((_, node)) = search.show(ui, &s.uni, 300.0, "Add a system…", &[])
             && !s.settings.avoid.has_system(node)
@@ -324,7 +324,7 @@ pub const LOCKED: &str = "Locked while route is active — stop the route to cha
 
 fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool) -> Option<Action> {
     let mut action = None;
-    ui.set_width(560.0);
+    ui.set_width(crate::theme::modal_width(ui, 560.0));
     title(ui, "Settings");
     // While a route is active, only the favourites can change.
     let locked = s.pilots.active.is_some();
@@ -576,7 +576,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
 
 /// A text area for a list of systems. Return true when the window closes.
 fn paste_list(ui: &mut Ui, text: &mut String, problems: &mut Vec<String>, s: &mut Session) -> bool {
-    ui.set_width(460.0);
+    ui.set_width(crate::theme::modal_width(ui, 460.0));
     title(ui, "Paste list");
     ui.label(RichText::new("One system for each line, or names separated by commas.").color(theme::TEXT_DIM));
     ui.add_space(4.0);
@@ -628,7 +628,7 @@ enum Picked {
 
 /// The characters and the hulls, with one filter. Return true when a row is picked.
 fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
-    ui.set_width(560.0);
+    ui.set_width(crate::theme::modal_width(ui, 560.0));
     let rows = s.pilots.pilot_rows(filter);
     title(ui, "Pilot or hull");
     let response = ui.add(TextEdit::singleline(filter).hint_text("Filter by character, ship or group…").desired_width(f32::INFINITY));

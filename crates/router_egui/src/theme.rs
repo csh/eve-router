@@ -184,3 +184,8 @@ pub fn selection_bar(ui: &Ui, rect: egui::Rect) {
     let bar = egui::Rect::from_min_size(Pos2::new(rect.left(), rect.top()), Vec2::new(3.0, rect.height()));
     ui.painter().rect_filled(bar, 0.0, ACCENT);
 }
+
+/// The width of a window: `want`, or less when the window of the app is narrower.
+pub fn modal_width(ui: &Ui, want: f32) -> f32 {
+    want.min((ui.ctx().content_rect().width() - 48.0).max(240.0))
+}
