@@ -465,13 +465,13 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
             table = table.column(Column::initial(190.0).at_least(70.0).resizable(true).clip(true));
         }
         table
-            .column(Column::exact(48.0))
+            .column(Column::exact(72.0))
             .column(Column::initial(170.0).at_least(90.0).resizable(true))
             .column(Column::remainder().at_least(120.0))
             .auto_shrink(false)
             .header(20.0, |mut row| {
                 let pilots_header = show_pilots.then_some("Pilots");
-                for text in ["#", "Stop", "System"].into_iter().chain(pilots_header).chain(["Sec", "Region", "Via"]) {
+                for text in ["#", "Stop", "System"].into_iter().chain(pilots_header).chain(["Security", "Region", "Via"]) {
                     row.col(|ui| header(ui, text));
                 }
             })

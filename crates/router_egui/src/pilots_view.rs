@@ -693,7 +693,7 @@ impl PilotsUi {
                 .column(Column::exact(32.0))
                 .column(Column::exact(100.0))
                 .column(Column::initial(140.0).at_least(90.0).resizable(true))
-                .column(Column::exact(44.0))
+                .column(Column::exact(72.0))
                 .column(Column::initial(190.0).at_least(70.0).resizable(true).clip(true))
                 .column(Column::initial(140.0).at_least(80.0).resizable(true))
                 .column(Column::remainder().at_least(120.0))
@@ -703,7 +703,7 @@ impl PilotsUi {
             }
             table
                 .header(20.0, |mut row| {
-                    for text in ["", "#", "Stop", "System", "Sec", "Pilots", "Region", "Via"] {
+                    for text in ["", "#", "Stop", "System", "Security", "Pilots", "Region", "Via"] {
                         row.col(|ui| header(ui, text));
                     }
                 })
