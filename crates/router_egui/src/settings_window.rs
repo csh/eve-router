@@ -174,14 +174,18 @@ fn region_matches(uni: &router_core::universe::Universe, text: &str, limit: usiz
 /// Returns true when the window must close.
 fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_text: &mut String, s: &mut Session) -> bool {
     title(ui, "Avoid");
-    ui.set_width(crate::theme::modal_width(ui, 760.0));
-    ui.horizontal(|ui| {
-        if let Some((_, node)) = search.show(ui, &s.uni, 300.0, "Add a system…", &[])
+    let width = crate::theme::modal_width(ui, 760.0);
+    ui.set_width(width);
+    // In a narrow window the table drops the Region column and the search boxes use the full width.
+    let narrow = width < 640.0;
+    let (system_width, region_width) = if narrow { (width - 8.0, width - 8.0) } else { (300.0, 220.0) };
+    ui.horizontal_wrapped(|ui| {
+        if let Some((_, node)) = search.show(ui, &s.uni, system_width, "Add a system…", &[])
             && !s.settings.avoid.has_system(node)
         {
             s.toggle_avoid_system(node);
         }
-        ui.add(TextEdit::singleline(region_text).hint_text("Add a region…").desired_width(220.0));
+        ui.add(TextEdit::singleline(region_text).hint_text("Add a region…").desired_width(region_width));
     });
     for region in region_matches(&s.uni, region_text, 6) {
         if ui.small_button(&region).clicked() {
@@ -208,19 +212,31 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
             };
             ui.add(Button::new(RichText::new(text).color(color)).min_size(vec2(64.0, 0.0))).on_hover_text(hover).clicked()
         };
-        egui_extras::TableBuilder::new(ui)
+        use egui_extras::Column;
+        let table = egui_extras::TableBuilder::new(ui)
             .id_salt("avoid-table")
             .striped(true)
-            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-            .column(egui_extras::Column::remainder().at_least(160.0).clip(true))
-            .column(egui_extras::Column::exact(80.0))
-            .column(egui_extras::Column::initial(200.0).at_least(120.0).clip(true))
-            .column(egui_extras::Column::exact(84.0))
-            .column(egui_extras::Column::exact(84.0))
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center));
+        let table = if narrow {
+            table
+                .column(Column::remainder().at_least(80.0).clip(true))
+                .column(Column::exact(40.0))
+                .column(Column::exact(68.0))
+                .column(Column::exact(34.0))
+        } else {
+            table
+                .column(Column::remainder().at_least(160.0).clip(true))
+                .column(Column::exact(80.0))
+                .column(Column::initial(200.0).at_least(120.0).clip(true))
+                .column(Column::exact(84.0))
+                .column(Column::exact(84.0))
+        };
+        table
             .max_scroll_height(280.0)
             .auto_shrink([false, true])
             .header(22.0, |mut header| {
-                for text in ["System", "Security", "Region", "", ""] {
+                let names: &[&str] = if narrow { &["System", "Sec", "", ""] } else { &["System", "Security", "Region", "", ""] };
+                for text in names {
                     header.col(|ui| _ = ui.label(theme::header_text(text)));
                 }
             })
@@ -237,7 +253,9 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
                                     RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)),
                                 );
                             });
-                            row.col(|ui| _ = ui.label(RichText::new(&sys.region).color(theme::TEXT_DIM)));
+                            if !narrow {
+                                row.col(|ui| _ = ui.label(RichText::new(&sys.region).color(theme::TEXT_DIM)));
+                            }
                             row.col(|ui| {
                                 if never_switch(ui, entry.never) {
                                     act = Some(AvoidAct::Never(kind, !entry.never));
@@ -246,9 +264,15 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
                         }
                         AvoidRow::Region(i) => {
                             let entry = &avoid.regions[i];
-                            row.col(|ui| _ = ui.label(RichText::new("All systems").color(theme::TEXT_DIM)));
-                            row.col(|_| {});
-                            row.col(|ui| _ = ui.label(RichText::new(&entry.item).color(theme::TEXT)));
+                            if narrow {
+                                // The region name takes the System column, and the Sec column stays empty.
+                                row.col(|ui| _ = ui.add(egui::Label::new(RichText::new(&entry.item).color(theme::TEXT)).truncate()));
+                                row.col(|_| {});
+                            } else {
+                                row.col(|ui| _ = ui.label(RichText::new("All systems").color(theme::TEXT_DIM)));
+                                row.col(|_| {});
+                                row.col(|ui| _ = ui.label(RichText::new(&entry.item).color(theme::TEXT)));
+                            }
                             row.col(|ui| {
                                 if never_switch(ui, entry.never) {
                                     act = Some(AvoidAct::Never(kind, !entry.never));
@@ -257,7 +281,8 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
                         }
                     }
                     row.col(|ui| {
-                        if ui.button("Remove").clicked() {
+                        let remove = if narrow { ui.button("🗙").on_hover_text("Remove") } else { ui.button("Remove") };
+                        if remove.clicked() {
                             act = Some(AvoidAct::Remove(kind));
                         }
                     });
