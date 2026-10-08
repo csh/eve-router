@@ -74,13 +74,36 @@ impl fmt::Debug for ApiKey {
 }
 
 /// The Nexum settings. The router fetches the map only when all three values are set.
-/// A system or a region on the avoid list, by name.
+/// A system or a region on the avoid list, by name. The file holds an object. A plain name,
+/// from an older file, also loads, as an entry with `never` false.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(from = "AvoidRepr")]
 pub struct AvoidName {
     pub name: String,
     /// True: no route crosses it. False: a route crosses it only if no other route exists.
     #[serde(default)]
     pub never: bool,
+}
+
+/// The two forms of an avoid entry in a file.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AvoidRepr {
+    Name(String),
+    Full {
+        name: String,
+        #[serde(default)]
+        never: bool,
+    },
+}
+
+impl From<AvoidRepr> for AvoidName {
+    fn from(repr: AvoidRepr) -> Self {
+        match repr {
+            AvoidRepr::Name(name) => AvoidName { name, never: false },
+            AvoidRepr::Full { name, never } => AvoidName { name, never },
+        }
+    }
 }
 
 impl AvoidName {
@@ -260,6 +283,15 @@ mod tests {
     fn default_path_is_in_app_dir() {
         let path = default_path();
         assert!(path.ends_with(Path::new(APP_DIR).join(FILE_NAME)), "{}", path.display());
+    }
+
+    /// An older file has a plain name for each avoid entry. It still loads, as a "prefer" entry.
+    #[test]
+    fn an_avoid_entry_reads_a_plain_name_or_an_object() {
+        let text = r#"{"avoid_systems":["Uedama",{"name":"Sivala","never":true}],"avoid_regions":[{"name":"Lonetrek"}]}"#;
+        let cfg: Config = serde_json::from_str(text).unwrap();
+        assert_eq!(cfg.avoid_systems, [AvoidName::new("Uedama", false), AvoidName::new("Sivala", true)]);
+        assert_eq!(cfg.avoid_regions, [AvoidName::new("Lonetrek", false)]);
     }
 
     /// The file format: the field names and the kebab-case mode names.

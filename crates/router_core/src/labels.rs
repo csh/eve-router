@@ -54,20 +54,20 @@ impl Shortcuts {
     }
 }
 
-/// The in-game security colors, as `0xRRGGBB`.
+/// The colors of the security scale in the game, as `0xRRGGBB`. A value of 0.0 or less has the last color.
 pub fn sec_rgb(security: f64) -> u32 {
     match (display_sec(security) * 10.0).round() as i32 {
-        10.. => 0x2FEFEF,
-        9 => 0x48F0C0,
-        8 => 0x00EF47,
-        7 => 0x00F000,
-        6 => 0x8FEF2F,
-        5 => 0xEFEF00,
-        4 => 0xD77700,
-        3 => 0xF06000,
-        2 => 0xF04800,
-        1 => 0xD73000,
-        _ => 0xF00000,
+        10.. => 0x2C75E2,
+        9 => 0x3A9AEB,
+        8 => 0x4ECEF8,
+        7 => 0x61DBA4,
+        6 => 0x72E755,
+        5 => 0xF5FF83,
+        4 => 0xDC6D07,
+        3 => 0xCE440F,
+        2 => 0xBC1117,
+        1 => 0x732020,
+        _ => 0x8D3264,
     }
 }
 
@@ -226,6 +226,31 @@ pub fn wormhole_label(w: &Wormhole, from: u32, now: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The colors of the in-game security scale, from a screenshot of the game: 1.0 down to 0.0.
+    #[test]
+    fn security_colors_match_the_game() {
+        let scale = [
+            (1.0, 0x2C75E2),
+            (0.9, 0x3A9AEB),
+            (0.8, 0x4ECEF8),
+            (0.7, 0x61DBA4),
+            (0.6, 0x72E755),
+            (0.5, 0xF5FF83),
+            (0.4, 0xDC6D07),
+            (0.3, 0xCE440F),
+            (0.2, 0xBC1117),
+            (0.1, 0x732020),
+            (0.0, 0x8D3264),
+        ];
+        for (security, rgb) in scale {
+            assert_eq!(sec_rgb(security), rgb, "security {security}");
+        }
+        // A value between two steps shows as the step that the game shows. Below zero uses the 0.0 color.
+        assert_eq!(sec_rgb(0.04), 0x732020);
+        assert_eq!(sec_rgb(0.54), 0xF5FF83);
+        assert_eq!(sec_rgb(-0.8), 0x8D3264);
+    }
 
     #[test]
     fn pilot_label_names_the_source() {
