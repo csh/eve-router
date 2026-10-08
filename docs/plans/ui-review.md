@@ -272,6 +272,6 @@ What changed (after the first review of the result):
 Open points:
 
 - At 560 px high the table shows 3 rows, not the 200 px target. The rest needs the layout change of step 4.
-- F19 (the empty Pilots column) is not done.
+- F19 is done by a stronger change: the route table has no Pilots column. The active route table keeps it.
 - Two routes can have the same jumps and the same legs. They then differ inside a leg, and the list does not show where. A later change can dim the squares that two routes share.
 - The strip uses a space of 4 to 12 px for each system. A route of more than 210 systems draws past its box at 840 px wide. Routes of that length are not in the test data.

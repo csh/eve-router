@@ -2,7 +2,7 @@
 //! planner), the route list, the route table, the sidebar and the status line.
 
 use crate::app::Session;
-use crate::pilots_view::{PilotsUi, avatar_row};
+use crate::pilots_view::PilotsUi;
 use crate::search::{Pick, SearchBox};
 use crate::settings_window::{self, Popup, SettingsForm};
 use crate::strip;
@@ -10,7 +10,6 @@ use crate::theme::{self, panel};
 use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
 use petgraph::graph::NodeIndex;
-use router_core::esi::pilots::pilots_by_step;
 use router_core::labels::{jumps_label, link_label, on_off, pilot_label, route_summary, route_text};
 use router_core::route::{Mode, Stop};
 use router_core::sources::FetchError;
@@ -546,8 +545,6 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     let mut toggle = None;
     let mut copy = false;
     let characters = s.pilots.characters();
-    // The Pilots column shows only when a character is logged in.
-    let show_pilots = !characters.is_empty();
     let mut start = false;
     let header = |ui: &mut Ui| {
         let has_pilot = characters.iter().any(|c| !c.live.expired);
@@ -573,9 +570,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
             .column(Column::exact(36.0))
             .column(Column::exact(110.0))
             .column(Column::initial(150.0).at_least(90.0).resizable(true).clip(true));
-        if show_pilots {
-            table = table.column(Column::initial(190.0).at_least(70.0).resizable(true).clip(true));
-        }
+        // The table has no Pilots column: the active route shows where the pilots are.
         table = table
             .column(Column::exact(72.0))
             .column(Column::initial(170.0).at_least(90.0).resizable(true).clip(true))
@@ -583,14 +578,11 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
             .auto_shrink(false);
         table
             .header(20.0, |mut row| {
-                let pilots_header = show_pilots.then_some("Pilots");
-                for text in ["#", "Stop", "System"].into_iter().chain(pilots_header).chain(["Security", "Region", "Via"]) {
+                for text in ["#", "Stop", "System", "Security", "Region", "Via"] {
                     row.col(|ui| header(ui, text));
                 }
             })
             .body(|body| {
-                let systems: Vec<u32> = route.path.nodes.iter().map(|&n| uni.system(n).id).collect();
-                let by_step = pilots_by_step(&systems, &characters, None);
                 let items = table_items(route);
                 let heights: Vec<f32> = items.iter().map(|item| if matches!(item, TableItem::Leg(_)) { 28.0 } else { 22.0 }).collect();
                 body.heterogeneous_rows(heights.into_iter(), |mut row| {
@@ -656,9 +648,6 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                             label.on_hover_text("You'd rather skip this one, but there was no better way through");
                         }
                     });
-                    if show_pilots {
-                        row.col(|ui| avatar_row(ui, &mut pilots.portraits, &by_step[step]));
-                    }
                     row.col(|ui| {
                         _ = ui.label(RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)))
                     });
