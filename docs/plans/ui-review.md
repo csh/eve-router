@@ -5,14 +5,15 @@ Date: 2026-10-08. Branch: `live-refresh`.
 ## Method and limits
 
 - I read every file in `crates/router_egui/src` and the label code in `router_core`.
-- I did not run the app and I took no screenshots. All layout claims come from the layout code.
+- I read the code first. Then I ran the release build and took screenshots at 1260 x 560, 1260 x 820 and 900 x 700, with 6 waypoints (Jita, Perimeter, Amarr, Dodixie, Rens, Hek). The shots are not in the repo, because they show a real pilot name.
+- I forced the 900 px size with a script. A user cannot drag below 1260 px today, so the 900 px shot shows what a smaller window would do.
 - A second reviewer tried to refute 14 findings. No finding was refuted. The result is in the last section.
 - The reader is an EVE pilot who wants to get from A to B fast, often with the game on the other half of the screen.
 
 ## The seven problems that matter most
 
 1. **The window cannot shrink.** The minimum size is 1260 x 560 (`main.rs:26`). The sidebar is fixed at 280 px (`view.rs:142`). The top bar is one row that does not wrap (`view.rs:188`). A half-desktop window or a sidebar window is not possible today.
-2. **The answer is not the hero.** The planner takes the top of the window. The route list takes up to 220 px. The route table gets what is left, and at 560 px high that can be close to nothing (F13).
+2. **The answer is not the hero.** The planner takes the top of the window. At 560 px high the route table does not show at all, and the route list shows two rows and a half. At 820 px the table shows 7 rows (F13, F18).
 3. **No route summary shows the risk.** A pilot asks "does this go through lowsec?" The route list shows only "30 jumps (2 wormholes)". The table shows security one row at a time.
 4. **Every message is amber.** `status_bar` paints all text with the warning color (`view.rs:667`). "Config saved!", "Added 2 systems" and a real warning look the same.
 5. **The settings window is a modal with mixed save rules.** Some controls apply at once. Others need Apply or Save. Closing the window drops typed text that was not applied. The pilot cannot see the route change while they tune it.
@@ -27,7 +28,7 @@ Severity: **H** blocks a use case or misleads. **M** costs time or trust. **L** 
 
 | ID | Sev | Finding | Fix |
 |---|---|---|---|
-| F1 | H | Minimum size 1260 x 560. Fixed sidebar. Non-wrapping top bar. Fixed table columns add up to about 850 px. | Three width classes (see "Use cases"). Remove the minimum width. |
+| F1 | H | Minimum size 1260 x 560. Fixed sidebar. Non-wrapping top bar. Fixed table columns add up to about 850 px. **Measured at 900 px:** the title "EVE ROUTER" draws over "Optimize order", and the mode box is cut at the left. | Three width classes (see "Use cases"). Remove the minimum width. |
 | F2 | H | The planner (search row, pilot row, up to 200 px of waypoints, buttons) comes before the route. | Collapse the planner to one line once a route exists. Waypoint list opens on demand. |
 | F3 | M | The top bar mixes route options (mode, bridges, wormholes, optimize, count) with app buttons (Settings, Avoid, Characters). | Route options go to one "Route options" popover plus a mode control. App buttons go to the right. |
 | F4 | M | The top bar says "Routes - 5 +". The panel below says "Routes (3)". One word, two meanings. | Name the first "Show up to 5 routes". Move it into the popover. |
@@ -44,7 +45,10 @@ Severity: **H** blocks a use case or misleads. **M** costs time or trust. **L** 
 | F10 | M | "+ Add waypoint" only focuses the search box when the box is empty or has no result. It does nothing the pilot asked for. | Disable it while there is nothing to add. |
 | F11 | M | The pilot's current system is not the default start. Click on a pilot in the sidebar sets the start, but only the tooltip says so. | When a pilot is online, pre-fill From with "Current location (Jita)". |
 | F12 | M | Avoiding a system is a right click on a route row. Nothing shows this. The only hint sits in the empty Avoid window. | Add a small row action on hover. Keep the right click as a second way. |
-| F13 | M | At 560 px high with 5 or more waypoints, the route table has almost no height. Computed from the layout code, not measured. | See F2. Also give the table a minimum height. |
+| F13 | H | **Measured.** At 1260 x 560 with 6 waypoints, the route table is not on screen. The pilot sees the planner and a cut route list. | See F2. Also give the table a minimum height. |
+| F17 | H | **Measured.** Route #1 and #2 both read "42 jumps (1 wormhole)". The list gives no way to tell them apart. | Show the difference: which wormhole, the added jumps, the lowsec count. See "The route strip". |
+| F18 | M | **Measured.** At 820 px high the route list shows two rows and a half of 5. The third row is cut in the middle. | Size the list to its rows, up to 5, or scroll with a visible bar. |
+| F19 | L | **Measured.** The Pilots column of the route table takes 190 px and is empty when no pilot is on the route. | Hide the column unless a pilot is on a step. |
 | F14 | L | The "Pilot" row asks the player to pick a pilot or a hull. The player thinks "ship". The hull matters only for jump bridges. | Rename to "Ship". Show it as a chip in the top bar. |
 | F15 | L | The sidebar panel "Shortest route" shows jumps to favourites. It is not a route. | Rename to "Favourites" with the info "from Jita". |
 | F16 | L | Favourites are edited in Settings but shown in the sidebar. | Edit them in the sidebar: add, remove, drag to reorder. |
@@ -198,7 +202,7 @@ The overlay also solves the Sidebar use case for travel. The main window can sta
 
 | Area | Now | Target |
 |---|---|---|
-| Font | Oxanium, a generic sci-fi face (`theme.rs:45`). | A neutral humanist sans at 12 to 13 px, like the client. Keep Oxanium for the title only. |
+| Font | Oxanium (`theme.rs:45`). A side-by-side with the client shows a similar angular face. | Keep it. Check body text at 12 to 13 px, which is the client's size. |
 | Window chrome | A normal OS window with panels. | Panels with a draggable header, collapse arrow and small icon buttons, as in the game. At least for the overlay and popover. |
 | Navigation | A top bar of text buttons. | A left rail (neocom) of icons with tooltips. |
 | Route display | A table only. | The security dot strip (see above). The game shows this strip in its route panel. |
@@ -214,9 +218,9 @@ Do not copy CCP art or font files. Draw the icons and choose an open font.
 
 | Step | What | Estimate |
 |---|---|---|
-| 0 | Screenshot pass of the current app at 1260 x 560, 1260 x 820 and a 960 px crop. Confirms F13. | 30 minutes |
+| 0 | Done. Screenshot pass at 1260 x 560, 1260 x 820 and 900 x 700. Confirms F13 and F1, and adds F17 to F19. | 30 minutes |
 | 1 | Message levels and message cleanup (M1 to M8, M13). Pure text and color. | 3 hours |
-| 2 | Route strip and route list rows (the bold element, F2, F13). | 1 day |
+| 2 | Route strip and route list rows (the bold element, F2, F13, F17, F18). | 1 day |
 | 3 | Responsive shell: remove the minimum size, width classes, tab strip (F1, F3, F5). | 2 days |
 | 4 | Settings popover (S1 to S5, M9). Needs the layout from step 3. | 1.5 days |
 | 5 | From / To fields and the current-location default (F8, F11). | 0.5 day |
@@ -233,7 +237,7 @@ A second reviewer tried to refute 14 findings by reading the code.
 - **Partly right (2):**
   - F1. The hard floor is 1260 px from `main.rs:26`. The top bar would only clip below that, and the OS stops the resize first. The finding stands, and the text now says 1260.
   - F10. The button adds the result only when the box has text and at least one result. An empty box or a query with no result also falls to "focus the box". The fix text says "disable while there is nothing to add".
-- **Confirmed with medium confidence (1):** F13. The reviewer estimated about 0 to 20 px for the route table at 560 px high with 6 waypoints. The pixel numbers are by hand, so measure this with a screenshot before the fix.
+- **Confirmed by screenshot (1):** F13. The reviewer estimated 0 to 20 px for the route table at 560 px high with 6 waypoints. The screenshot shows 0 px: the table is not on screen.
 - **Refuted:** none.
 
 Added after the check:
@@ -241,4 +245,4 @@ Added after the check:
 - M10 has a third meaning of "Stop": the context menu says "Stop avoiding X".
 - The Log button turns amber on a failure, and the status text is always amber. The two signals clash (part of M1).
 - `ui.disable()` in `top_bar` also disables the route count buttons and the mode combo while a route is active. This is the intended lock, but it shows as greyed controls (F5).
-- Both reviewers checked the code only. Neither ran the app. Step 0 of the work order is a screenshot pass at 1260 x 560, 1260 x 820 and 960 wide (after F1).
+- The screenshot pass (step 0) found F17, F18 and F19, which the code reading did not.
