@@ -773,8 +773,8 @@ mod tests {
         assert_eq!(names(&s), ["UALX-3", "Jita"]);
         let lines: Vec<String> = s.routes.iter().map(|r| format!("{}{}", jumps_label(r.jumps), route_extras(r))).collect();
         assert_eq!(lines.len(), 3, "{}", s.status);
-        // The 2-wormhole route of 30 jumps costs 8 jumps more now: its wormholes have no signature.
-        assert_eq!(lines, ["30 jumps", "30 jumps", "31 jumps"]);
+        // The list shows three different routes. A route that only detours the first one is not in it.
+        assert_eq!(lines, ["30 jumps", "31 jumps", "41 jumps"]);
     }
 
     #[test]

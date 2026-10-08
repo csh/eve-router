@@ -35,7 +35,7 @@ Shortest route from UALX-3 (shortest):
    29             Niyabainen            0.9 The Forge            gate
    30 Destination Jita                  0.9 The Forge            gate
 
-#2 30 jumps
+#2 31 jumps
     0 Start       UALX-3               -0.2 Tenerifis            
     1             3L3N-X               -0.2 Tenerifis            gate
     2             Q-S7ZD               -0.0 Catch                gate
@@ -56,51 +56,62 @@ Shortest route from UALX-3 (shortest):
    17             Zarzakh              -1.0 Yasna Zakh           gate
    18             Alsavoinon            0.3 Placid               gate
    19             Vlillirier            0.3 Placid               gate
-   20             Aldranette            0.4 Placid               gate
-   21             Nennamaila            0.3 Black Rise           gate
-   22             Hikkoken              0.3 Black Rise           gate
-   23             Pynekastoh            0.2 Black Rise           gate
-   24             Hirri                 0.3 Black Rise           gate
-   25             Kedama                0.3 Black Rise           gate
-   26             Tama                  0.3 The Citadel          gate
-   27             Nourvukaiken          0.8 Lonetrek             gate
-   28             Tunttaras             0.9 Lonetrek             gate
-   29             Ikuchi                0.9 The Forge            gate
-   30 Destination Jita                  0.9 The Forge            gate
-
-#3 31 jumps
-    0 Start       UALX-3               -0.2 Tenerifis            
-    1             3L3N-X               -0.2 Tenerifis            gate
-    2             Q-S7ZD               -0.0 Catch                gate
-    3             GJ0-OJ               -0.0 Catch                gate
-    4             A-803L               -0.0 Catch                gate
-    5             6X7-JO               -0.1 Catch                gate
-    6             HY-RWO               -0.1 Catch                gate
-    7             V-3YG7               -0.1 Catch                gate
-    8             B-3QPD               -0.1 Catch                gate
-    9             U-QVWD               -0.1 Catch                gate
-   10             0SHT-A               -0.2 Curse                gate
-   11             V-IUEL               -0.1 Curse                gate
-   12             PO4F-3               -0.1 Curse                gate
-   13             K-B2D3               -0.1 Curse                gate
-   14             VOL-MI               -0.0 Curse                gate
-   15             HLW-HP               -0.0 Curse                gate
-   16             KLMT-W               -0.0 Curse                gate
-   17             G-0Q86               -0.0 Curse                gate
-   18             Zarzakh              -1.0 Yasna Zakh           gate
-   19             Alsavoinon            0.3 Placid               gate
-   20             Vlillirier            0.3 Placid               gate
-   21             Aldranette            0.4 Placid               gate
-   22             Nennamaila            0.3 Black Rise           gate
-   23             Hikkoken              0.3 Black Rise           gate
-   24             Pynekastoh            0.2 Black Rise           gate
-   25             Hirri                 0.3 Black Rise           gate
-   26             Kedama                0.3 Black Rise           gate
-   27             Tama                  0.3 The Citadel          gate
-   28             Nourvukaiken          0.8 Lonetrek             gate
-   29             Tunttaras             0.9 Lonetrek             gate
-   30             Niyabainen            0.9 The Forge            gate
+   20             Oicx                  0.3 Placid               gate
+   21             Eha                   0.4 Black Rise           gate
+   22             Martoh                0.4 Black Rise           gate
+   23             Kinakka               0.4 Black Rise           gate
+   24             Onnamon               0.6 Black Rise           gate
+   25             Piak                  0.7 Lonetrek             gate
+   26             Elonaya               0.7 Lonetrek             gate
+   27             Litiura               0.5 Lonetrek             gate
+   28             Uemisaisen            0.6 Lonetrek             gate
+   29             Isanamo               0.6 Lonetrek             gate
+   30             Sobaseki              0.8 Lonetrek             gate
    31 Destination Jita                  0.9 The Forge            gate
+
+#3 41 jumps
+    0 Start       UALX-3               -0.2 Tenerifis            
+    1             DT-PXH               -0.1 Tenerifis            gate
+    2             S4-9DN               -0.1 Tenerifis            gate
+    3             BW-WJ2               -0.1 Tenerifis            gate
+    4             XVV-21               -0.3 Immensea             gate
+    5             DY-P7Q               -0.2 Immensea             gate
+    6             Z8-81T               -0.2 Immensea             gate
+    7             H-RXNZ               -0.2 Immensea             gate
+    8             XD-JW7               -0.2 Immensea             gate
+    9             9-8GBA               -0.1 Catch                gate
+   10             6-K738               -0.1 Catch                gate
+   11             QBQ-RF               -0.0 Catch                gate
+   12             QSM-LM               -0.1 Catch                gate
+   13             36N-HZ               -0.1 Catch                gate
+   14             9KOE-A               -0.0 Catch                gate
+   15             WD-VTV               -0.1 Catch                gate
+   16             SV5-8N               -0.2 Catch                gate
+   17             HED-GP               -0.1 Catch                gate
+   18             Keberz                0.5 Khanid               gate
+   19             Lansez                0.7 Khanid               gate
+   20             Bukah                 0.8 Khanid               gate
+   21             Agil                  0.9 Khanid               gate
+   22             Hishai                0.8 Khanid               gate
+   23             Geztic                0.7 Khanid               gate
+   24             Osis                  0.7 Khanid               gate
+   25             Yezara                0.7 Khanid               gate
+   26             Ervekam               0.7 Khanid               gate
+   27             Masanuh               0.7 Kor-Azor             gate
+   28             Leva                  0.6 Kor-Azor             gate
+   29             Kor-Azor Prime        0.9 Kor-Azor             gate
+   30             Amarr                 0.9 Domain               gate
+   31             Ashab                 0.9 Domain               gate
+   32             Kehour                0.9 Domain               gate
+   33             Akhragan              0.8 Domain               gate
+   34             Zororzih              0.7 Kador                gate
+   35             Gensela               0.7 Kador                gate
+   36             Shera                 0.6 Genesis              gate
+   37             Ahbazon               0.4 Genesis              gate
+   38             Hykkota               0.8 The Forge            gate
+   39             Ansila                0.9 The Forge            gate
+   40             Ikuchi                0.9 The Forge            gate
+   41 Destination Jita                  0.9 The Forge            gate
 Shortest route from Jita (shortest):
   Jita                0
   Amarr              11
