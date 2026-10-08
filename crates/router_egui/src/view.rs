@@ -225,14 +225,14 @@ impl View {
             WidthClass::Full => {
                 let side = Frame::new().fill(theme::BG).inner_margin(Margin { left: 0, right: 10, top: 10, bottom: 10 });
                 egui::Panel::right("sidebar").resizable(false).exact_size(280.0).frame(side).show(ui, |ui| {
-                    sidebar(ui, s, &mut self.pilots);
+                    sidebar(ui, s, &mut self.pilots, false);
                 });
             }
             WidthClass::Half => {
                 if self.drawer_open {
                     let side = Frame::new().fill(theme::BG).inner_margin(Margin { left: 10, right: 0, top: 10, bottom: 10 });
                     egui::Panel::left("drawer").resizable(false).exact_size(250.0).frame(side).show(ui, |ui| {
-                        sidebar(ui, s, &mut self.pilots);
+                        sidebar(ui, s, &mut self.pilots, false);
                     });
                 }
                 // The active route fills the window, so the planner column goes.
@@ -302,7 +302,7 @@ impl View {
         match self.tab {
             Tab::Plan => self.plan_column(ui, s, false, true),
             Tab::Route => route_table(ui, s, &mut self.pilots, true),
-            Tab::Pilots => sidebar(ui, s, &mut self.pilots),
+            Tab::Pilots => sidebar(ui, s, &mut self.pilots, true),
         }
     }
 
@@ -422,20 +422,44 @@ impl View {
         });
     }
 
-    fn planner_buttons(&mut self, ui: &mut Ui, s: &mut Session) {
-        let hint = "Plan for the ship of a character, or for a hull that you pick";
-        if ui.button(pilot_label(&s.settings, &s.pilots)).on_hover_text(hint).clicked() {
-            self.popup = Some(Popup::Pilot { filter: String::new() });
+    /// The Pilot, Paste list and Add waypoint buttons. A right-to-left layout draws the first button
+    /// at the right edge, so `rtl` gives the order for it and a left-to-right layout gives the reverse.
+    fn planner_buttons(&mut self, ui: &mut Ui, s: &mut Session, rtl: bool) {
+        let mut parts = [0, 1, 2];
+        if !rtl {
+            parts.reverse();
         }
-        ui.label(theme::header_text("Pilot"));
-        let hint = "Add many systems at once: one name for each line, or names separated by commas";
-        if ui.button("Paste list…").on_hover_text(hint).clicked() {
-            self.popup = Some(Popup::List { text: String::new(), problems: Vec::new() });
-        }
-        if ui.button("+ Add waypoint").clicked() {
-            match self.search.take_highlighted() {
-                Some(node) => s.add_waypoint(node),
-                None => self.search.focus(ui),
+        for part in parts {
+            match part {
+                0 => {
+                    let hint = "Plan for the ship of a character, or for a hull that you pick";
+                    let pilot = pilot_label(&s.settings, &s.pilots);
+                    if rtl {
+                        if ui.button(pilot).on_hover_text(hint).clicked() {
+                            self.popup = Some(Popup::Pilot { filter: String::new() });
+                        }
+                        ui.label(theme::header_text("Pilot"));
+                    } else {
+                        ui.label(theme::header_text("Pilot"));
+                        if ui.button(pilot).on_hover_text(hint).clicked() {
+                            self.popup = Some(Popup::Pilot { filter: String::new() });
+                        }
+                    }
+                }
+                1 => {
+                    let hint = "Add many systems at once: one name for each line, or names separated by commas";
+                    if ui.button("Paste list…").on_hover_text(hint).clicked() {
+                        self.popup = Some(Popup::List { text: String::new(), problems: Vec::new() });
+                    }
+                }
+                _ => {
+                    if ui.button("+ Add waypoint").clicked() {
+                        match self.search.take_highlighted() {
+                            Some(node) => s.add_waypoint(node),
+                            None => self.search.focus(ui),
+                        }
+                    }
+                }
             }
         }
     }
@@ -465,11 +489,11 @@ impl View {
                 let width = ui.available_width();
                 self.planner_search(ui, s, width);
                 ui.add_space(4.0);
-                ui.with_layout(Layout::right_to_left(Align::Center).with_main_wrap(true), |ui| self.planner_buttons(ui, s));
+                ui.horizontal_wrapped(|ui| self.planner_buttons(ui, s, false));
             } else {
                 ui.horizontal(|ui| {
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        self.planner_buttons(ui, s);
+                        self.planner_buttons(ui, s, true);
                         let width = (ui.available_width() - ui.spacing().item_spacing.x).max(120.0);
                         self.planner_search(ui, s, width);
                     });
@@ -938,41 +962,70 @@ fn summary_strip(ui: &mut Ui, s: &Session) {
     ui.add_space(4.0);
 }
 
-fn sidebar(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
-    // The "Shortcuts" box shows only when an overlay loaded a connection.
-    let sc = &s.shortcuts;
-    if sc.wormholes + sc.bridges > 0 {
-        let settings = &s.settings;
-        let bridges_on = settings.bridges && settings.rules.blocked_reason().is_none();
-        panel(ui, "Shortcuts", "", false, |ui| {
-            egui::Grid::new("shortcuts").num_columns(2).spacing(vec2(8.0, 2.0)).min_col_width(60.0).show(ui, |ui| {
-                // A kind that is off for routing shows in gray.
-                let row = |ui: &mut Ui, label: &str, count: usize, on: bool| {
-                    let color = if on { theme::TEXT } else { theme::TEXT_DIM };
-                    ui.label(RichText::new(label).color(color));
-                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(count.to_string()).color(color)));
-                    ui.end_row();
-                };
-                row(ui, "Wormholes", sc.wormholes, settings.wormholes);
-                for (label, count, on) in [("  Thera", sc.thera, settings.hubs.thera), ("  Turnur", sc.turnur, settings.hubs.turnur)] {
-                    if count > 0 {
-                        row(ui, label, count, settings.wormholes && on);
-                    }
-                }
-                row(ui, "Jump bridges", sc.bridges, bridges_on);
-                if sc.skipped > 0 {
-                    row(ui, "Skipped", sc.skipped, false);
-                }
-            });
-        });
+/// The panels of the sidebar. `pilots_first` is the order of the Pilots tab: the pilots, then the
+/// favourites, then the data that the overlays loaded.
+fn sidebar(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, pilots_first: bool) {
+    let has_pilots = !s.pilots.characters().is_empty();
+    if pilots_first {
+        if has_pilots {
+            pilots.sidebar_panel(ui, s);
+            ui.add_space(8.0);
+        }
+        favourites_panel(ui, s, false);
+        ui.add_space(8.0);
+        connections_panel(ui, s);
+        return;
+    }
+    if connections_panel(ui, s) {
         ui.add_space(8.0);
     }
-
-    let info = s.waypoints.first().map_or(String::new(), |&n| format!("from {}", s.uni.name(n)));
-    let mut add = None;
     // With pilots, the Pilots panel goes below, so this panel does not fill the sidebar.
-    let fill = s.pilots.characters().is_empty();
-    panel(ui, "Shortest route", &info, fill, |ui| {
+    favourites_panel(ui, s, !has_pilots);
+    if has_pilots {
+        ui.add_space(8.0);
+        pilots.sidebar_panel(ui, s);
+    }
+}
+
+/// The wormholes and the jump bridges that the overlays loaded. It shows only when an overlay
+/// loaded a connection. Returns true if it drew the panel.
+fn connections_panel(ui: &mut Ui, s: &Session) -> bool {
+    let sc = &s.shortcuts;
+    if sc.wormholes + sc.bridges == 0 {
+        return false;
+    }
+    let settings = &s.settings;
+    let bridges_on = settings.bridges && settings.rules.blocked_reason().is_none();
+    panel(ui, "Connections loaded", "", false, |ui| {
+        egui::Grid::new("shortcuts").num_columns(2).spacing(vec2(8.0, 2.0)).min_col_width(60.0).show(ui, |ui| {
+            // A kind that is off for routing shows in gray.
+            let row = |ui: &mut Ui, label: &str, count: usize, on: bool| {
+                let color = if on { theme::TEXT } else { theme::TEXT_DIM };
+                ui.label(RichText::new(label).color(color));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(count.to_string()).color(color)));
+                ui.end_row();
+            };
+            row(ui, "Wormholes", sc.wormholes, settings.wormholes);
+            for (label, count, on) in [("  Thera", sc.thera, settings.hubs.thera), ("  Turnur", sc.turnur, settings.hubs.turnur)] {
+                if count > 0 {
+                    row(ui, label, count, settings.wormholes && on);
+                }
+            }
+            row(ui, "Jump bridges", sc.bridges, bridges_on);
+            if sc.skipped > 0 {
+                row(ui, "Skipped", sc.skipped, false);
+            }
+        });
+    });
+    true
+}
+
+/// The favourites, with the jumps from the first waypoint. `fill` makes the panel as high as the
+/// space that is left.
+fn favourites_panel(ui: &mut Ui, s: &mut Session, fill: bool) {
+    let info = s.waypoints.first().map_or(String::new(), |&n| format!("jumps from {}", s.uni.name(n)));
+    let mut add = None;
+    panel(ui, "Favourites", &info, fill, |ui| {
         if s.settings.favourites.is_empty() {
             ui.label(RichText::new("No favourites. Add one in the settings, or right-click a search result.").color(theme::TEXT_DIM));
             return;
@@ -1005,10 +1058,6 @@ fn sidebar(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     });
     if let Some(node) = add {
         s.add_waypoint(node);
-    }
-    if !fill {
-        ui.add_space(8.0);
-        pilots.sidebar_panel(ui, s);
     }
 }
 
