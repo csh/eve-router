@@ -15,6 +15,8 @@ pub const LINE: Color32 = Color32::from_rgb(0x26, 0x34, 0x3D);
 pub const ACCENT: Color32 = Color32::from_rgb(0x5A, 0xB4, 0xD2);
 pub const ACCENT_DIM: Color32 = Color32::from_rgba_premultiplied(0x10, 0x20, 0x26, 0x2E);
 pub const TEXT: Color32 = Color32::from_rgb(0xC8, 0xD2, 0xD8);
+/// Between `TEXT` and `TEXT_DIM`: the summary of a route in the route list.
+pub const TEXT_SOFT: Color32 = Color32::from_rgb(0x9B, 0xA8, 0xB0);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(0x6E, 0x7E, 0x88);
 pub const OK: Color32 = Color32::from_rgb(0x4C, 0xC0, 0x70);
 pub const WARN: Color32 = Color32::from_rgb(0xE0, 0xA0, 0x30);

@@ -470,7 +470,7 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 // Line 1: the number, then the summary in one font and one color. The jumps of each leg
                 // are at the right, in the same font.
                 let top = rect.top() + 4.0;
-                let text_color = if selected { Color32::WHITE } else { theme::TEXT };
+                let text_color = theme::TEXT_SOFT;
                 let number = painter.layout_no_wrap(format!("#{}  ", i + 1), font.clone(), theme::TEXT_DIM);
                 let summary = painter.layout_no_wrap(route_summary(route), font.clone(), text_color);
                 let summary_left = left + number.size().x;

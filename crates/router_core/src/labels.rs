@@ -166,7 +166,7 @@ pub fn route_notes(route: &Route) -> Vec<String> {
         parts.push(format!("{tj} TJ"));
     }
     if let Some(pct) = route.bridge_cap_pct {
-        parts.push(format!("{pct:.1}% of a gate"));
+        parts.push(format!("{pct:.1}% capacitor used"));
     }
     if route.unknown_sigs > 0 {
         parts.push(format!("{} unknown sig{}", route.unknown_sigs, if route.unknown_sigs == 1 { "" } else { "s" }));

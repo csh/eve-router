@@ -259,10 +259,10 @@ Measured in the release build with 6 waypoints. The 1260 x 560 window used to sh
 What changed (after the first review of the result):
 
 - The route strip draws in each route list row. It follows the game: one square for each system (10 px, 2 px gap), and a plus in place of the square for each system the pilot gave (start, midpoints, destination). The plus has the color of the security of its system. The strip has no border. A wormhole or bridge jump shows as a purple or blue bar below the square. The route table has no strip.
-- A route list row has two lines. Line 1 is the number, then one summary in one font and one color, for example "14 jumps · 1 wormhole · 2 jump bridges · 0 TJ · 0.0% of a gate". At the right it gives the jumps of each leg, for example "2 + 12". Line 2 is the strip. The route table header shows the same summary.
+- A route list row has two lines. Line 1 is the number, then one summary in one font and one color, for example "14 jumps · 1 wormhole · 2 jump bridges · 0 TJ · 0.0% capacitor used". At the right it gives the jumps of each leg, for example "2 + 12". Line 2 is the strip. The route table header shows the same summary.
 - The lowsec and nullsec count is gone. The security colors of the squares show it.
 - The strip draws in whole device pixels, so every edge is sharp at any display scale. The bar under a square for a wormhole or a bridge jump is as wide as the square.
-- The summary still shows "0 TJ" and "0.0% of a gate", for the layout work. Show each only when it is above 0 when the design is locked. "% of a gate" is the share of the Ansiblex capacitor that the bridge jumps of the selected ship use. A stargate needs none.
+- The summary still shows "0 TJ" and "0.0% capacitor used", for the layout work. Show each only when it is above 0 when the design is locked. "% capacitor used" is the share of the Ansiblex capacitor that the bridge jumps of the selected ship use. A stargate needs none.
 - The "Leaves #1 at ..." text is gone. A leg is the part of a route between two given systems.
 - The route table groups the steps by leg when the route has two or more legs. A heading before each leg reads "PERIMETER » AMARR · 12 JUMPS". The stop that ends a leg stays in that leg.
 - The planner closes its waypoint list when a route exists. A button opens it again. The buttons of the planner ("+ Add waypoint", "Paste list…", Pilot, Reverse, "Clear route") stay at the right edge.
