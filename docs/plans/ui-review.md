@@ -17,7 +17,7 @@ Date: 2026-10-08. Branch: `live-refresh`.
 3. **No route summary shows the risk.** A pilot asks "does this go through lowsec?" The route list shows only "30 jumps (2 wormholes)". The table shows security one row at a time.
 4. **Every message is amber.** `status_bar` paints all text with the warning color (`view.rs:667`). "Config saved!", "Added 2 systems" and a real warning look the same.
 5. **The settings window is a modal with mixed save rules.** Some controls apply at once. Others need Apply or Save. Closing the window drops typed text that was not applied. The pilot cannot see the route change while they tune it.
-6. **Router internals reach the player.** Examples: "0.4 ms" search time, "in the format of --print", "jumps per 1% of a gate", "Shortcuts".
+6. **Router internals reach the player.** Examples: "in the format of --print", "jumps per 1% of a gate", "Shortcuts". The search time ("6.2 ms") stays, by the owner's decision (M6).
 7. **The look is close to the game but not inside it.** The security colors match the game. The font, the window chrome, the controls and the route display do not. See "EVE look".
 
 ## Findings
@@ -62,7 +62,7 @@ Severity: **H** blocks a use case or misleads. **M** costs time or trust. **L** 
 | M3 | M | `recompute` sets "Jump bridges off: ..." at every search (`app.rs:291`). A pilot who never uses bridges sees it all the time. | Show it as a hint on the bridges control only. |
 | M4 | M | The idle status text is "Ready". It says nothing. | Show the route summary, or nothing. |
 | M5 | M | The refresh note ("Wormholes updated: a new route is first") stays until the next search, in the status bar. It matters, but it is easy to miss. | Show it as a dismissable line above the route list, with a "changed" mark on the route. |
-| M6 | M | The search time ("0.4 ms") shows in the route list header. | Remove. Keep it in the log. |
+| M6 | L | The search time ("6.2 ms") shows in the route list header. **Keep it.** It tells users whether the router performs well. It is unlabeled, so a new user reads it as noise. | Keep the value. Add a tooltip: "Time to find these routes". Keep it visible when the route list shrinks or moves (F2, F17). Optional: turn it amber above a set limit, for example 250 ms. |
 | M7 | M | The "Copy route" tooltip says "in the format of --print". | "Copy the route as a list of systems". |
 | M8 | M | Jump bridges button says "off (no capital)" for every blocked reason (`view.rs:232`). A hull ban gives the wrong text. | Use the reason text, shortened. |
 | M9 | M | The Never and Prefer button shows the current state. A pilot cannot tell if it is the state or the action. | Use a two-part switch: Prefer / Never. Add one line of help. |
