@@ -187,6 +187,8 @@ pub struct Router<'a> {
     node_danger: Vec<u64>,
     /// True if the current settings allow the edge, by `EdgeIndex`.
     edge_ok: Vec<bool>,
+    /// True for a system that no route may enter, by `NodeIndex`. It is empty until `set_never`.
+    never: Vec<bool>,
     /// The cost that an edge adds to the cost of a jump into its target, by `EdgeIndex`.
     edge_extra: Vec<u64>,
 }
@@ -251,11 +253,18 @@ impl<'a> Router<'a> {
             })
             .collect();
         let node_danger = vec![0; graph.node_count()];
-        Router { uni, rules, node_cost, node_danger, edge_ok, edge_extra }
+        Router { uni, rules, node_cost, node_danger, edge_ok, never: Vec::new(), edge_extra }
     }
 
     fn link_allowed(&self, e: EdgeReference<'_, Link>) -> bool {
-        self.edge_ok[e.id().index()]
+        self.edge_ok[e.id().index()] && !self.never.get(e.target().index()).copied().unwrap_or(false)
+    }
+
+    /// Set the systems that no route may enter, by `NodeIndex`. A later call replaces the earlier
+    /// systems. The start of a route is not a jump into a system, so it can be one of them.
+    pub fn set_never(&mut self, never: Vec<bool>) {
+        assert_eq!(never.len(), self.node_cost.len(), "one flag for each system");
+        self.never = never;
     }
 
     /// Set the danger cost of each system, in milli-jumps, by `NodeIndex`. A jump into a system pays

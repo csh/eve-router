@@ -14,10 +14,16 @@
   "unknown_sig_penalty": 4.0,
   "unknown_sig_broken": true,
   "avoid_systems": [
-    "Rens"
+    {
+      "name": "Rens",
+      "never": true
+    }
   ],
   "avoid_regions": [
-    "Lonetrek"
+    {
+      "name": "Lonetrek",
+      "never": false
+    }
   ],
   "nexum": {
     "url": "https://nexum.example",

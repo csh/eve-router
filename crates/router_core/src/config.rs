@@ -74,6 +74,21 @@ impl fmt::Debug for ApiKey {
 }
 
 /// The Nexum settings. The router fetches the map only when all three values are set.
+/// A system or a region on the avoid list, by name.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct AvoidName {
+    pub name: String,
+    /// True: no route crosses it. False: a route crosses it only if no other route exists.
+    #[serde(default)]
+    pub never: bool,
+}
+
+impl AvoidName {
+    pub fn new(name: &str, never: bool) -> Self {
+        AvoidName { name: name.to_string(), never }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct NexumConfig {
@@ -117,9 +132,9 @@ pub struct Config {
     /// Drop a wormhole with no known signature, instead of a penalty.
     pub unknown_sig_broken: bool,
     /// The systems that a route avoids, by name.
-    pub avoid_systems: Vec<String>,
+    pub avoid_systems: Vec<AvoidName>,
     /// The regions that a route avoids, by name.
-    pub avoid_regions: Vec<String>,
+    pub avoid_regions: Vec<AvoidName>,
     pub nexum: NexumConfig,
     /// The Thera and Turnur switches. Both are on in a file without them.
     pub eve_scout: Hubs,
@@ -263,8 +278,8 @@ mod tests {
             cap_weight: Some(0.6),
             unknown_sig_penalty: Some(4.0),
             unknown_sig_broken: true,
-            avoid_systems: vec!["Rens".into()],
-            avoid_regions: vec!["Lonetrek".into()],
+            avoid_systems: vec![AvoidName::new("Rens", true)],
+            avoid_regions: vec![AvoidName::new("Lonetrek", false)],
             nexum: NexumConfig {
                 url: Some("https://nexum.example".into()),
                 key: Some(ApiKey("nxm_key".into())),

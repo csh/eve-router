@@ -201,7 +201,7 @@ impl View {
                 let locked = s.pilots.active.is_some();
                 let button = ui.add_enabled(!locked, Button::new(avoid)).on_hover_text("Systems and regions that routes avoid");
                 if button.clicked() {
-                    self.popup = Some(Popup::Avoid { confirm: false });
+                    self.popup = Some(Popup::Avoid { confirm: false, search: SearchBox::new("avoid-search"), region: String::new() });
                 }
                 button.on_disabled_hover_text(settings_window::LOCKED);
                 self.pilots.characters_button(ui, s);

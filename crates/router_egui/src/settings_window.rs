@@ -14,6 +14,7 @@ use router_core::sources::{
     self,
     nexum::{self, MapInfo},
 };
+use router_core::universe::display_sec;
 use std::time::Instant;
 
 pub enum Popup {
@@ -25,6 +26,8 @@ pub enum Popup {
     /// The avoid list. `confirm` is true while the window asks to clear all entries.
     Avoid {
         confirm: bool,
+        search: SearchBox,
+        region: String,
     },
     Message(String),
     /// A pasted list of systems. `problems` holds the names that the last try did not add.
@@ -118,8 +121,9 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
             });
             response.inner || response.should_close()
         }
-        Some(Popup::Avoid { confirm }) => {
-            let response = Modal::new(Id::new("avoid")).frame(modal_frame()).show(ui.ctx(), |ui| avoid_list(ui, confirm, s));
+        Some(Popup::Avoid { confirm, search, region }) => {
+            let response =
+                Modal::new(Id::new("avoid")).frame(modal_frame()).show(ui.ctx(), |ui| avoid_list(ui, confirm, search, region, s));
             response.inner || response.should_close()
         }
         Some(Popup::List { text, problems }) => {
@@ -142,46 +146,124 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
     }
 }
 
-/// The avoid list: a table of system, region and a remove button, and a clear-all button that asks first.
-/// Returns true when the window must close.
-fn avoid_list(ui: &mut Ui, confirm: &mut bool, s: &mut Session) -> bool {
-    title(ui, "Avoid");
-    ui.set_width(460.0);
-    let avoid = &s.settings.avoid;
-    if avoid.is_empty() {
-        ui.label(
-            RichText::new("Nothing is avoided. Right-click a system in the route table to avoid it or its region.").color(theme::TEXT_DIM),
-        );
+/// A row of the avoid table: an entry of the system list, or of the region list.
+#[derive(Clone, Copy)]
+enum AvoidRow {
+    System(usize),
+    Region(usize),
+}
+
+/// A change that the avoid table asks for.
+enum AvoidAct {
+    Remove(AvoidRow),
+    Never(AvoidRow, bool),
+}
+
+/// The names of the regions that contain `text`, up to `limit`, in alphabetical order.
+fn region_matches(uni: &router_core::universe::Universe, text: &str, limit: usize) -> Vec<String> {
+    let text = text.trim().to_lowercase();
+    if text.is_empty() {
+        return Vec::new();
     }
-    let mut remove_system = None;
-    let mut remove_region = None;
-    ScrollArea::vertical().max_height(300.0).show(ui, |ui| {
-        if avoid.is_empty() {
-            return;
+    let regions: std::collections::BTreeSet<&str> = uni.graph.node_weights().map(|sys| sys.region.as_str()).collect();
+    regions.into_iter().filter(|r| r.to_lowercase().contains(&text)).take(limit).map(String::from).collect()
+}
+
+/// The avoid list: two search boxes that add an entry, a table of system, security, region, a
+/// "Never/Prefer" switch and a remove button, and a clear-all button that asks first.
+/// Returns true when the window must close.
+fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_text: &mut String, s: &mut Session) -> bool {
+    title(ui, "Avoid");
+    ui.set_width(680.0);
+    ui.horizontal(|ui| {
+        if let Some((_, node)) = search.show(ui, &s.uni, 300.0, "Add a system…", &[])
+            && !s.settings.avoid.has_system(node)
+        {
+            s.toggle_avoid_system(node);
         }
-        egui::Grid::new("avoid-grid").num_columns(3).spacing(vec2(18.0, 8.0)).striped(true).show(ui, |ui| {
-            for text in ["System", "Region", ""] {
-                ui.label(theme::header_text(text));
-            }
-            ui.end_row();
-            for &node in &avoid.systems {
-                ui.label(RichText::new(s.uni.name(node)).color(theme::TEXT));
-                ui.label(RichText::new(&s.uni.system(node).region).color(theme::TEXT_DIM));
-                if ui.small_button("Remove").clicked() {
-                    remove_system = Some(node);
-                }
-                ui.end_row();
-            }
-            for region in &avoid.regions {
-                ui.label(RichText::new("All systems").color(theme::TEXT_DIM));
-                ui.label(RichText::new(region).color(theme::TEXT));
-                if ui.small_button("Remove").clicked() {
-                    remove_region = Some(region.clone());
-                }
-                ui.end_row();
-            }
-        });
+        ui.add(TextEdit::singleline(region_text).hint_text("Add a region…").desired_width(220.0));
     });
+    for region in region_matches(&s.uni, region_text, 6) {
+        if ui.small_button(&region).clicked() {
+            if !s.settings.avoid.has_region(&region) {
+                s.toggle_avoid_region(&region);
+            }
+            region_text.clear();
+        }
+    }
+    ui.add_space(8.0);
+    let avoid = &s.settings.avoid;
+    let mut act = None;
+    if avoid.is_empty() {
+        ui.label(RichText::new("Nothing is avoided. Search above, or right-click a system in the route table.").color(theme::TEXT_DIM));
+    } else {
+        let rows: Vec<AvoidRow> =
+            (0..avoid.systems.len()).map(AvoidRow::System).chain((0..avoid.regions.len()).map(AvoidRow::Region)).collect();
+        let never_switch = |ui: &mut Ui, never: bool| -> bool {
+            let (text, color) = if never { ("Never", theme::ERROR) } else { ("Prefer", theme::WARN) };
+            let hover = if never {
+                "Never: no route enters it, and a trip to it finds no route"
+            } else {
+                "Prefer: a route enters it only if no other route exists, or the other routes are much longer"
+            };
+            ui.add(Button::new(RichText::new(text).color(color)).min_size(vec2(64.0, 0.0))).on_hover_text(hover).clicked()
+        };
+        egui_extras::TableBuilder::new(ui)
+            .id_salt("avoid-table")
+            .striped(true)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(egui_extras::Column::remainder().at_least(160.0).clip(true))
+            .column(egui_extras::Column::exact(48.0))
+            .column(egui_extras::Column::initial(160.0).at_least(100.0).clip(true))
+            .column(egui_extras::Column::exact(84.0))
+            .column(egui_extras::Column::exact(84.0))
+            .max_scroll_height(280.0)
+            .auto_shrink([false, true])
+            .header(22.0, |mut header| {
+                for text in ["System", "Sec", "Region", "", ""] {
+                    header.col(|ui| _ = ui.label(theme::header_text(text)));
+                }
+            })
+            .body(|body| {
+                body.rows(28.0, rows.len(), |mut row| {
+                    let kind = rows[row.index()];
+                    match kind {
+                        AvoidRow::System(i) => {
+                            let entry = &avoid.systems[i];
+                            let sys = s.uni.system(entry.item);
+                            row.col(|ui| _ = ui.label(RichText::new(&sys.name).color(theme::TEXT)));
+                            row.col(|ui| {
+                                _ = ui.label(
+                                    RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)),
+                                );
+                            });
+                            row.col(|ui| _ = ui.label(RichText::new(&sys.region).color(theme::TEXT_DIM)));
+                            row.col(|ui| {
+                                if never_switch(ui, entry.never) {
+                                    act = Some(AvoidAct::Never(kind, !entry.never));
+                                }
+                            });
+                        }
+                        AvoidRow::Region(i) => {
+                            let entry = &avoid.regions[i];
+                            row.col(|ui| _ = ui.label(RichText::new("All systems").color(theme::TEXT_DIM)));
+                            row.col(|_| {});
+                            row.col(|ui| _ = ui.label(RichText::new(&entry.item).color(theme::TEXT)));
+                            row.col(|ui| {
+                                if never_switch(ui, entry.never) {
+                                    act = Some(AvoidAct::Never(kind, !entry.never));
+                                }
+                            });
+                        }
+                    }
+                    row.col(|ui| {
+                        if ui.button("Remove").clicked() {
+                            act = Some(AvoidAct::Remove(kind));
+                        }
+                    });
+                });
+            });
+    }
     let count = avoid.len();
     ui.add_space(8.0);
     let mut close = false;
@@ -202,11 +284,24 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, s: &mut Session) -> bool {
             close = ui.button("Close").clicked();
         }
     });
-    if let Some(node) = remove_system {
-        s.toggle_avoid_system(node);
-    }
-    if let Some(region) = remove_region {
-        s.toggle_avoid_region(&region);
+    match act {
+        Some(AvoidAct::Remove(AvoidRow::System(i))) => {
+            let node = s.settings.avoid.systems[i].item;
+            s.toggle_avoid_system(node);
+        }
+        Some(AvoidAct::Remove(AvoidRow::Region(i))) => {
+            let region = s.settings.avoid.regions[i].item.clone();
+            s.toggle_avoid_region(&region);
+        }
+        Some(AvoidAct::Never(AvoidRow::System(i), never)) => {
+            let node = s.settings.avoid.systems[i].item;
+            s.set_avoid_never_system(node, never);
+        }
+        Some(AvoidAct::Never(AvoidRow::Region(i), never)) => {
+            let region = s.settings.avoid.regions[i].item.clone();
+            s.set_avoid_never_region(&region, never);
+        }
+        None => {}
     }
     if clear {
         s.clear_avoid();
@@ -599,4 +694,19 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
     s.recompute();
     s.save_quietly();
     true
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use router_core::test_support::overlay_universe;
+
+    #[test]
+    fn region_search_matches_any_part_of_a_name() {
+        let uni = overlay_universe();
+        assert_eq!(region_matches(&uni, " forg", 6), ["The Forge"]);
+        assert_eq!(region_matches(&uni, "FORGE", 6), ["The Forge"]);
+        assert!(region_matches(&uni, "", 6).is_empty());
+        assert!(region_matches(&uni, "e", 3).len() <= 3);
+    }
 }
