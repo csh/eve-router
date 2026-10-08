@@ -510,6 +510,33 @@ mod tests {
         assert!(!avoid.covers(&uni, perimeter) || uni.system(perimeter).region == uni.system(amarr).region);
     }
 
+    /// New Eden to Dead End has one way only, through Central Point.
+    #[test]
+    fn a_choke_point_blocks_a_route_in_never_mode_and_not_in_prefer_mode() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let nodes = resolve_all(&uni, &["New Eden".into(), "Dead End".into()]).unwrap();
+        let point = uni.exact("Central Point").unwrap();
+        let routes = |s: &Settings| s.router(&uni, FIXTURE_TIME).routes(&nodes, 3);
+
+        // With no avoid entry, the route goes through Central Point.
+        assert!(routes(&s).unwrap().iter().all(|r| r.path.nodes.contains(&point)));
+
+        // Prefer: the route still succeeds, and it counts the system that it had to enter.
+        s.avoid.add_system(point);
+        let found = routes(&s).unwrap();
+        assert!(found.iter().all(|r| r.path.nodes.contains(&point) && r.avoided == 1));
+
+        // Never: no route exists, and the error points at the avoid list.
+        s.avoid.set_system_never(point, true);
+        let error = routes(&s).err().expect("no route");
+        assert_eq!(s.explain(error), "No route from New Eden to Dead End. Your avoid list might be in the way.");
+
+        // Back to Prefer: the route is there again.
+        s.avoid.set_system_never(point, false);
+        assert!(routes(&s).is_ok());
+    }
+
     #[test]
     fn a_never_region_is_not_crossed() {
         let uni = overlay_universe();
