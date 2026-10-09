@@ -104,7 +104,7 @@ pub fn avatar(ui: &mut Ui, portraits: &mut Portraits, pilot: &PilotView, size: f
         }
     };
     if pilot.active {
-        ui.painter().rect_stroke(response.rect, radius, Stroke::new(1.0, theme::ACCENT), StrokeKind::Outside);
+        ui.painter().rect_stroke(response.rect, radius, Stroke::new(1.0, theme::accent(ui)), StrokeKind::Outside);
     }
     response.on_hover_text(&pilot.name)
 }
@@ -412,7 +412,7 @@ impl PilotsUi {
         });
         if busy {
             ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().color(theme::ACCENT));
+                ui.add(egui::Spinner::new().color(theme::accent(ui)));
                 ui.label(RichText::new("Logging in…").color(theme::TEXT_DIM));
             });
         }
@@ -493,7 +493,7 @@ impl PilotsUi {
                         let send = if plan.online == Some(false) { "Send anyway" } else { "Send" };
                         match (&here, &plan.from_here) {
                             (Some(here), Some(from_here)) => {
-                                if ui.add(Button::new(format!("Route from {here}")).fill(theme::ACCENT.gamma_multiply(0.35))).clicked() {
+                                if ui.add(Button::new(format!("Route from {here}")).fill(theme::accent(ui).gamma_multiply(0.35))).clicked() {
                                     s.pilots.start_route(from_here.clone());
                                     close = true;
                                 }
@@ -503,7 +503,7 @@ impl PilotsUi {
                                 }
                             }
                             _ => {
-                                if ui.add(Button::new(send).fill(theme::ACCENT.gamma_multiply(0.35))).clicked() {
+                                if ui.add(Button::new(send).fill(theme::accent(ui).gamma_multiply(0.35))).clicked() {
                                     s.pilots.start_route(plan.planned.clone());
                                     close = true;
                                 }
@@ -546,7 +546,7 @@ impl PilotsUi {
                 None => {
                     crate::settings_window::title(ui, "Start route");
                     ui.label(RichText::new(format!("Sending waypoints {}/{total}…", send.done + 1)).color(theme::TEXT));
-                    ui.add(egui::ProgressBar::new(send.done as f32 / total.max(1) as f32).fill(theme::ACCENT));
+                    ui.add(egui::ProgressBar::new(send.done as f32 / total.max(1) as f32).fill(theme::accent(ui)));
                 }
                 Some(error) => {
                     crate::settings_window::title(ui, "Send failed");
@@ -608,11 +608,11 @@ impl PilotsUi {
             ui.horizontal(|ui| {
                 // Oxanium and the egui fallback fonts have no right arrow glyph. Oxanium has "»".
                 ui.label(RichText::new(format!("Route #{} » {destination} · ", active.number)).color(theme::TEXT));
-                ui.label(RichText::new(&active.character_name).family(theme::bold()).color(theme::ACCENT));
+                ui.label(RichText::new(&active.character_name).family(theme::bold()).color(theme::accent(ui)));
                 ui.label(RichText::new(format!(" · {}/{jumps} jumps", active.progress)).color(theme::TEXT));
             });
             let ratio = if jumps == 0 { 1.0 } else { active.progress as f32 / jumps as f32 };
-            ui.add(egui::ProgressBar::new(ratio).fill(theme::ACCENT).desired_height(6.0));
+            ui.add(egui::ProgressBar::new(ratio).fill(theme::accent(ui)).desired_height(6.0));
             self.banner(ui, s, &active, &destination);
         });
         if stop {
@@ -726,14 +726,14 @@ impl PilotsUi {
                                 ui.painter().line_segment([l, c], stroke);
                                 ui.painter().line_segment([c, r], stroke);
                             } else if current {
-                                ui.label(RichText::new("▶").color(theme::ACCENT));
+                                ui.label(RichText::new("▶").color(theme::accent(ui)));
                             }
                         });
                         row.col(|ui| _ = ui.label(RichText::new(i.to_string()).color(theme::TEXT_DIM)));
                         row.col(|ui| {
                             if let Some(stop) = active.stop_at(i) {
                                 let text = RichText::new(stop.label().to_uppercase()).size(11.0).extra_letter_spacing(1.0);
-                                ui.label(text.color(dim(theme::ACCENT)));
+                                ui.label(text.color(dim(theme::accent(ui))));
                             }
                         });
                         row.col(|ui| {
@@ -764,7 +764,7 @@ impl PilotsUi {
                                 _ => (step.via.clone(), theme::TEXT_DIM),
                             };
                             let via = via.replace('\u{2192}', "»");
-                            ui.add(Label::new(RichText::new(&via).color(dim(color))).truncate()).on_hover_text(&via);
+                            ui.add(Label::new(RichText::new(&via).color(dim(color))).truncate());
                         });
                     });
                 });
@@ -784,7 +784,7 @@ impl PilotsUi {
             let mut draw = |ui: &mut Ui, pilot: &PilotView| {
                 let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), AVATAR + 4.0), Sense::click());
                 if response.hovered() {
-                    ui.painter().rect_filled(rect, 0.0, theme::ACCENT_DIM);
+                    ui.painter().rect_filled(rect, 0.0, theme::accent(ui).linear_multiply(0.18));
                     theme::selection_bar(ui, rect);
                 }
                 let mut child = ui
@@ -903,7 +903,7 @@ fn question(ui: &mut Ui, id: &str, title: &str, text: &str, buttons: &[(&str, bo
         ui.horizontal(|ui| {
             for (i, (label, primary)) in buttons.iter().enumerate() {
                 let button = Button::new(*label);
-                let button = if *primary { button.fill(theme::ACCENT.gamma_multiply(0.35)) } else { button };
+                let button = if *primary { button.fill(theme::accent(ui).gamma_multiply(0.35)) } else { button };
                 if ui.add(button).clicked() {
                     clicked = Some(i);
                 }

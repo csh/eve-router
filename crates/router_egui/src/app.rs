@@ -52,7 +52,7 @@ const LOAD_STOPPED: &str = "The startup load stopped with an internal error. Sta
 impl RouterApp {
     /// Set the theme and start the load. `ctx` gets a repaint request when the load ends.
     pub fn new(ctx: egui::Context) -> Self {
-        theme::apply(&ctx);
+        theme::apply_default(&ctx);
         theme::set_font(&ctx);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -72,6 +72,7 @@ impl RouterApp {
         };
         self.state = match result {
             Ok(session) => {
+                session.apply_theme(ctx);
                 // For example "EVE Router - SDE 3579973".
                 if let Some(build) = session.uni.build {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("EVE Router - SDE {build}")));
@@ -514,6 +515,35 @@ impl Session {
             },
             Err(e) => e,
         };
+    }
+
+    /// The active faction theme.
+    pub fn faction_theme(&self) -> theme::FactionTheme {
+        self.cfg.theme.as_deref().map(theme::FactionTheme::from_name).unwrap_or_default()
+    }
+
+    /// Set and apply a faction theme.
+    pub fn set_faction_theme(&mut self, theme: theme::FactionTheme, ctx: &egui::Context) {
+        self.cfg.theme = Some(theme.name().to_string());
+        theme::apply(ctx, theme, self.cfg.compact);
+        self.save_quietly();
+    }
+
+    /// Whether compact UI mode is active.
+    pub fn compact_mode(&self) -> bool {
+        self.cfg.compact
+    }
+
+    /// Set and apply compact layout mode.
+    pub fn set_compact_mode(&mut self, compact: bool, ctx: &egui::Context) {
+        self.cfg.compact = compact;
+        theme::apply(ctx, self.faction_theme(), compact);
+        self.save_quietly();
+    }
+
+    /// Apply the theme and compact mode from config to the egui context.
+    pub fn apply_theme(&self, ctx: &egui::Context) {
+        theme::apply(ctx, self.faction_theme(), self.cfg.compact);
     }
 
     /// Copy the settings to the config, and write the config file.

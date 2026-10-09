@@ -20,18 +20,31 @@ use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
 /// The height of a row of the route list: the summary line and the strip, and the space below.
-const ROUTE_ROW: f32 = 44.0;
-const ROUTE_PITCH: f32 = ROUTE_ROW + 4.0;
+pub fn route_row_height(compact: bool) -> f32 {
+    if compact { 36.0 } else { 44.0 }
+}
+
+pub fn route_pitch(compact: bool) -> f32 {
+    route_row_height(compact) + if compact { 2.0 } else { 4.0 }
+}
+
 /// The height that a panel adds around its content: the header strip, the margins and the lines.
-const PANEL_CHROME: f32 = 46.0;
+pub fn panel_chrome(compact: bool) -> f32 {
+    if compact { 30.0 } else { 46.0 }
+}
+
 /// The most rows that the route list shows before it scrolls.
 const LIST_ROWS: usize = 3;
 /// The least height that the route table keeps, in pixels. The planner and the list give way.
 const TABLE_MIN: f32 = 200.0;
 /// The height of the planner with the waypoint list closed.
-const PLANNER_CLOSED: f32 = 110.0;
+fn planner_closed_height(compact: bool) -> f32 {
+    if compact { 84.0 } else { 110.0 }
+}
 /// The height of the planner with the waypoint list open, without the list.
-const PLANNER_CHROME: f32 = 140.0;
+fn planner_chrome_height(compact: bool) -> f32 {
+    if compact { 108.0 } else { 140.0 }
+}
 /// The least height of the waypoint list, when it is open.
 const GRID_MIN: f32 = 52.0;
 /// The space between two panels.
@@ -40,9 +53,11 @@ const GAP: f32 = 8.0;
 /// The height of the route list panel for `routes` routes. `spare` is the height that is left
 /// when the planner and the route table have their share. The list shows at least one row and a
 /// half, so a scroll bar is a sign that more routes follow.
-fn route_list_height(routes: usize, spare: f32) -> f32 {
-    let full = routes.clamp(1, LIST_ROWS) as f32 * ROUTE_PITCH + PANEL_CHROME;
-    spare.clamp(full.min(ROUTE_PITCH * 1.5 + PANEL_CHROME), full)
+fn route_list_height(routes: usize, spare: f32, compact: bool) -> f32 {
+    let pitch = route_pitch(compact);
+    let chrome = panel_chrome(compact);
+    let full = routes.clamp(1, LIST_ROWS) as f32 * pitch + chrome;
+    spare.clamp(full.min(pitch * 1.5 + chrome), full)
 }
 
 /// The width class of the window. One code path draws all three, with a layout switch.
@@ -274,16 +289,18 @@ impl View {
     /// The planner and the route list. `table_below` keeps room for the route table under them.
     /// `narrow` draws the planner for a width under 640 px.
     fn plan_column(&mut self, ui: &mut Ui, s: &mut Session, table_below: bool, narrow: bool) {
+        let compact = theme::is_compact(ui);
         let available = ui.available_height();
         let open = self.waypoints_open.unwrap_or(s.routes.is_empty());
-        let planner = if open { PLANNER_CHROME + GRID_MIN } else { PLANNER_CLOSED };
+        let planner_chrome = planner_chrome_height(compact);
+        let planner = if open { planner_chrome + GRID_MIN } else { planner_closed_height(compact) };
         let table = if table_below { TABLE_MIN + GAP } else { 0.0 };
-        let list_height = route_list_height(s.routes.len(), available - table - planner - GAP);
-        let grid_max = (available - list_height - table - PLANNER_CHROME - GAP).clamp(GRID_MIN, 200.0);
+        let list_height = route_list_height(s.routes.len(), available - table - planner - GAP, compact);
+        let grid_max = (available - list_height - table - planner_chrome - GAP).clamp(GRID_MIN, 200.0);
         self.planner(ui, s, open, grid_max, narrow);
-        ui.add_space(8.0);
+        ui.add_space(if compact { 4.0 } else { 8.0 });
         // With no table below, the list takes the height that is left.
-        let list_height = if table_below { list_height } else { ui.available_height().max(PANEL_CHROME + ROUTE_PITCH) };
+        let list_height = if table_below { list_height } else { ui.available_height().max(panel_chrome(compact) + route_pitch(compact)) };
         ui.allocate_ui(vec2(ui.available_width(), list_height), |ui| route_list(ui, s));
     }
 
@@ -344,7 +361,7 @@ impl View {
                 if ui.add(Button::selectable(self.drawer_open, "☰")).on_hover_text(hint).clicked() {
                     self.drawer_open = !self.drawer_open;
                 }
-                ui.label(RichText::new("EVE ROUTER").family(theme::bold()).size(16.0).color(theme::ACCENT).extra_letter_spacing(3.0));
+                ui.label(RichText::new("EVE ROUTER").family(theme::bold()).size(16.0).color(theme::accent(ui)).extra_letter_spacing(3.0));
             }
             // While a route is active, the controls that change the route are hidden.
             if !locked {
@@ -377,6 +394,11 @@ impl View {
         }
         button.on_disabled_hover_text(settings_window::LOCKED);
         self.pilots.characters_button(ui, s);
+        let compact_hint = if s.compact_mode() { "Switch to spacious layout" } else { "Switch to compact layout" };
+        let compact_icon = if s.compact_mode() { "⤢ Compact" } else { "⤡ Normal" };
+        if ui.button(compact_icon).on_hover_text(compact_hint).clicked() {
+            s.set_compact_mode(!s.compact_mode(), ui.ctx());
+        }
         let settings = ui.button(if short { "⚙" } else { "⚙ Settings" }).on_hover_text("Settings");
         if settings.clicked() {
             self.settings = Some(SettingsForm::new(s));
@@ -385,13 +407,18 @@ impl View {
 
     fn top_bar_full(&mut self, ui: &mut Ui, s: &mut Session) {
         ui.horizontal(|ui| {
-            let title = RichText::new("EVE ROUTER").family(theme::bold()).size(16.0).color(theme::ACCENT).extra_letter_spacing(3.0);
+            let title = RichText::new("EVE ROUTER").family(theme::bold()).size(16.0).color(theme::accent(ui)).extra_letter_spacing(3.0);
             ui.label(title);
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // The right-to-left layout draws the Settings button first, so it sits at the right edge.
                 if ui.button("⚙ Settings").clicked() {
                     self.settings = Some(SettingsForm::new(s));
+                }
+                let compact_hint = if s.compact_mode() { "Switch to spacious layout" } else { "Switch to compact layout" };
+                let compact_icon = if s.compact_mode() { "⤢ Compact" } else { "⤡ Normal" };
+                if ui.button(compact_icon).on_hover_text(compact_hint).clicked() {
+                    s.set_compact_mode(!s.compact_mode(), ui.ctx());
                 }
                 let avoid = match s.settings.avoid.len() {
                     0 => "Avoid".to_string(),
@@ -530,7 +557,7 @@ impl View {
                     for (i, &node) in s.waypoints.iter().enumerate() {
                         let sys = s.uni.system(node);
                         let stop = s.stop(i);
-                        let color = if matches!(stop, Stop::Midpoint(_)) { theme::TEXT_DIM } else { theme::ACCENT };
+                        let color = if matches!(stop, Stop::Midpoint(_)) { theme::TEXT_DIM } else { theme::accent(ui) };
                         ui.label(RichText::new(format!("{:>2}", i + 1)).color(theme::TEXT_DIM));
                         ui.label(RichText::new(stop.label().to_uppercase()).color(color).size(11.0).extra_letter_spacing(1.0));
                         let name =
@@ -674,6 +701,8 @@ fn apply_pick(s: &mut Session, pick: Pick, node: NodeIndex) {
 }
 
 fn route_list(ui: &mut Ui, s: &mut Session) {
+    let compact = theme::is_compact(ui);
+    let row_height = route_row_height(compact);
     let title = format!("Routes ({})", s.routes.len());
     // The time of the last search, with the favourite search.
     let time = match s.route_time {
@@ -688,20 +717,20 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
         }
         ScrollArea::vertical().auto_shrink(false).show(ui, |ui| {
             for (i, route) in s.routes.iter().enumerate() {
-                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), ROUTE_ROW), Sense::click());
+                let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), row_height), Sense::click());
                 let selected = i == s.selected;
                 if selected {
                     ui.painter().rect_filled(rect, 0.0, theme::ROW_FILL);
                     theme::selection_bar(ui, rect);
                 } else if response.hovered() {
-                    ui.painter().rect_filled(rect, 0.0, theme::ACCENT_DIM);
+                    ui.painter().rect_filled(rect, 0.0, theme::accent(ui).linear_multiply(0.18));
                 }
                 let painter = ui.painter_at(rect);
                 let font = egui::TextStyle::Body.resolve(ui.style());
-                let left = rect.left() + 12.0;
+                let left = rect.left() + (if compact { 8.0 } else { 12.0 });
                 // Line 1: the number, then the summary in one font and one color. The jumps of each leg
                 // are at the right, in the same font.
-                let top = rect.top() + 4.0;
+                let top = rect.top() + (if compact { 2.0 } else { 4.0 });
                 let text_color = theme::TEXT_SOFT;
                 let number = painter.layout_no_wrap(format!("#{}  ", i + 1), font.clone(), theme::TEXT_DIM);
                 let legs: Vec<usize> = route.legs().iter().map(|&(a, b)| b - a).collect();
@@ -714,15 +743,11 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 let summary = fit_text(&painter, &summary_text, font.clone(), text_color, rect.right() - 10.0 - reserve - summary_left);
                 painter.galley(egui::pos2(left, top), number, theme::TEXT_DIM);
                 painter.galley(egui::pos2(summary_left, top), summary, text_color);
-                if let Some(galley) = legs_galley {
-                    let at = egui::pos2(rect.right() - galley.size().x - 10.0, top);
-                    painter.galley(at, galley, theme::TEXT_DIM);
-                }
                 // Line 2: the strip.
-                let line_y = rect.top() + 22.0;
+                let line_y = rect.top() + (if compact { 18.0 } else { 22.0 });
                 let strip_rect = egui::Rect::from_min_max(
                     egui::pos2(left, line_y),
-                    egui::pos2((rect.right() - 10.0).max(left + 20.0), rect.bottom() - 4.0),
+                    egui::pos2((rect.right() - 10.0).max(left + 20.0), rect.bottom() - (if compact { 2.0 } else { 4.0 })),
                 );
                 strip::paint(&painter, &s.uni, route, strip_rect);
                 let names = |k: usize| s.uni.name(route.path.nodes[k]);
@@ -796,7 +821,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
             (false, true) => "Log in".into(),
             (false, false) => "Log in to start".into(),
         };
-        let button = Button::new(RichText::new(text).size(11.0).color(Color32::WHITE)).fill(theme::ACCENT.gamma_multiply(0.35)).small();
+        let button = Button::new(RichText::new(text).size(11.0).color(Color32::WHITE)).fill(theme::accent(ui).gamma_multiply(0.35)).small();
         start = ui.add(button).on_hover_text("Send the waypoints of this route to a character in the game").clicked();
         ui.add_space(6.0);
         let button = Button::new(RichText::new("Copy route").size(11.0)).small();
@@ -893,7 +918,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
                         row.col(|ui| _ = ui.label(RichText::new(step.to_string()).color(theme::TEXT_DIM)));
                         row.col(|ui| {
                             if let Some(stop) = stop {
-                                ui.label(RichText::new(stop.label().to_uppercase()).color(theme::ACCENT).size(11.0).extra_letter_spacing(1.0));
+                                ui.label(RichText::new(stop.label().to_uppercase()).color(theme::accent(ui)).size(11.0).extra_letter_spacing(1.0));
                             } else if avoided {
                                 ui.label(RichText::new("AVOID").color(theme::WARN).size(11.0).extra_letter_spacing(1.0));
                             }
@@ -1078,7 +1103,7 @@ fn favourites_panel(ui: &mut Ui, s: &mut Session, fill: bool) {
             let jumps = s.hubs.iter().find(|(n, _)| *n == fav).map(|&(_, j)| j);
             let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
             if response.hovered() {
-                ui.painter().rect_filled(rect, 0.0, theme::ACCENT_DIM);
+                ui.painter().rect_filled(rect, 0.0, theme::accent(ui).linear_multiply(0.18));
                 theme::selection_bar(ui, rect);
             }
             let font = egui::TextStyle::Body.resolve(ui.style());
@@ -1090,7 +1115,7 @@ fn favourites_panel(ui: &mut Ui, s: &mut Session, fill: bool) {
                 Some(None) => "-".into(),
                 None => String::new(),
             };
-            p.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, jumps, font, theme::ACCENT);
+            p.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, jumps, font, theme::accent(ui));
             if response.on_hover_text("Click to add as a waypoint").clicked() {
                 add = Some(fav);
             }
@@ -1167,7 +1192,7 @@ pub fn splash(ui: &mut Ui, error: Option<&str>) {
                         ui.add_space(8.0);
                         match error {
                             None => {
-                                ui.add(egui::Spinner::new().size(28.0).color(theme::ACCENT));
+                                ui.add(egui::Spinner::new().size(28.0).color(theme::accent(ui)));
                                 ui.add_space(8.0);
                                 ui.label(RichText::new("Loading the map and the wormhole data…").color(theme::TEXT));
                             }
@@ -1223,13 +1248,18 @@ mod tests {
     #[test]
     fn the_route_list_gives_way_to_the_table() {
         // Room for all rows of a short list.
-        assert_eq!(route_list_height(2, 500.0), 2.0 * ROUTE_PITCH + PANEL_CHROME);
+        assert_eq!(route_list_height(2, 500.0, false), 2.0 * route_pitch(false) + panel_chrome(false));
         // A long list stops at the rows that fit without a scroll.
-        assert_eq!(route_list_height(9, 900.0), LIST_ROWS as f32 * ROUTE_PITCH + PANEL_CHROME);
+        assert_eq!(route_list_height(9, 900.0, false), LIST_ROWS as f32 * route_pitch(false) + panel_chrome(false));
         // Little room: one row and a half, so the table keeps its height.
-        assert_eq!(route_list_height(5, 40.0), 1.5 * ROUTE_PITCH + PANEL_CHROME);
+        assert_eq!(route_list_height(5, 40.0, false), 1.5 * route_pitch(false) + panel_chrome(false));
         // No routes: the empty text fits.
-        assert_eq!(route_list_height(0, 500.0), ROUTE_PITCH + PANEL_CHROME);
+        assert_eq!(route_list_height(0, 500.0, false), route_pitch(false) + panel_chrome(false));
+
+        // In compact mode:
+        assert_eq!(route_list_height(2, 500.0, true), 2.0 * route_pitch(true) + panel_chrome(true));
+        assert_eq!(route_list_height(9, 900.0, true), LIST_ROWS as f32 * route_pitch(true) + panel_chrome(true));
+        assert_eq!(route_list_height(5, 40.0, true), 1.5 * route_pitch(true) + panel_chrome(true));
     }
 
     #[test]

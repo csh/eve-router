@@ -55,7 +55,7 @@ fn table(ui: &mut egui::Ui, log: &[LogEntry]) {
                 row.col(|ui| _ = ui.label(RichText::new(entry.op).color(theme::TEXT)));
                 let color = if entry.ok { theme::OK } else { theme::ERROR };
                 row.col(|ui| _ = ui.label(RichText::new(result_text(entry)).color(color)));
-                row.col(|ui| _ = ui.label(RichText::new(&entry.reason).color(theme::TEXT)).on_hover_text(&entry.reason));
+                row.col(|ui| _ = ui.label(RichText::new(&entry.reason).color(theme::TEXT)));
             });
         });
 }

@@ -161,6 +161,12 @@ pub struct Config {
     pub nexum: NexumConfig,
     /// The Thera and Turnur switches. Both are on in a file without them.
     pub eve_scout: Hubs,
+    /// The Photon UI faction theme: "caldari", "amarr", "gallente", "minmatar".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    /// Compact UI layout with tighter row heights and padding.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compact: bool,
 }
 
 /// The config before and after the CLI flags. A save puts back the file value of each field
@@ -201,6 +207,8 @@ impl RunOverrides {
         keep(&mut cfg.cap_weight, &f.cap_weight, &r.cap_weight);
         keep(&mut cfg.unknown_sig_penalty, &f.unknown_sig_penalty, &r.unknown_sig_penalty);
         keep(&mut cfg.unknown_sig_broken, &f.unknown_sig_broken, &r.unknown_sig_broken);
+        keep(&mut cfg.theme, &f.theme, &r.theme);
+        keep(&mut cfg.compact, &f.compact, &r.compact);
     }
 }
 
@@ -318,6 +326,8 @@ mod tests {
                 map_id: Some("m1".into()),
             },
             eve_scout: Hubs { thera: false, turnur: true },
+            theme: None,
+            compact: false,
         };
         let text = serde_json::to_string_pretty(&cfg).unwrap();
         crate::assert_snapshot!("config_json", text);

@@ -62,12 +62,12 @@ impl SettingsForm {
 }
 
 pub(crate) fn modal_frame() -> Frame {
-    Frame::new().fill(theme::PANEL).stroke(Stroke::new(1.0, theme::ACCENT)).inner_margin(Margin::same(14))
+    Frame::new().fill(theme::PANEL).stroke(Stroke::new(1.0, theme::LINE)).inner_margin(Margin::same(14))
 }
 
 /// The title of a modal window, with an accent line below it.
 pub(crate) fn title(ui: &mut Ui, text: &str) {
-    ui.label(RichText::new(text.to_uppercase()).family(theme::bold()).color(theme::ACCENT).extra_letter_spacing(2.0));
+    ui.label(RichText::new(text.to_uppercase()).family(theme::bold()).color(theme::accent(ui)).extra_letter_spacing(2.0));
     let rect = ui.available_rect_before_wrap();
     ui.painter().line_segment([rect.left_top(), rect.left_top() + vec2(rect.width(), 0.0)], Stroke::new(1.0, theme::LINE));
     ui.add_space(8.0);
@@ -559,7 +559,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                     let name = s.map_name();
                     ui.label(RichText::new(name).color(theme::TEXT));
                     if loading {
-                        ui.add(egui::Spinner::new().color(theme::ACCENT));
+                        ui.add(egui::Spinner::new().color(theme::accent(ui)));
                         ui.label(RichText::new("Loading maps…").color(theme::TEXT_DIM));
                     } else if ui.button("Choose map…").clicked() {
                         if s.cfg.nexum.url.is_none() || s.cfg.nexum.key.is_none() {
@@ -591,6 +591,31 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             })
             .response
             .on_disabled_hover_text(LOCKED);
+            ui.end_row();
+
+            // Photon UI theme and layout settings.
+            row_label(ui, narrow, "Photon Theme");
+            ui.horizontal_wrapped(|ui| {
+                let mut current_theme = s.faction_theme();
+                egui::ComboBox::from_id_salt("faction-theme-combo")
+                    .selected_text(current_theme.label())
+                    .show_ui(ui, |ui| {
+                        for &t in &theme::FactionTheme::ALL {
+                            if ui.selectable_value(&mut current_theme, t, t.label()).clicked() {
+                                s.set_faction_theme(t, ui.ctx());
+                            }
+                        }
+                    });
+            });
+            ui.end_row();
+
+            row_label(ui, narrow, "Layout Density");
+            ui.horizontal_wrapped(|ui| {
+                let mut compact = s.compact_mode();
+                if ui.checkbox(&mut compact, "Compact Mode (dense rows and padding)").changed() {
+                    s.set_compact_mode(compact, ui.ctx());
+                }
+            });
             ui.end_row();
         });
     });
@@ -689,7 +714,7 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
                 ui.painter().rect_filled(rect, 0.0, theme::ROW_FILL);
                 theme::selection_bar(ui, rect);
             } else if click.hovered() {
-                ui.painter().rect_filled(rect, 0.0, theme::ACCENT_DIM);
+                ui.painter().rect_filled(rect, 0.0, theme::accent(ui).linear_multiply(0.18));
             }
             let font = egui::TextStyle::Body.resolve(ui.style());
             let p = ui.painter();

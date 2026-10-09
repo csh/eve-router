@@ -12,8 +12,6 @@ pub const BG: Color32 = Color32::from_rgb(0x07, 0x09, 0x0C);
 pub const PANEL: Color32 = Color32::from_rgba_premultiplied(0x0D, 0x12, 0x17, 0xEB);
 pub const HEADER: Color32 = Color32::from_rgb(0x14, 0x1C, 0x22);
 pub const LINE: Color32 = Color32::from_rgb(0x26, 0x34, 0x3D);
-pub const ACCENT: Color32 = Color32::from_rgb(0x5A, 0xB4, 0xD2);
-pub const ACCENT_DIM: Color32 = Color32::from_rgba_premultiplied(0x10, 0x20, 0x26, 0x2E);
 pub const TEXT: Color32 = Color32::from_rgb(0xC8, 0xD2, 0xD8);
 /// Between `TEXT` and `TEXT_DIM`: the summary of a route in the route list.
 pub const TEXT_SOFT: Color32 = Color32::from_rgb(0x9B, 0xA8, 0xB0);
@@ -26,6 +24,102 @@ pub const BRIDGE: Color32 = Color32::from_rgb(0x60, 0xA0, 0xFF);
 
 /// The fill of a stop row in the route table, and of a hovered row.
 pub const ROW_FILL: Color32 = Color32::from_rgb(0x12, 0x1A, 0x20);
+
+/// The Photon UI faction theme presets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum FactionTheme {
+    #[default]
+    Caldari,
+    Amarr,
+    Gallente,
+    Minmatar,
+}
+
+impl FactionTheme {
+    pub const ALL: [FactionTheme; 4] = [
+        FactionTheme::Caldari,
+        FactionTheme::Amarr,
+        FactionTheme::Gallente,
+        FactionTheme::Minmatar,
+    ];
+
+    pub fn name(self) -> &'static str {
+        match self {
+            FactionTheme::Caldari => "caldari",
+            FactionTheme::Amarr => "amarr",
+            FactionTheme::Gallente => "gallente",
+            FactionTheme::Minmatar => "minmatar",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FactionTheme::Caldari => "Caldari",
+            FactionTheme::Amarr => "Amarr",
+            FactionTheme::Gallente => "Gallente",
+            FactionTheme::Minmatar => "Minmatar",
+        }
+    }
+
+    pub fn from_name(name: &str) -> Self {
+        match name.trim().to_lowercase().as_str() {
+            "amarr" => FactionTheme::Amarr,
+            "gallente" => FactionTheme::Gallente,
+            "minmatar" => FactionTheme::Minmatar,
+            _ => FactionTheme::Caldari,
+        }
+    }
+
+    pub fn accent(self) -> Color32 {
+        match self {
+            FactionTheme::Caldari => Color32::from_rgb(0x5A, 0xB4, 0xD2),
+            FactionTheme::Amarr => Color32::from_rgb(0xE5, 0xA9, 0x3C),
+            FactionTheme::Gallente => Color32::from_rgb(0x45, 0xB8, 0x78),
+            FactionTheme::Minmatar => Color32::from_rgb(0xE0, 0x58, 0x38),
+        }
+    }
+
+    pub fn selection_bg(self) -> Color32 {
+        match self {
+            FactionTheme::Caldari => Color32::from_rgb(0x1C, 0x3A, 0x46),
+            FactionTheme::Amarr => Color32::from_rgb(0x3D, 0x2E, 0x15),
+            FactionTheme::Gallente => Color32::from_rgb(0x18, 0x38, 0x24),
+            FactionTheme::Minmatar => Color32::from_rgb(0x40, 0x1C, 0x15),
+        }
+    }
+
+    pub fn hovered_bg(self) -> Color32 {
+        match self {
+            FactionTheme::Caldari => Color32::from_rgb(0x18, 0x26, 0x2E),
+            FactionTheme::Amarr => Color32::from_rgb(0x2A, 0x20, 0x12),
+            FactionTheme::Gallente => Color32::from_rgb(0x12, 0x28, 0x1C),
+            FactionTheme::Minmatar => Color32::from_rgb(0x2C, 0x16, 0x12),
+        }
+    }
+
+    pub fn active_bg(self) -> Color32 {
+        self.selection_bg()
+    }
+
+    pub fn open_bg(self) -> Color32 {
+        match self {
+            FactionTheme::Caldari => Color32::from_rgb(0x14, 0x1C, 0x22),
+            FactionTheme::Amarr => Color32::from_rgb(0x20, 0x18, 0x10),
+            FactionTheme::Gallente => Color32::from_rgb(0x10, 0x1C, 0x14),
+            FactionTheme::Minmatar => Color32::from_rgb(0x22, 0x12, 0x10),
+        }
+    }
+}
+
+/// The current accent color from the active UI visuals.
+pub fn accent(ui: &Ui) -> Color32 {
+    ui.visuals().hyperlink_color
+}
+
+/// Whether compact layout mode is currently active.
+pub fn is_compact(ui: &Ui) -> bool {
+    ui.spacing().interact_size.y < 20.0
+}
 
 /// The color of a security value.
 pub fn sec_color(security: f64) -> Color32 {
@@ -75,9 +169,15 @@ pub fn set_font(ctx: &egui::Context) {
     });
 }
 
-/// Set the colors and the spacing of the dark theme.
-pub fn apply(ctx: &egui::Context) {
+/// Set the colors and the spacing of the dark theme with the given faction tint and compact setting.
+pub fn apply(ctx: &egui::Context, theme: FactionTheme, compact: bool) {
     ctx.set_theme(egui::Theme::Dark);
+    let accent = theme.accent();
+    let sel_bg = theme.selection_bg();
+    let hov_bg = theme.hovered_bg();
+    let act_bg = theme.active_bg();
+    let opn_bg = theme.open_bg();
+
     ctx.all_styles_mut(|style| {
         let v = &mut style.visuals;
         v.dark_mode = true;
@@ -93,20 +193,20 @@ pub fn apply(ctx: &egui::Context) {
         v.text_edit_bg_color = Some(Color32::from_rgb(0x05, 0x07, 0x09));
         v.faint_bg_color = ROW_FILL;
         v.code_bg_color = HEADER;
-        v.hyperlink_color = ACCENT;
+        v.hyperlink_color = accent;
         v.warn_fg_color = WARN;
         v.error_fg_color = ERROR;
-        v.selection.bg_fill = Color32::from_rgb(0x1C, 0x3A, 0x46);
-        v.selection.stroke = Stroke::new(1.0, ACCENT);
+        v.selection.bg_fill = sel_bg;
+        v.selection.stroke = Stroke::new(1.0, accent);
         v.window_highlight_topmost = false;
 
         let w = &mut v.widgets;
         for (state, fill, stroke, text) in [
             (&mut w.noninteractive, PANEL, LINE, TEXT),
             (&mut w.inactive, Color32::from_rgb(0x12, 0x1A, 0x20), LINE, TEXT),
-            (&mut w.hovered, Color32::from_rgb(0x18, 0x26, 0x2E), ACCENT, Color32::WHITE),
-            (&mut w.active, Color32::from_rgb(0x1C, 0x3A, 0x46), ACCENT, Color32::WHITE),
-            (&mut w.open, Color32::from_rgb(0x14, 0x1C, 0x22), ACCENT, TEXT),
+            (&mut w.hovered, hov_bg, accent, Color32::WHITE),
+            (&mut w.active, act_bg, accent, Color32::WHITE),
+            (&mut w.open, opn_bg, accent, TEXT),
         ] {
             state.bg_fill = fill;
             state.weak_bg_fill = fill;
@@ -119,12 +219,25 @@ pub fn apply(ctx: &egui::Context) {
         w.noninteractive.bg_stroke = Stroke::new(1.0, LINE);
 
         let s = &mut style.spacing;
-        s.item_spacing = vec2(6.0, 4.0);
-        s.button_padding = vec2(8.0, 3.0);
-        s.interact_size.y = 22.0;
-        s.window_margin = Margin::same(10);
-        s.menu_margin = Margin::same(4);
+        if compact {
+            s.item_spacing = vec2(4.0, 2.0);
+            s.button_padding = vec2(6.0, 2.0);
+            s.interact_size.y = 18.0;
+            s.window_margin = Margin::same(6);
+            s.menu_margin = Margin::same(2);
+        } else {
+            s.item_spacing = vec2(6.0, 4.0);
+            s.button_padding = vec2(8.0, 3.0);
+            s.interact_size.y = 22.0;
+            s.window_margin = Margin::same(10);
+            s.menu_margin = Margin::same(4);
+        }
     });
+}
+
+/// Set default dark theme.
+pub fn apply_default(ctx: &egui::Context) {
+    apply(ctx, FactionTheme::default(), false);
 }
 
 /// The uppercase, letter-spaced text of a panel header.
@@ -144,15 +257,17 @@ pub fn panel_with<R>(ui: &mut Ui, title: &str, header: impl FnOnce(&mut Ui), fil
     let frame = Frame::new().fill(PANEL).stroke(Stroke::new(1.0, LINE)).inner_margin(Margin::ZERO);
     let response = frame.show(ui, |ui| {
         ui.set_min_width(ui.available_width());
-        Frame::new().fill(HEADER).inner_margin(Margin::symmetric(8, 4)).show(ui, |ui| {
+        let header_margin = if is_compact(ui) { Margin::symmetric(6, 2) } else { Margin::symmetric(8, 4) };
+        Frame::new().fill(HEADER).inner_margin(header_margin).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(header_text(title));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), header);
             });
         });
+        let inner_margin = if is_compact(ui) { Margin::same(4) } else { Margin::same(8) };
         Frame::new()
-            .inner_margin(Margin::same(8))
+            .inner_margin(inner_margin)
             .show(ui, |ui| {
                 ui.set_min_width(ui.available_width());
                 if fill {
@@ -162,27 +277,14 @@ pub fn panel_with<R>(ui: &mut Ui, title: &str, header: impl FnOnce(&mut Ui), fil
             })
             .inner
     });
-    corner_ticks(ui, response.response.rect);
+    // Flat 1px border Photon styling without corner ticks
     response.inner
-}
-
-/// The short accent lines at the top-left and the bottom-right corner of a frame.
-pub fn corner_ticks(ui: &Ui, rect: egui::Rect) {
-    const LEN: f32 = 10.0;
-    let stroke = Stroke::new(2.0, ACCENT);
-    let p = ui.painter();
-    let tl = rect.left_top();
-    p.line_segment([tl, tl + vec2(LEN, 0.0)], stroke);
-    p.line_segment([tl, tl + vec2(0.0, LEN)], stroke);
-    let br = rect.right_bottom();
-    p.line_segment([br, br - vec2(LEN, 0.0)], stroke);
-    p.line_segment([br, br - vec2(0.0, LEN)], stroke);
 }
 
 /// The bar at the left edge of a selected row.
 pub fn selection_bar(ui: &Ui, rect: egui::Rect) {
     let bar = egui::Rect::from_min_size(Pos2::new(rect.left(), rect.top()), Vec2::new(3.0, rect.height()));
-    ui.painter().rect_filled(bar, 0.0, ACCENT);
+    ui.painter().rect_filled(bar, 0.0, accent(ui));
 }
 
 /// The width of a window: `want`, or less when the window of the app is narrower.
