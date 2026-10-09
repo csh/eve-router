@@ -399,7 +399,7 @@ impl View {
         if ui.button(compact_icon).on_hover_text(compact_hint).clicked() {
             s.set_compact_mode(!s.compact_mode(), ui.ctx());
         }
-        let settings = ui.button(if short { "⚙" } else { "⚙ Settings" }).on_hover_text("Settings");
+        let settings = ui.button(if short { "⚙" } else { "⚙ Settings" });
         if settings.clicked() {
             self.settings = Some(SettingsForm::new(s));
         }
@@ -545,7 +545,7 @@ impl View {
                     self.waypoints_open = Some(!open);
                 }
                 if !open {
-                    ui.add(Label::new(RichText::new(&chain).color(theme::TEXT)).truncate()).on_hover_text(&chain);
+                    ui.add(Label::new(RichText::new(&chain).color(theme::TEXT)).truncate());
                 }
             });
             if !open {
@@ -936,7 +936,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
                     if !compact {
                         row.col(|ui| _ = ui.add(Label::new(RichText::new(&sys.region).color(theme::TEXT_DIM)).truncate()));
                     }
-                    row.col(|ui| _ = ui.add(Label::new(RichText::new(&via).color(via_color)).truncate()).on_hover_text(&via));
+                    row.col(|ui| _ = ui.add(Label::new(RichText::new(&via).color(via_color)).truncate()));
                     let node = route.path.nodes[step];
                     row.response().context_menu(|ui| {
                         let avoid = &s.settings.avoid;
@@ -1153,7 +1153,7 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool, compact: bool) 
                 true => ("Ready".to_string(), theme::TEXT_DIM),
                 false => (parts.join(" · "), theme::WARN),
             };
-            ui.add(Label::new(RichText::new(&text).color(color)).truncate()).on_hover_text(&text);
+            ui.add(Label::new(RichText::new(&text).color(color)).truncate());
         });
     });
 }
@@ -1167,15 +1167,16 @@ fn sync_status(ui: &mut Ui, s: &Session, compact: bool) {
     for source in [SourceId::EveScout, SourceId::Nexum] {
         let (dot, text) = source_state(s, source);
         // In a narrow window only the dot shows, with the text on hover.
-        let tip = format!("{} {text}", source.label());
         if !compact {
-            ui.label(RichText::new(text).color(theme::TEXT_DIM).small());
+            ui.label(RichText::new(&text).color(theme::TEXT_DIM).small());
             ui.label(RichText::new(source.label()).color(theme::TEXT).small());
         }
         // A painted dot: the fonts have no circle glyph.
         let (rect, response) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
         ui.painter().circle_filled(rect.center(), 3.5, dot);
-        response.on_hover_text(tip);
+        if compact {
+            response.on_hover_text(format!("{} {text}", source.label()));
+        }
         ui.add_space(10.0);
     }
 }
