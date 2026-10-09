@@ -310,7 +310,7 @@ impl View {
         ui.columns(Tab::ALL.len(), |columns| {
             for (column, tab) in columns.iter_mut().zip(Tab::ALL) {
                 let size = vec2(column.available_width(), 26.0);
-                if column.add_sized(size, Button::selectable(self.tab == tab, tab.title())).clicked() {
+                if theme::underline_tab(column, self.tab == tab, tab.title(), size).clicked() {
                     self.tab = tab;
                 }
             }

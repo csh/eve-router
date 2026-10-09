@@ -291,3 +291,23 @@ pub fn selection_bar(ui: &Ui, rect: egui::Rect) {
 pub fn modal_width(ui: &Ui, want: f32) -> f32 {
     want.min((ui.ctx().content_rect().width() - 48.0).max(240.0))
 }
+
+/// A tab of the client style: text only, bright when active, with an accent underline.
+/// `size` is the room of the tab. Returns the response, which is clicked when the tab is picked.
+pub fn underline_tab(ui: &mut Ui, active: bool, text: &str, size: Vec2) -> egui::Response {
+    let (rect, response) = ui.allocate_exact_size(size, egui::Sense::click());
+    let color = if active {
+        Color32::WHITE
+    } else if response.hovered() {
+        TEXT
+    } else {
+        TEXT_DIM
+    };
+    let p = ui.painter();
+    p.text(rect.center() - vec2(0.0, 1.0), egui::Align2::CENTER_CENTER, text, egui::TextStyle::Body.resolve(ui.style()), color);
+    p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, LINE));
+    if active {
+        p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(2.0, accent(ui)));
+    }
+    response
+}
