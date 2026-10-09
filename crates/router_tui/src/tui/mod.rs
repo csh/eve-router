@@ -9,24 +9,26 @@ use app::App;
 use ratatui::crossterm::event::{self, Event, KeyEventKind};
 use router_core::config::{Config, RunOverrides};
 use router_core::esi::pilots::Pilots;
-use router_core::labels::Shortcuts;
+use router_core::refresh::{Refresher, Snapshot};
 use router_core::settings::Settings;
-use router_core::universe::Universe;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Duration;
 
 pub fn run(
-    uni: &Universe,
+    start: Snapshot,
+    refresher: Refresher,
     settings: Settings,
     cfg: Config,
     cfg_path: PathBuf,
     input: String,
-    shortcuts: Shortcuts,
     overrides: RunOverrides,
 ) -> Result<(), String> {
+    let Snapshot { uni, shortcuts, all, .. } = start;
     let mut app = App::new(uni, settings, cfg, cfg_path.clone(), input, shortcuts);
     app.overrides = overrides;
+    app.wormhole_data = all;
+    app.refresher = Some(refresher);
     // The TUI reads the tracker each 250 ms, so it needs no wake.
     app.pilots = Pilots::open(&cfg_path, Arc::new(|| {}));
     app.on_open();
@@ -48,6 +50,7 @@ pub fn run(
                 app.on_key(key);
             }
             app.tick();
+            app.poll_refresh();
         }
         Ok(())
     })();
@@ -62,7 +65,9 @@ mod tests {
     use ratatui::backend::TestBackend;
     use ratatui::crossterm::event::{KeyCode, KeyEvent};
     use router_core::ansiblex::{BridgeRules, find_hull};
+    use router_core::labels::Shortcuts;
     use router_core::route::Mode;
+    use router_core::universe::Universe;
 
     #[test]
     fn draws_and_handles_keys() {
@@ -80,9 +85,11 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
+            avoid: Default::default(),
         };
+        let uni = Arc::new(uni);
         let mut app = App::new(
-            &uni,
+            Arc::clone(&uni),
             settings,
             Config::default(),
             std::env::temp_dir().join("eve-router-test.json"),
@@ -194,10 +201,12 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()],
+            avoid: Default::default(),
         };
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
         let cfg_path = std::env::temp_dir().join("eve-router-test-snapshot.json");
-        let mut app = App::new(&uni, settings, Config::default(), cfg_path, "Jita > UALX-3".into(), shortcuts);
+        let uni = Arc::new(uni);
+        let mut app = App::new(Arc::clone(&uni), settings, Config::default(), cfg_path, "Jita > UALX-3".into(), shortcuts);
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
         terminal.draw(|f| ui::draw(f, &mut app)).unwrap();
         let text = screen_text(terminal.backend().buffer());
@@ -226,10 +235,12 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap()],
+            avoid: Default::default(),
         };
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
         let cfg_path = std::env::temp_dir().join("eve-router-test-active-snapshot.json");
-        let mut app = App::new(&uni, settings, Config::default(), cfg_path, "Jita > UALX-3".into(), shortcuts);
+        let uni = Arc::new(uni);
+        let mut app = App::new(Arc::clone(&uni), settings, Config::default(), cfg_path, "Jita > UALX-3".into(), shortcuts);
         let mut route = ActiveRoute::new(&uni, &app.settings.rules, &app.routes[0], 1, 7, "Alice Ander", app.now);
         route.progress = 3;
         app.pilots.active = Some(route);
@@ -258,11 +269,13 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: vec![uni.exact("Jita").unwrap()],
+            avoid: Default::default(),
         };
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
         let cfg_path = std::env::temp_dir().join("eve-router-test-loop-pilot.json");
         // A round trip: UALX-3 is the start and the destination.
-        let mut app = App::new(&uni, settings, Config::default(), cfg_path, "UALX-3 > Y-ORBJ > UALX-3".into(), shortcuts);
+        let uni = Arc::new(uni);
+        let mut app = App::new(Arc::clone(&uni), settings, Config::default(), cfg_path, "UALX-3 > Y-ORBJ > UALX-3".into(), shortcuts);
         let ualx = uni.system(uni.exact("UALX-3").unwrap()).id;
         app.pilots.add_test_pilot(7, "Alice Ander", ualx);
         let route = ActiveRoute::new(&uni, &app.settings.rules, &app.routes[0], 1, 7, "Alice Ander", app.now);
@@ -304,12 +317,14 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: Vec::new(),
+            avoid: Default::default(),
         };
         let cfg_path = std::env::temp_dir().join("eve-router-test-hubs").join("eve-router.json");
         let _ = std::fs::remove_dir_all(cfg_path.parent().unwrap());
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
         assert_eq!((shortcuts.wormholes, shortcuts.thera, shortcuts.turnur), (3, 2, 1));
-        let mut app = App::new(&uni, settings, Config::default(), cfg_path.clone(), String::new(), shortcuts);
+        let uni = Arc::new(uni);
+        let mut app = App::new(Arc::clone(&uni), settings, Config::default(), cfg_path.clone(), String::new(), shortcuts);
         // The s and w keys work outside the input box.
         app.focus = app::Focus::Routes;
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
@@ -359,11 +374,13 @@ mod tests {
             min_life: 0,
             costs: Default::default(),
             favourites: Vec::new(),
+            avoid: Default::default(),
         };
         let input = "UALX-3 > Dodixie > UALX-3 > Jita > Turnur > Hek > Rens > Jita > C-J6MT > UALX-3";
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
         let cfg_path = std::env::temp_dir().join("eve-router-test-optimize.json");
-        let mut app = App::new(&uni, settings, Config::default(), cfg_path, input.into(), shortcuts);
+        let uni = Arc::new(uni);
+        let mut app = App::new(Arc::clone(&uni), settings, Config::default(), cfg_path, input.into(), shortcuts);
         let typed_jumps = app.routes[0].jumps;
         let mut terminal = Terminal::new(TestBackend::new(120, 40)).unwrap();
 

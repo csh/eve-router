@@ -1,11 +1,12 @@
 //! The route settings, and the system names of the user input.
 
 use crate::ansiblex::{BridgeRules, find_hull, hull_by_type, same_hull, table};
-use crate::config::{self, Config};
-use crate::route::{DEFAULT_CAP_WEIGHT, DEFAULT_UNKNOWN_SIG_PENALTY, JUMP, Mode, Router, RouterOptions};
+use crate::config::{self, AvoidName, Config};
+use crate::route::{DEFAULT_CAP_WEIGHT, DEFAULT_UNKNOWN_SIG_PENALTY, JUMP, Mode, PENALTY, Router, RouterOptions};
 use crate::universe::Universe;
 use crate::wormhole;
 use petgraph::graph::NodeIndex;
+use std::collections::HashSet;
 
 /// Where the hull comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -58,6 +59,103 @@ impl RouteCosts {
     }
 }
 
+/// The sentence that follows a "No route" error while a "Never" entry could cause it.
+pub const NO_ROUTE_HINT: &str = "Your avoid list might be in the way.";
+
+/// One entry of the avoid list.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Entry<T> {
+    pub item: T,
+    /// True: no route crosses it, and a trip to it finds no route. False: a route crosses it
+    /// only if no other route exists, or the other routes are much longer.
+    pub never: bool,
+}
+
+/// The systems and the regions that a route avoids. A jump into a "prefer" entry costs as much
+/// as `PENALTY`. A jump into a "never" entry is not possible.
+#[derive(Clone, Debug, Default, PartialEq)]
+pub struct Avoid {
+    pub systems: Vec<Entry<NodeIndex>>,
+    pub regions: Vec<Entry<String>>,
+}
+
+impl Avoid {
+    /// The number of entries.
+    pub fn len(&self) -> usize {
+        self.systems.len() + self.regions.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    pub fn clear(&mut self) {
+        self.systems.clear();
+        self.regions.clear();
+    }
+
+    /// Add a "prefer" entry for a system. A system that is in the list already does not count again.
+    pub fn add_system(&mut self, node: NodeIndex) {
+        if !self.has_system(node) {
+            self.systems.push(Entry { item: node, never: false });
+        }
+    }
+
+    /// Add a "prefer" entry for a region. A region that is in the list already does not count again.
+    pub fn add_region(&mut self, region: &str) {
+        if !self.has_region(region) {
+            self.regions.push(Entry { item: region.to_string(), never: false });
+        }
+    }
+
+    pub fn set_system_never(&mut self, node: NodeIndex, never: bool) {
+        self.systems.iter_mut().filter(|e| e.item == node).for_each(|e| e.never = never);
+    }
+
+    pub fn set_region_never(&mut self, region: &str, never: bool) {
+        self.regions.iter_mut().filter(|e| e.item == region).for_each(|e| e.never = never);
+    }
+
+    pub fn remove_system(&mut self, node: NodeIndex) {
+        self.systems.retain(|e| e.item != node);
+    }
+
+    pub fn remove_region(&mut self, region: &str) {
+        self.regions.retain(|e| e.item != region);
+    }
+
+    pub fn has_system(&self, node: NodeIndex) -> bool {
+        self.systems.iter().any(|e| e.item == node)
+    }
+
+    pub fn has_region(&self, region: &str) -> bool {
+        self.regions.iter().any(|e| e.item == region)
+    }
+
+    /// True if an entry covers the system: the system itself, or its region.
+    pub fn covers(&self, uni: &Universe, node: NodeIndex) -> bool {
+        self.has_system(node) || self.has_region(&uni.system(node).region)
+    }
+
+    /// The cost of a jump into each system, by `NodeIndex`: `PENALTY` for a "prefer" entry.
+    /// The result is for `Router::set_danger`.
+    pub fn danger(&self, uni: &Universe) -> Vec<u64> {
+        self.mark(uni, false).into_iter().map(|hit| if hit { PENALTY } else { 0 }).collect()
+    }
+
+    /// True for each system with a "never" entry, by `NodeIndex`. The result is for `Router::set_never`.
+    pub fn never(&self, uni: &Universe) -> Vec<bool> {
+        self.mark(uni, true)
+    }
+
+    /// True for each system that has an entry with this `never` value, by `NodeIndex`.
+    fn mark(&self, uni: &Universe, never: bool) -> Vec<bool> {
+        let systems: HashSet<NodeIndex> = self.systems.iter().filter(|e| e.never == never).map(|e| e.item).collect();
+        let regions: HashSet<&str> = self.regions.iter().filter(|e| e.never == never).map(|e| e.item.as_str()).collect();
+        uni.graph.node_indices().map(|n| systems.contains(&n) || regions.contains(uni.system(n).region.as_str())).collect()
+    }
+}
+
 /// The settings that a user interface can change.
 pub struct Settings {
     pub mode: Mode,
@@ -76,6 +174,7 @@ pub struct Settings {
     pub min_life: u64,
     /// The sidebar destinations.
     pub favourites: Vec<NodeIndex>,
+    pub avoid: Avoid,
 }
 
 impl Settings {
@@ -101,6 +200,7 @@ impl Settings {
             hull_source: cfg.pilot.map_or(HullSource::Manual, HullSource::Pilot),
             min_life: cfg.min_life_min.unwrap_or(config::DEFAULT_MIN_LIFE_MIN),
             favourites: resolve_all(uni, &favourite_names(cfg))?,
+            avoid: avoid_from_config(cfg, uni),
         })
     }
 
@@ -118,7 +218,12 @@ impl Settings {
             unknown_sig_broken: self.costs.unknown_sig_broken,
             now: now + self.min_life * 60,
         };
-        Router::new(uni, options)
+        let mut router = Router::new(uni, options);
+        if !self.avoid.is_empty() {
+            router.set_danger(self.avoid.danger(uni));
+            router.set_never(self.avoid.never(uni));
+        }
+        router
     }
 
     /// Set the hull from the ship of the followed pilot. `ship_type` is `None` while the ship is
@@ -149,6 +254,15 @@ impl Settings {
         cfg.unknown_sig_broken = self.costs.unknown_sig_broken;
         cfg.eve_scout = self.hubs;
         cfg.favourites = Some(self.favourites.iter().map(|&n| uni.name(n).to_string()).collect());
+        cfg.avoid_systems = self.avoid.systems.iter().map(|e| AvoidName::new(uni.name(e.item), e.never)).collect();
+        cfg.avoid_regions = self.avoid.regions.iter().map(|e| AvoidName::new(&e.item, e.never)).collect();
+    }
+
+    /// The text of a route error. A "No route" error gets a hint while a "Never" entry is on the
+    /// avoid list, because only such an entry can block every route.
+    pub fn explain(&self, error: String) -> String {
+        let never = self.avoid.systems.iter().any(|e| e.never) || self.avoid.regions.iter().any(|e| e.never);
+        if never && error.starts_with("No route") { format!("{error}. {NO_ROUTE_HINT}") } else { error }
     }
 
     /// The waypoints in the order to route them, and a status text if the order changed.
@@ -194,6 +308,23 @@ pub fn resolve_all(uni: &Universe, names: &[String]) -> Result<Vec<NodeIndex>, S
             })
         })
         .collect()
+}
+
+/// The avoid list of the config. A name that the SDE does not know is dropped.
+fn avoid_from_config(cfg: &Config, uni: &Universe) -> Avoid {
+    let known: std::collections::HashSet<&str> = uni.graph.node_weights().map(|s| s.region.as_str()).collect();
+    let mut avoid = Avoid::default();
+    for entry in &cfg.avoid_systems {
+        if let Some(node) = uni.exact(&entry.name) {
+            avoid.add_system(node);
+            avoid.set_system_never(node, entry.never);
+        }
+    }
+    for entry in cfg.avoid_regions.iter().filter(|r| known.contains(r.name.as_str())) {
+        avoid.add_region(&entry.name);
+        avoid.set_region_never(&entry.name, entry.never);
+    }
+    avoid
 }
 
 fn favourite_names(cfg: &Config) -> Vec<String> {
@@ -301,6 +432,154 @@ mod tests {
         assert_eq!(cost(&s), Ok(1000 + 1500));
         s.costs.unknown_sig_broken = true;
         assert!(cost(&s).is_err());
+    }
+
+    /// The route of Jita to Dodixie, and the first system on it that is in another region than both ends.
+    fn route_and_middle(uni: &Universe, s: &Settings) -> (Vec<NodeIndex>, NodeIndex) {
+        let nodes = resolve_all(uni, &["Jita".into(), "Dodixie".into()]).unwrap();
+        let route = s.router(uni, FIXTURE_TIME).routes(&nodes, 1).unwrap().remove(0);
+        let ends = [uni.system(nodes[0]).region.clone(), uni.system(nodes[1]).region.clone()];
+        let middle = *route.path.nodes.iter().find(|&&n| !ends.contains(&uni.system(n).region)).expect("a system in a third region");
+        (nodes, middle)
+    }
+
+    #[test]
+    fn an_avoided_system_leaves_the_route() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let (nodes, middle) = route_and_middle(&uni, &s);
+        let route = |s: &Settings| s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).unwrap().remove(0).path;
+        let first = route(&s);
+        s.avoid.add_system(middle);
+        s.avoid.add_system(middle);
+        assert_eq!(s.avoid.len(), 1);
+        assert!(!route(&s).nodes.contains(&middle));
+        s.avoid.clear();
+        assert_eq!(route(&s), first);
+    }
+
+    #[test]
+    fn an_avoided_region_leaves_the_route() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let (nodes, middle) = route_and_middle(&uni, &s);
+        let region = uni.system(middle).region.clone();
+        s.avoid.add_region(&region);
+        let path = s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).unwrap().remove(0).path;
+        assert!(path.nodes.iter().all(|&n| uni.system(n).region != region), "the route still crosses {region}");
+    }
+
+    #[test]
+    fn a_never_system_is_not_crossed_even_when_it_is_the_only_way() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let nodes = resolve_all(&uni, &["Jita".into(), "Perimeter".into()]).unwrap();
+        s.avoid.add_system(nodes[1]);
+        assert!(s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).is_ok(), "prefer still crosses it");
+        s.avoid.set_system_never(nodes[1], true);
+        assert!(s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).is_err());
+        s.avoid.set_system_never(nodes[1], false);
+        assert!(s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).is_ok());
+    }
+
+    #[test]
+    fn a_no_route_error_points_at_a_never_entry() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let error = "No route from Jita to Perimeter".to_string();
+        assert_eq!(s.explain(error.clone()), error);
+        // A "prefer" entry never blocks a route, so it gets no hint.
+        let perimeter = uni.exact("Perimeter").unwrap();
+        s.avoid.add_system(perimeter);
+        assert_eq!(s.explain(error.clone()), error);
+        s.avoid.set_system_never(perimeter, true);
+        assert_eq!(s.explain(error.clone()), format!("{error}. {NO_ROUTE_HINT}"));
+        // Another error stays as it is.
+        assert_eq!(s.explain("Give two or more systems".into()), "Give two or more systems");
+    }
+
+    #[test]
+    fn an_entry_covers_its_system_and_the_systems_of_its_region() {
+        let uni = overlay_universe();
+        let mut avoid = Avoid::default();
+        let (jita, perimeter, amarr) = (uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap(), uni.exact("Amarr").unwrap());
+        assert!(!avoid.covers(&uni, jita));
+        avoid.add_system(jita);
+        avoid.add_region(&uni.system(amarr).region);
+        assert!(avoid.covers(&uni, jita) && avoid.covers(&uni, amarr));
+        assert!(!avoid.covers(&uni, perimeter) || uni.system(perimeter).region == uni.system(amarr).region);
+    }
+
+    /// New Eden to Dead End has one way only, through Central Point.
+    #[test]
+    fn a_choke_point_blocks_a_route_in_never_mode_and_not_in_prefer_mode() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let nodes = resolve_all(&uni, &["New Eden".into(), "Dead End".into()]).unwrap();
+        let point = uni.exact("Central Point").unwrap();
+        let routes = |s: &Settings| s.router(&uni, FIXTURE_TIME).routes(&nodes, 3);
+
+        // With no avoid entry, the route goes through Central Point.
+        assert!(routes(&s).unwrap().iter().all(|r| r.path.nodes.contains(&point)));
+
+        // Prefer: the route still succeeds, and it counts the system that it had to enter.
+        s.avoid.add_system(point);
+        let found = routes(&s).unwrap();
+        assert!(found.iter().all(|r| r.path.nodes.contains(&point) && r.avoided == 1));
+
+        // Never: no route exists, and the error points at the avoid list.
+        s.avoid.set_system_never(point, true);
+        let error = routes(&s).err().expect("no route");
+        assert_eq!(s.explain(error), "No route from New Eden to Dead End. Your avoid list might be in the way.");
+
+        // Back to Prefer: the route is there again.
+        s.avoid.set_system_never(point, false);
+        assert!(routes(&s).is_ok());
+    }
+
+    #[test]
+    fn a_never_region_is_not_crossed() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let (nodes, middle) = route_and_middle(&uni, &s);
+        let region = uni.system(middle).region.clone();
+        s.avoid.add_region(&region);
+        s.avoid.set_region_never(&region, true);
+        let routes = s.router(&uni, FIXTURE_TIME).routes(&nodes, 3).unwrap();
+        assert!(routes.iter().all(|r| r.path.nodes.iter().all(|&n| uni.system(n).region != region)));
+    }
+
+    #[test]
+    fn an_avoided_system_stays_when_no_other_route_exists() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let nodes = resolve_all(&uni, &["Jita".into(), "Perimeter".into()]).unwrap();
+        s.avoid.add_system(nodes[1]);
+        let routes = s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).unwrap();
+        assert_eq!(routes[0].path.nodes.last(), Some(&nodes[1]));
+    }
+
+    #[test]
+    fn the_avoid_list_round_trips_and_drops_unknown_names() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let rens = uni.exact("Rens").unwrap();
+        s.avoid.add_system(rens);
+        s.avoid.set_system_never(rens, true);
+        s.avoid.add_region("Lonetrek");
+        let mut cfg = Config::default();
+        s.store(&uni, &mut cfg);
+        assert_eq!(
+            (cfg.avoid_systems.as_slice(), cfg.avoid_regions.as_slice()),
+            (&[AvoidName::new("Rens", true)][..], &[AvoidName::new("Lonetrek", false)][..])
+        );
+        let back = Settings::from_config(&cfg, &uni).unwrap();
+        assert_eq!(back.avoid, s.avoid);
+        // A name that the SDE does not know is dropped, and the other entries stay.
+        cfg.avoid_systems.push(AvoidName::new("Nowhere", false));
+        cfg.avoid_regions.push(AvoidName::new("Nowhere", false));
+        let back = Settings::from_config(&cfg, &uni).unwrap();
+        assert_eq!((back.avoid.systems.len(), back.avoid.regions.len()), (1, 1));
     }
 
     #[test]

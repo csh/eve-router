@@ -46,6 +46,18 @@ pub struct SearchBox {
 }
 
 /// True if `text` holds more than one system name.
+/// The least width of the result list: the name, the security and the longest region name.
+const MIN_LIST_WIDTH: f32 = 400.0;
+
+/// The width that the frame of the result list adds: 2 margins of 2 and 2 strokes of 1.
+const LIST_FRAME: f32 = 6.0;
+
+/// The width of the result list for a field of `field` width. A narrow field gets a list that fits
+/// the longest region name. A wide field gets a list of its own width.
+fn list_width(field: f32) -> f32 {
+    field.max(MIN_LIST_WIDTH)
+}
+
 pub fn is_list(text: &str) -> bool {
     text.contains(['>', ',', ';', '\t', '\n'])
 }
@@ -130,7 +142,7 @@ impl SearchBox {
             self.open = true;
         }
         if response.has_focus() {
-            ui.painter().line_segment([response.rect.left_bottom(), response.rect.right_bottom()], Stroke::new(1.0, theme::ACCENT));
+            ui.painter().line_segment([response.rect.left_bottom(), response.rect.right_bottom()], Stroke::new(1.0, theme::accent(ui)));
         }
 
         let mut picked = None;
@@ -154,8 +166,9 @@ impl SearchBox {
                 .order(Order::Foreground)
                 .fixed_pos(response.rect.left_bottom() + vec2(0.0, 2.0))
                 .show(ui.ctx(), |ui| {
-                    Frame::new().fill(theme::HEADER).stroke(Stroke::new(1.0, theme::ACCENT)).inner_margin(Margin::same(2)).show(ui, |ui| {
-                        ui.set_width(width.max(320.0));
+                    Frame::new().fill(theme::HEADER).stroke(Stroke::new(1.0, theme::accent(ui))).inner_margin(Margin::same(2)).show(ui, |ui| {
+                        // The frame adds its margin and its stroke, so the list is as wide as the field.
+                        ui.set_width(list_width(response.rect.width()) - LIST_FRAME);
                         if self.results.is_empty() {
                             ui.label(RichText::new("No system found").color(theme::TEXT_DIM));
                         }
@@ -210,7 +223,7 @@ impl SearchBox {
         let mut picked = response.clicked().then_some(Pick::Default);
         if !menu.is_empty() {
             response.context_menu(|ui| {
-                ui.label(RichText::new(&sys.name).color(theme::ACCENT));
+                ui.label(RichText::new(&sys.name).color(theme::accent(ui)));
                 ui.separator();
                 for &pick in menu {
                     if ui.button(pick.label()).clicked() {
@@ -221,5 +234,16 @@ impl SearchBox {
             });
         }
         picked
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_list_is_as_wide_as_a_wide_field_and_fits_a_narrow_one() {
+        assert_eq!(list_width(900.0), 900.0);
+        assert_eq!(list_width(300.0), MIN_LIST_WIDTH);
     }
 }

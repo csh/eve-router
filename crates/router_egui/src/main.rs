@@ -5,9 +5,11 @@
 //! system search in place of the text input.
 
 mod app;
+mod log_window;
 mod pilots_view;
 mod search;
 mod settings_window;
+mod strip;
 mod theme;
 mod view;
 
@@ -22,7 +24,7 @@ fn main() -> eframe::Result {
         viewport: egui::ViewportBuilder::default()
             .with_title("EVE Router")
             .with_inner_size([1280.0, 820.0])
-            .with_min_inner_size([1260.0, 560.0]),
+            .with_min_inner_size([320.0, 420.0]),
         ..Default::default()
     };
     eframe::run_native("EVE Router", options, Box::new(|cc| Ok(Box::new(RouterApp::new(cc.egui_ctx.clone())))))

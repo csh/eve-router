@@ -262,7 +262,7 @@ fn draw_detail(frame: &mut Frame, app: &mut App, area: Rect) {
         frame.render_widget(Block::bordered().title(" Detail "), area);
         return;
     };
-    let uni = app.uni;
+    let uni = &*app.uni;
     let rows = route.path.nodes.iter().enumerate().map(|(step, &node)| {
         let sys = uni.system(node);
         let via = match step.checked_sub(1).map(|s| route.path.edges[s]) {

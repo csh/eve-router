@@ -12,6 +12,9 @@ pub const LOCKED: &str = "Locked while route is active — press x to stop";
 /// The status text after a ship change closes a route choice.
 pub const ROUTES_CHANGED: &str = "The ship changed, so the routes changed. Start the route again.";
 
+/// The status text after a wormhole refresh closes a route choice.
+pub const WORMHOLES_CHANGED: &str = "The wormholes changed, so the routes changed. Start the route again.";
+
 /// True for a key that changes the route search. These keys do nothing while a route is active,
 /// so the app and the in-game waypoints stay the same.
 pub fn route_locked(code: KeyCode) -> bool {
@@ -24,7 +27,7 @@ pub fn route_setting(row: SettingsRow) -> bool {
     !matches!(row, SettingsRow::Favourite(_) | SettingsRow::AddFavourite)
 }
 
-impl App<'_> {
+impl App {
     /// The name of a system, or its ID if the map does not have it.
     pub fn system_name(&self, id: u32) -> String {
         self.uni.by_id.get(&id).map_or_else(|| id.to_string(), |&n| self.uni.name(n).to_string())
@@ -76,7 +79,7 @@ impl App<'_> {
 
     /// Forget a choice that holds a route index: the Pick popup and the start after the login.
     /// After a recompute, the index can point to a different route. True if a choice went away.
-    fn forget_route_choice(&mut self) -> bool {
+    pub(super) fn forget_route_choice(&mut self) -> bool {
         let pick = matches!(self.popup, Some(Popup::Pick { .. }));
         if pick {
             self.popup = None;
@@ -144,7 +147,7 @@ impl App<'_> {
     fn confirm(&mut self, index: usize, id: u64) -> Option<Popup> {
         let pilot = self.pilots.characters().into_iter().find(|c| c.id == id)?;
         let route = self.routes.get(index)?;
-        let plan = StartPlan::new(self.uni, &self.settings, route, index + 1, &pilot, router_core::wormhole::now());
+        let plan = StartPlan::new(&self.uni, &self.settings, route, index + 1, &pilot, router_core::wormhole::now());
         if let Some(error) = &plan.error {
             self.status.clone_from(error);
         }
@@ -227,7 +230,7 @@ impl App<'_> {
 
     /// "Re-route from here": the new route goes into a confirm popup.
     fn reroute(&mut self) -> Option<Popup> {
-        match self.pilots.reroute(self.uni, &self.settings, router_core::wormhole::now()) {
+        match self.pilots.reroute(&self.uni, &self.settings, router_core::wormhole::now()) {
             Ok(route) => Some(Popup::Reroute(Box::new(route))),
             Err(e) => {
                 self.status = e;
@@ -371,6 +374,8 @@ mod tests {
     use ratatui::crossterm::event::KeyModifiers;
     use router_core::config::Config;
     use router_core::esi::active::{ActiveRoute, Hop, Step};
+    use router_core::test_support::{hole, snapshot};
+    use router_core::wormhole::Wormhole;
 
     fn active(systems: &[u32]) -> ActiveRoute {
         let steps = systems
@@ -490,6 +495,25 @@ mod tests {
         assert!(app.forget_route_choice());
         assert!(app.popup.is_none() && app.start_after_login.is_none());
         assert!(!app.forget_route_choice());
+    }
+
+    /// Review focus: a wormhole refresh while a route is active.
+    #[test]
+    fn a_refresh_keeps_the_step_mark_of_the_active_route() {
+        let mut app = app("refresh-active", Config::default());
+        app.input = "Jita > Amarr".into();
+        app.recompute();
+        let mut route = active(&[30000142, 30000144, 30002187]);
+        route.progress = 1;
+        app.pilots.active = Some(route);
+        app.tick();
+        assert_eq!(app.detail.selected(), Some(1));
+        // The new wormhole route is first, so the refresh does not keep the planner path.
+        let hole = Wormhole { sig_a: Some("ABC-123".into()), ..hole(30000142, 30002187) };
+        app.apply_snapshot(snapshot(vec![hole]));
+        assert_eq!(app.routes[0].wormholes, 1, "{}", app.status);
+        app.tick();
+        assert_eq!(app.detail.selected(), Some(1));
     }
 
     #[test]

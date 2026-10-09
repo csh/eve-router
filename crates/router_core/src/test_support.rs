@@ -5,13 +5,13 @@ use crate::route::Mode;
 use crate::settings::{HullSource, Settings};
 use crate::sources::nexum;
 use crate::universe::Universe;
-use crate::wormhole::{self, SourceId, Wormhole};
+use crate::wormhole::{self, SourceData, SourceId, Wormhole};
 use crate::{overlay, sde, wormhole_types};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::OnceLock;
 use std::sync::mpsc::{self, Receiver};
+use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
 /// The repository `sde/` directory. The search goes up from this crate to the directory
@@ -27,10 +27,20 @@ pub fn fixture(name: &str) -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("tests").join("fixtures").join(name)
 }
 
+/// The real SDE, loaded one time for all tests. `universe` and `shared_universe` give the same map.
+fn shared() -> &'static Arc<Universe> {
+    static UNI: OnceLock<Arc<Universe>> = OnceLock::new();
+    UNI.get_or_init(|| Arc::new(Universe::from_sde(crate::sde::load(&sde_dir()).unwrap())))
+}
+
 /// The real SDE, loaded one time for all tests.
 pub fn universe() -> &'static Universe {
-    static UNI: OnceLock<Universe> = OnceLock::new();
-    UNI.get_or_init(|| Universe::from_sde(crate::sde::load(&sde_dir()).unwrap()))
+    shared()
+}
+
+/// The real SDE as a shared map, for an app or a refresh worker.
+pub fn shared_universe() -> Arc<Universe> {
+    Arc::clone(shared())
 }
 
 /// 2026-10-05T12:00:00Z, the time of the Nexum fixture.
@@ -62,12 +72,20 @@ pub fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
         min_life: 0,
         costs: Default::default(),
         favourites: Vec::new(),
+        avoid: Default::default(),
     }
 }
 
 /// A wormhole between two systems, with no known values.
 pub fn hole(a: u32, b: u32) -> Wormhole {
     Wormhole::new(a, b, None, None, SourceId::Nexum)
+}
+
+/// A refresh snapshot of the real SDE with `holes` as Nexum wormholes, at `FIXTURE_TIME`.
+pub fn snapshot(holes: Vec<Wormhole>) -> crate::refresh::Snapshot {
+    let data = SourceData { source: SourceId::Nexum, fetched_at: FIXTURE_TIME, origin: None, name: None, holes };
+    let wh = nexum::Load { data: Some(data), ..Default::default() };
+    crate::refresh::build(universe(), &Default::default(), &wh, &Default::default(), FIXTURE_TIME).0
 }
 
 /// Compare `text` with the snapshot file `tests/snapshots/<name>.txt` of the calling crate.
@@ -149,11 +167,17 @@ fn serve_full(status: &str, body: &str, headers: &[(&str, &str)], delay: Duratio
 /// Serve canned 200 responses on 127.0.0.1, one for each path, until the test ends.
 /// A path that is not in `routes` gets a 500. The channel gives each request text.
 pub fn serve_routes(routes: HashMap<String, String>) -> (String, Receiver<String>) {
+    serve_live(Arc::new(Mutex::new(routes)))
+}
+
+/// `serve_routes`, but the test can change `routes` while the server runs.
+pub fn serve_live(routes: Arc<Mutex<HashMap<String, String>>>) -> (String, Receiver<String>) {
     let (server, url) = test_server();
     let (tx, rx) = mpsc::channel();
     std::thread::spawn(move || {
         for mut request in server.incoming_requests() {
-            let (status, body) = match routes.get(request.url()) {
+            let body = routes.lock().unwrap().get(request.url()).cloned();
+            let (status, body) = match &body {
                 Some(body) => ("200 OK", body.as_str()),
                 None => ("500 Internal Server Error", "{}"),
             };

@@ -74,6 +74,44 @@ impl fmt::Debug for ApiKey {
 }
 
 /// The Nexum settings. The router fetches the map only when all three values are set.
+/// A system or a region on the avoid list, by name. The file holds an object. A plain name,
+/// from an older file, also loads, as an entry with `never` false.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[serde(from = "AvoidRepr")]
+pub struct AvoidName {
+    pub name: String,
+    /// True: no route crosses it. False: a route crosses it only if no other route exists.
+    #[serde(default)]
+    pub never: bool,
+}
+
+/// The two forms of an avoid entry in a file.
+#[derive(Deserialize)]
+#[serde(untagged)]
+enum AvoidRepr {
+    Name(String),
+    Full {
+        name: String,
+        #[serde(default)]
+        never: bool,
+    },
+}
+
+impl From<AvoidRepr> for AvoidName {
+    fn from(repr: AvoidRepr) -> Self {
+        match repr {
+            AvoidRepr::Name(name) => AvoidName { name, never: false },
+            AvoidRepr::Full { name, never } => AvoidName { name, never },
+        }
+    }
+}
+
+impl AvoidName {
+    pub fn new(name: &str, never: bool) -> Self {
+        AvoidName { name: name.to_string(), never }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
 #[serde(default)]
 pub struct NexumConfig {
@@ -116,9 +154,19 @@ pub struct Config {
     pub unknown_sig_penalty: Option<f32>,
     /// Drop a wormhole with no known signature, instead of a penalty.
     pub unknown_sig_broken: bool,
+    /// The systems that a route avoids, by name.
+    pub avoid_systems: Vec<AvoidName>,
+    /// The regions that a route avoids, by name.
+    pub avoid_regions: Vec<AvoidName>,
     pub nexum: NexumConfig,
     /// The Thera and Turnur switches. Both are on in a file without them.
     pub eve_scout: Hubs,
+    /// The Photon UI faction theme: "caldari", "amarr", "gallente", "minmatar".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub theme: Option<String>,
+    /// Compact UI layout with tighter row heights and padding.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub compact: bool,
 }
 
 /// The config before and after the CLI flags. A save puts back the file value of each field
@@ -159,6 +207,8 @@ impl RunOverrides {
         keep(&mut cfg.cap_weight, &f.cap_weight, &r.cap_weight);
         keep(&mut cfg.unknown_sig_penalty, &f.unknown_sig_penalty, &r.unknown_sig_penalty);
         keep(&mut cfg.unknown_sig_broken, &f.unknown_sig_broken, &r.unknown_sig_broken);
+        keep(&mut cfg.theme, &f.theme, &r.theme);
+        keep(&mut cfg.compact, &f.compact, &r.compact);
     }
 }
 
@@ -243,6 +293,15 @@ mod tests {
         assert!(path.ends_with(Path::new(APP_DIR).join(FILE_NAME)), "{}", path.display());
     }
 
+    /// An older file has a plain name for each avoid entry. It still loads, as a "prefer" entry.
+    #[test]
+    fn an_avoid_entry_reads_a_plain_name_or_an_object() {
+        let text = r#"{"avoid_systems":["Uedama",{"name":"Sivala","never":true}],"avoid_regions":[{"name":"Lonetrek"}]}"#;
+        let cfg: Config = serde_json::from_str(text).unwrap();
+        assert_eq!(cfg.avoid_systems, [AvoidName::new("Uedama", false), AvoidName::new("Sivala", true)]);
+        assert_eq!(cfg.avoid_regions, [AvoidName::new("Lonetrek", false)]);
+    }
+
     /// The file format: the field names and the kebab-case mode names.
     #[test]
     fn config_json_snapshot() {
@@ -259,12 +318,16 @@ mod tests {
             cap_weight: Some(0.6),
             unknown_sig_penalty: Some(4.0),
             unknown_sig_broken: true,
+            avoid_systems: vec![AvoidName::new("Rens", true)],
+            avoid_regions: vec![AvoidName::new("Lonetrek", false)],
             nexum: NexumConfig {
                 url: Some("https://nexum.example".into()),
                 key: Some(ApiKey("nxm_key".into())),
                 map_id: Some("m1".into()),
             },
             eve_scout: Hubs { thera: false, turnur: true },
+            theme: None,
+            compact: false,
         };
         let text = serde_json::to_string_pretty(&cfg).unwrap();
         crate::assert_snapshot!("config_json", text);

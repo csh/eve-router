@@ -54,20 +54,20 @@ impl Shortcuts {
     }
 }
 
-/// The in-game security colors, as `0xRRGGBB`.
+/// The colors of the security scale in the game, as `0xRRGGBB`. A value of 0.0 or less has the last color.
 pub fn sec_rgb(security: f64) -> u32 {
     match (display_sec(security) * 10.0).round() as i32 {
-        10.. => 0x2FEFEF,
-        9 => 0x48F0C0,
-        8 => 0x00EF47,
-        7 => 0x00F000,
-        6 => 0x8FEF2F,
-        5 => 0xEFEF00,
-        4 => 0xD77700,
-        3 => 0xF06000,
-        2 => 0xF04800,
-        1 => 0xD73000,
-        _ => 0xF00000,
+        10.. => 0x2C75E2,
+        9 => 0x3A9AEB,
+        8 => 0x4ECEF8,
+        7 => 0x61DBA4,
+        6 => 0x72E755,
+        5 => 0xF5FF83,
+        4 => 0xDC6D07,
+        3 => 0xCE440F,
+        2 => 0xBC1117,
+        1 => 0x732020,
+        _ => 0x8D3264,
     }
 }
 
@@ -150,8 +150,9 @@ pub fn jumps_label(jumps: usize) -> String {
     if jumps == 1 { "1 jump".into() } else { format!("{jumps} jumps") }
 }
 
-/// The overlay part of a route summary, for example " (2 wormholes, 1 jump bridge, 36 TJ)".
-pub fn route_extras(route: &Route) -> String {
+/// The overlay facts of a route, for example "2 wormholes", "1 jump bridge", "36 TJ". Empty for a
+/// route of gates only.
+pub fn route_notes(route: &Route) -> Vec<String> {
     let mut parts = Vec::new();
     if route.wormholes > 0 {
         let s = if route.wormholes == 1 { "" } else { "s" };
@@ -165,12 +166,28 @@ pub fn route_extras(route: &Route) -> String {
         parts.push(format!("{tj} TJ"));
     }
     if let Some(pct) = route.bridge_cap_pct {
-        parts.push(format!("{pct:.1}% of a gate"));
+        parts.push(format!("{pct:.1}% capacitor used"));
     }
     if route.unknown_sigs > 0 {
         parts.push(format!("{} unknown sig{}", route.unknown_sigs, if route.unknown_sigs == 1 { "" } else { "s" }));
     }
+    if route.avoided > 0 {
+        parts.push(format!("{} avoided system{}", route.avoided, if route.avoided == 1 { "" } else { "s" }));
+    }
+    parts
+}
+
+/// The overlay part of a route summary, for example " (2 wormholes, 1 jump bridge, 36 TJ)".
+pub fn route_extras(route: &Route) -> String {
+    let parts = route_notes(route);
     if parts.is_empty() { String::new() } else { format!(" ({})", parts.join(", ")) }
+}
+
+/// The summary of a route on one line, for example "10 jumps · 2 wormholes · 1 jump bridge".
+pub fn route_summary(route: &Route) -> String {
+    let mut parts = vec![jumps_label(route.jumps)];
+    parts.extend(route_notes(route));
+    parts.join(" · ")
 }
 
 /// The text of route number `index` (from 0), as `--print` writes it: the summary line, then
@@ -226,6 +243,48 @@ pub fn wormhole_label(w: &Wormhole, from: u32, now: u64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// The colors of the in-game security scale, from a screenshot of the game: 1.0 down to 0.0.
+    #[test]
+    fn security_colors_match_the_game() {
+        let scale = [
+            (1.0, 0x2C75E2),
+            (0.9, 0x3A9AEB),
+            (0.8, 0x4ECEF8),
+            (0.7, 0x61DBA4),
+            (0.6, 0x72E755),
+            (0.5, 0xF5FF83),
+            (0.4, 0xDC6D07),
+            (0.3, 0xCE440F),
+            (0.2, 0xBC1117),
+            (0.1, 0x732020),
+            (0.0, 0x8D3264),
+        ];
+        for (security, rgb) in scale {
+            assert_eq!(sec_rgb(security), rgb, "security {security}");
+        }
+        // A value between two steps shows as the step that the game shows. Below zero uses the 0.0 color.
+        assert_eq!(sec_rgb(0.04), 0x732020);
+        assert_eq!(sec_rgb(0.54), 0xF5FF83);
+        assert_eq!(sec_rgb(-0.8), 0x8D3264);
+    }
+
+    /// Jita to Amarr: the wormhole route is first, and the gate route is second.
+    fn jita_amarr_routes() -> (std::sync::Arc<Universe>, Vec<Route>) {
+        use crate::test_support::{FIXTURE_TIME, hole, settings, snapshot};
+        let wormhole = crate::wormhole::Wormhole { sig_a: Some("ABC-123".into()), ..hole(30000142, 30002187) };
+        let uni = snapshot(vec![wormhole]).uni;
+        let nodes = [uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()];
+        let routes = settings(&uni, None).router(&uni, FIXTURE_TIME).routes(&nodes, 2).unwrap();
+        (uni, routes)
+    }
+
+    #[test]
+    fn the_summary_is_one_line() {
+        let (_, routes) = jita_amarr_routes();
+        assert_eq!(route_summary(&routes[0]), "1 jump · 1 wormhole");
+        assert!(route_summary(&routes[1]).ends_with(" jumps"), "{}", route_summary(&routes[1]));
+    }
 
     #[test]
     fn pilot_label_names_the_source() {

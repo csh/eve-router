@@ -7,11 +7,14 @@ use router_core::config::{self, Config};
 use router_core::esi::active::active_path;
 use router_core::esi::pilots::Pilots;
 use router_core::labels::Shortcuts;
+use router_core::log::{self, LogEntry};
+use router_core::refresh::{self, Refresher, Setup, Snapshot, kept_route, route_note};
 use router_core::route::{Route, Stop};
 use router_core::settings::{Settings, split_systems};
-use router_core::sources::nexum::MapInfo;
+use router_core::sources::nexum::{self, MapInfo};
 use router_core::startup;
 use router_core::universe::Universe;
+use router_core::wormhole::SourceData;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -34,13 +37,22 @@ pub struct RouterApp {
 /// only after input or a repaint request, so the window draws no frames while it is idle.
 const MIN_FRAME_TIME: Duration = Duration::from_millis(16);
 
+/// The quiet time after the last change of a dragged value, before the app searches and saves.
+pub const APPLY_DELAY: Duration = Duration::from_millis(500);
+
+/// The least time between two manual refreshes. A Nexum map costs one request for each system.
+pub const REFRESH_GAP: Duration = Duration::from_secs(15);
+pub const REFRESHING: &str = "Refreshing the wormholes…";
+pub const REFRESH_WAIT: &str = "Refreshed less than 15 s ago";
+pub const REFRESH_STOPPED: &str = "The refresh worker stopped";
+
 /// The error when the load thread stops without a result. A panic in the load does this.
 const LOAD_STOPPED: &str = "The startup load stopped with an internal error. Start the router from a terminal to see the cause.";
 
 impl RouterApp {
     /// Set the theme and start the load. `ctx` gets a repaint request when the load ends.
     pub fn new(ctx: egui::Context) -> Self {
-        theme::apply(&ctx);
+        theme::apply_default(&ctx);
         theme::set_font(&ctx);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
@@ -60,6 +72,7 @@ impl RouterApp {
         };
         self.state = match result {
             Ok(session) => {
+                session.apply_theme(ctx);
                 // For example "EVE Router - SDE 3579973".
                 if let Some(build) = session.uni.build {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("EVE Router - SDE {build}")));
@@ -80,10 +93,19 @@ fn load(ctx: egui::Context) -> Result<Session, String> {
     let pending = startup::begin(&cfg, &cfg_path);
     let sde_dir = config::default_sde_dir();
     let mut startup_lines = Vec::new();
-    let loaded = startup::finish(pending, &sde_dir, None, |outcome| startup_lines.extend(outcome.message(&sde_dir)))?;
-    let shortcuts = Shortcuts::new(&loaded.uni, &loaded.report, &loaded.wh, &loaded.scout);
-    let settings = Settings::from_config(&cfg, &loaded.uni)?;
-    let mut session = Session::new(loaded.uni, settings, cfg, cfg_path.clone(), shortcuts);
+    let startup::Loaded { snapshot, base, report, types, .. } =
+        startup::finish(pending, &sde_dir, None, |outcome| startup_lines.extend(outcome.message(&sde_dir)))?;
+    let Snapshot { uni, shortcuts, all, log } = snapshot;
+    let settings = Settings::from_config(&cfg, &uni)?;
+    // The worker gets the wormholes again each 5 minutes, and wakes the window after each refresh.
+    let wake = ctx.clone();
+    let mut setup = Setup::new(base, report, types, cfg.nexum.clone(), &cfg_path);
+    setup.last = all.clone();
+    let refresher = Refresher::start(setup, router_core::wormhole::now, move || wake.request_repaint());
+    let mut session = Session::new(uni, settings, cfg, cfg_path.clone(), shortcuts);
+    session.wormhole_data = all;
+    session.log = log;
+    session.refresher = Some(refresher);
     session.startup_lines = startup_lines;
     // A tracker event or a login result repaints the window.
     session.pilots = Pilots::open(&cfg_path, Arc::new(move || ctx.request_repaint()));
@@ -97,11 +119,22 @@ fn load(ctx: egui::Context) -> Result<Session, String> {
 
 /// The loaded map, the settings, the waypoints and the routes. It holds no UI state.
 pub struct Session {
-    pub uni: Universe,
+    pub uni: Arc<Universe>,
     pub settings: Settings,
     pub cfg: Config,
     cfg_path: PathBuf,
     pub shortcuts: Shortcuts,
+    /// The wormhole data of each source, from the startup or the last refresh.
+    pub wormhole_data: Vec<SourceData>,
+    /// The rows of the Log window: the fetches since the start, newest last.
+    pub log: Vec<LogEntry>,
+    /// The refresh worker. `None` in the tests, and after the worker stops.
+    refresher: Option<Refresher>,
+    /// The time of the last manual refresh.
+    refreshed_at: Option<Instant>,
+    /// The note about the selected route after a refresh. It stays until the next search or
+    /// refresh, because the status bar timer does not clear it.
+    pub note: String,
     /// The SDE update messages of the startup load.
     pub startup_lines: Vec<String>,
     /// The start, the midpoints and the destination, in route order.
@@ -120,6 +153,8 @@ pub struct Session {
     /// The clock of the route search. The tests set a fixed time.
     clock: fn() -> u64,
     pub status: String,
+    /// The time of the last change that waits for `APPLY_DELAY`, for example a drag in the settings.
+    apply_at: Option<Instant>,
     /// The last Nexum map list, for the map name in the settings.
     pub map_names: Vec<MapInfo>,
     /// The logins, the tracking and the active route.
@@ -127,13 +162,18 @@ pub struct Session {
 }
 
 impl Session {
-    pub fn new(uni: Universe, settings: Settings, cfg: Config, cfg_path: PathBuf, shortcuts: Shortcuts) -> Self {
+    pub fn new(uni: Arc<Universe>, settings: Settings, cfg: Config, cfg_path: PathBuf, shortcuts: Shortcuts) -> Self {
         let mut session = Session {
             uni,
             settings,
             cfg,
             cfg_path: cfg_path.clone(),
             shortcuts,
+            wormhole_data: Vec::new(),
+            log: Vec::new(),
+            refresher: None,
+            refreshed_at: None,
+            note: String::new(),
             startup_lines: Vec::new(),
             waypoints: Vec::new(),
             routes: Vec::new(),
@@ -144,6 +184,7 @@ impl Session {
             now: router_core::wormhole::now(),
             clock: router_core::wormhole::now,
             status: String::new(),
+            apply_at: None,
             map_names: Vec::new(),
             pilots: Pilots::offline(active_path(&cfg_path)),
         };
@@ -171,12 +212,83 @@ impl Session {
         }
     }
 
+    /// Search and save after the last change of a value that a pilot drags. Each call at `now`
+    /// restarts the quiet time, so a drag gives one search and one write.
+    pub fn apply_later(&mut self, now: Instant) {
+        self.apply_at = Some(now);
+    }
+
+    /// Search and save if the quiet time of `apply_later` is over at `now`. Return the time left,
+    /// or `None` if nothing waits.
+    pub fn apply_due(&mut self, now: Instant) -> Option<Duration> {
+        let left = APPLY_DELAY.saturating_sub(now.saturating_duration_since(self.apply_at?));
+        if left.is_zero() {
+            self.flush_apply();
+            return None;
+        }
+        Some(left)
+    }
+
+    /// Search and save at once if a change waits. Call this before a window closes.
+    pub fn flush_apply(&mut self) {
+        if self.apply_at.take().is_some() {
+            self.recompute();
+            self.save();
+        }
+    }
+
+    /// Add the system to the avoid list, or take it off if it is in the list. Search again and save.
+    pub fn toggle_avoid_system(&mut self, node: NodeIndex) {
+        if self.settings.avoid.has_system(node) {
+            self.settings.avoid.remove_system(node);
+        } else {
+            self.settings.avoid.add_system(node);
+        }
+        self.avoid_changed();
+    }
+
+    /// Add the region to the avoid list, or take it off if it is in the list. Search again and save.
+    pub fn toggle_avoid_region(&mut self, region: &str) {
+        if self.settings.avoid.has_region(region) {
+            self.settings.avoid.remove_region(region);
+        } else {
+            self.settings.avoid.add_region(region);
+        }
+        self.avoid_changed();
+    }
+
+    /// Set the "never" switch of a system on the avoid list. Search again and save.
+    pub fn set_avoid_never_system(&mut self, node: NodeIndex, never: bool) {
+        self.settings.avoid.set_system_never(node, never);
+        self.avoid_changed();
+    }
+
+    /// Set the "never" switch of a region on the avoid list. Search again and save.
+    pub fn set_avoid_never_region(&mut self, region: &str, never: bool) {
+        self.settings.avoid.set_region_never(region, never);
+        self.avoid_changed();
+    }
+
+    /// Empty the avoid list. Search again and save.
+    pub fn clear_avoid(&mut self) {
+        self.settings.avoid.clear();
+        self.avoid_changed();
+    }
+
+    /// Search again and save after a change of the avoid list. The status stays quiet: the pilot
+    /// just made the change, and the route table shows the result.
+    fn avoid_changed(&mut self) {
+        self.recompute();
+        self.save_quietly();
+    }
+
     /// Find the routes and the favourite distances again.
     pub fn recompute(&mut self) {
         self.routes.clear();
         self.selected = 0;
         self.selected_step = None;
         self.status.clear();
+        self.note.clear();
         if let Some(reason) = self.settings.rules.blocked_reason() {
             self.status = format!("Jump bridges off: {reason}");
         }
@@ -205,8 +317,76 @@ impl Session {
             None => {}
             // The route table shows the optimized order, so the status line does not.
             Some(Ok((routes, _))) => self.routes = routes,
-            Some(Err(e)) => self.status = e,
+            Some(Err(e)) => self.status = self.settings.explain(e),
         }
+    }
+
+    /// Swap in a new map from the refresh worker. Search again with the waypoints. Keep the
+    /// selected route and step if `kept_route` finds the route. Else select the first route.
+    /// With no waypoints, only swap the map.
+    pub fn apply_snapshot(&mut self, snap: Snapshot) {
+        let old_uni = std::mem::replace(&mut self.uni, snap.uni);
+        self.shortcuts = snap.shortcuts;
+        self.wormhole_data = snap.all;
+        log::push(&mut self.log, snap.log);
+        if !self.waypoints.is_empty() {
+            let old = self.selected_route().map(|r| r.path.clone());
+            let old_step = self.selected_step;
+            self.recompute();
+            let kept = old.as_ref().and_then(|path| kept_route(&self.routes, &self.uni, &old_uni, path));
+            if let Some(i) = kept {
+                self.selected = i;
+                self.selected_step = old_step;
+            }
+            if let Some(path) = &old {
+                self.note = route_note(&old_uni, path, &self.uni, kept.is_some()).unwrap_or_default();
+            }
+        }
+        // The status line shows a fetch problem, as at startup. While the text shows, a refresh does
+        // not add it again. The status bar clears it after `STATUS_TIME`, so each refresh shows it again.
+        if let Some(warning) = self.shortcuts.warning.clone()
+            && !self.status.contains(&warning)
+        {
+            self.append_status(warning);
+        }
+    }
+
+    /// Take the newest map from the refresh worker, if it sent one. Call this each frame.
+    /// A stopped worker gives a note one time, and the map stays.
+    pub fn poll_refresh(&mut self) {
+        let Some(refresher) = &self.refresher else { return };
+        match refresher.try_recv() {
+            Ok(snap) => self.apply_snapshot(snap),
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.refresher = None;
+                self.note = refresh::STOPPED.into();
+                let row = LogEntry { time: router_core::wormhole::now(), op: "refresh", ok: false, reason: "the worker stopped".into() };
+                log::push(&mut self.log, [row]);
+            }
+        }
+    }
+
+    /// Ask the worker to refresh the wormholes now, also when a cache is fresh. Two calls in
+    /// `REFRESH_GAP` send one message.
+    pub fn refresh_now(&mut self, now: Instant) {
+        let Some(refresher) = &self.refresher else {
+            self.status = REFRESH_STOPPED.into();
+            return;
+        };
+        if self.refreshed_at.is_some_and(|at| now.saturating_duration_since(at) < REFRESH_GAP) {
+            self.status = REFRESH_WAIT.into();
+            return;
+        }
+        self.refreshed_at = Some(now);
+        refresher.refresh();
+        self.status = REFRESHING.into();
+    }
+
+    /// The text of the Nexum map row: the name in the map list, else the name in the Nexum
+    /// data of the current map, else the map ID.
+    pub fn map_name(&self) -> String {
+        nexum::map_label(&self.cfg.nexum, &self.map_names, &self.wormhole_data)
     }
 
     /// Add a waypoint at the end. The same system two times in a row is not a waypoint.
@@ -322,12 +502,48 @@ impl Session {
         }
     }
 
-    /// Save the config after a change to a Nexum value. A Nexum change applies at the next start.
+    /// Save the config after a change to a Nexum value. The refresh worker loads the new map at once.
     pub fn nexum_saved(&mut self) {
         self.status = match self.write_config() {
-            Ok(()) => "Nexum settings saved. Restart to load the new map.".into(),
+            Ok(()) => match &self.refresher {
+                Some(refresher) => {
+                    refresher.nexum(self.cfg.nexum.clone());
+                    refresh::NEXUM_LOADING.into()
+                }
+                // No worker: a test, or a worker that stopped.
+                None => "Nexum settings saved. Restart to load the new map.".into(),
+            },
             Err(e) => e,
         };
+    }
+
+    /// The active faction theme.
+    pub fn faction_theme(&self) -> theme::FactionTheme {
+        self.cfg.theme.as_deref().map(theme::FactionTheme::from_name).unwrap_or_default()
+    }
+
+    /// Set and apply a faction theme.
+    pub fn set_faction_theme(&mut self, theme: theme::FactionTheme, ctx: &egui::Context) {
+        self.cfg.theme = Some(theme.name().to_string());
+        theme::apply(ctx, theme, self.cfg.compact);
+        self.save_quietly();
+    }
+
+    /// Whether compact UI mode is active.
+    pub fn compact_mode(&self) -> bool {
+        self.cfg.compact
+    }
+
+    /// Set and apply compact layout mode.
+    pub fn set_compact_mode(&mut self, compact: bool, ctx: &egui::Context) {
+        self.cfg.compact = compact;
+        theme::apply(ctx, self.faction_theme(), compact);
+        self.save_quietly();
+    }
+
+    /// Apply the theme and compact mode from config to the egui context.
+    pub fn apply_theme(&self, ctx: &egui::Context) {
+        theme::apply(ctx, self.faction_theme(), self.cfg.compact);
     }
 
     /// Copy the settings to the config, and write the config file.
@@ -346,6 +562,10 @@ impl eframe::App for RouterApp {
         }
         self.last_frame = Some(Instant::now());
         self.poll(ui.ctx());
+        // The refresh worker sends a new map each 5 minutes.
+        if let State::Ready(session, _) = &mut self.state {
+            session.poll_refresh();
+        }
         match &mut self.state {
             State::Loading(_) => crate::view::splash(ui, None),
             State::Failed(e) => crate::view::splash(ui, Some(e)),
@@ -361,17 +581,275 @@ impl eframe::App for RouterApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use router_core::config::NexumConfig;
     use router_core::labels::{jumps_label, route_extras};
-    use router_core::test_support::{FIXTURE_TIME, overlay_universe, settings};
+    use router_core::log::LogEntry;
+    use router_core::refresh::{Control, NEXUM_LOADING, Refresher, STOPPED};
+    use router_core::test_support::{FIXTURE_TIME, hole, overlay_universe, settings, snapshot};
+    use router_core::wormhole::{SourceData, SourceId, Wormhole};
 
     fn session(name: &str) -> Session {
         let uni = overlay_universe();
         let settings = settings(&uni, Some("black-ops"));
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
         let path = std::env::temp_dir().join(format!("eve-router-egui-test-{name}.json"));
-        let mut s = Session::new(uni, settings, Config::default(), path, shortcuts);
+        let mut s = Session::new(Arc::new(uni), settings, Config::default(), path, shortcuts);
         s.clock = || FIXTURE_TIME;
         s
+    }
+
+    const JITA: u32 = 30000142;
+    const AMARR: u32 = 30002187;
+    const PERIMETER: u32 = 30000144;
+
+    /// A wormhole from Jita to Amarr, with the signature ABC at Jita. It gives a 1-jump route.
+    fn jita_amarr() -> Wormhole {
+        Wormhole { sig_a: Some("ABC-123".into()), ..hole(JITA, AMARR) }
+    }
+
+    #[test]
+    fn a_refresh_keeps_the_same_path_and_step() {
+        let mut s = session("refresh-keep");
+        s.uni = snapshot(Vec::new()).uni;
+        s.add_list("Jita, Amarr");
+        assert!(s.routes.len() >= 2, "{}", s.status);
+        s.selected = 1;
+        s.selected_step = Some(3);
+        let nodes = s.routes[1].path.nodes.clone();
+        s.apply_snapshot(snapshot(Vec::new()));
+        assert_eq!(s.selected_route().unwrap().path.nodes, nodes);
+        assert_eq!(s.selected_step, Some(3));
+        assert_eq!(s.note, "");
+    }
+
+    #[test]
+    fn a_refresh_selects_the_new_index_of_the_kept_path() {
+        let mut s = session("refresh-moved");
+        s.uni = snapshot(Vec::new()).uni;
+        s.add_list("Jita, Amarr");
+        s.selected_step = Some(2);
+        let nodes = s.routes[0].path.nodes.clone();
+        // The new wormhole route is first, so the kept path moves down.
+        s.apply_snapshot(snapshot(vec![jita_amarr()]));
+        assert_eq!(s.routes[0].wormholes, 1, "{}", s.status);
+        assert_eq!(s.selected, 1);
+        assert_eq!(s.selected_route().unwrap().path.nodes, nodes);
+        assert_eq!(s.selected_step, Some(2));
+    }
+
+    /// Review focus: a stargate and a wormhole between the same two systems.
+    #[test]
+    fn a_refresh_keeps_the_selected_parallel_route() {
+        let perimeter = || Wormhole { sig_a: Some("ABC-123".into()), ..hole(JITA, PERIMETER) };
+        let mut s = session("refresh-parallel");
+        s.uni = snapshot(vec![perimeter()]).uni;
+        s.add_list("Jita, Perimeter");
+        assert_eq!((s.routes[0].wormholes, s.routes[1].wormholes), (0, 1), "{}", s.status);
+        s.selected = 1;
+        s.apply_snapshot(snapshot(vec![perimeter()]));
+        assert_eq!(s.selected, 1);
+        assert_eq!(s.selected_route().unwrap().wormholes, 1);
+    }
+
+    #[test]
+    fn a_closed_wormhole_gives_a_note_until_the_next_search() {
+        let mut s = session("refresh-closed");
+        s.settings.top = 1;
+        s.uni = snapshot(vec![jita_amarr()]).uni;
+        s.add_list("Jita, Amarr");
+        assert_eq!(s.routes[0].wormholes, 1, "{}", s.status);
+        s.selected_step = Some(1);
+        s.apply_snapshot(snapshot(Vec::new()));
+        assert_eq!(s.routes[0].wormholes, 0);
+        assert_eq!((s.selected, s.selected_step), (0, None));
+        assert_eq!(s.note, "Wormhole ABC closed: the route changed");
+        s.recompute();
+        assert_eq!(s.note, "");
+    }
+
+    #[test]
+    fn a_new_first_route_gives_a_note() {
+        let mut s = session("refresh-new");
+        s.settings.top = 1;
+        s.uni = snapshot(Vec::new()).uni;
+        s.add_list("Jita, Amarr");
+        assert_eq!(s.routes[0].wormholes, 0);
+        s.apply_snapshot(snapshot(vec![jita_amarr()]));
+        assert_eq!(s.routes[0].wormholes, 1);
+        assert_eq!(s.note, "Wormholes updated: a new route is first");
+    }
+
+    #[test]
+    fn a_refresh_with_no_waypoints_only_swaps_the_map() {
+        let mut s = session("refresh-none");
+        s.status = "keep".into();
+        s.apply_snapshot(snapshot(vec![jita_amarr()]));
+        assert_eq!((s.shortcuts.wormholes, s.wormhole_data.len()), (1, 1));
+        assert!(s.routes.is_empty());
+        assert_eq!((s.status.as_str(), s.note.as_str()), ("keep", ""));
+    }
+
+    #[test]
+    fn the_poll_applies_a_snapshot_and_reports_a_stopped_worker() {
+        let (refresher, snapshots, _control) = Refresher::fake();
+        let mut s = session("poll-refresh");
+        s.refresher = Some(refresher);
+        snapshots.send(snapshot(vec![jita_amarr()])).unwrap();
+        s.poll_refresh();
+        assert_eq!(s.shortcuts.wormholes, 1);
+        drop(snapshots);
+        s.poll_refresh();
+        assert_eq!(s.note, STOPPED);
+        assert!(s.refresher.is_none());
+    }
+
+    #[test]
+    fn a_refresh_adds_its_rows_to_the_log() {
+        let mut s = session("log-rows");
+        let row = |time| LogEntry { time, op: "nexum.fetch", ok: true, reason: "Loaded 1 wormhole connection".into() };
+        let mut snap = snapshot(Vec::new());
+        snap.log = vec![row(1)];
+        s.apply_snapshot(snap);
+        let mut snap = snapshot(Vec::new());
+        snap.log = vec![row(2)];
+        s.apply_snapshot(snap);
+        assert_eq!(s.log, [row(1), row(2)]);
+    }
+
+    #[test]
+    fn a_stopped_worker_gives_a_log_row() {
+        let (refresher, snapshots, _control) = Refresher::fake();
+        let mut s = session("log-stopped");
+        s.refresher = Some(refresher);
+        drop(snapshots);
+        s.poll_refresh();
+        assert_eq!(s.log.len(), 1);
+        assert_eq!((s.log[0].op, s.log[0].ok, s.log[0].reason.as_str()), ("refresh", false, "the worker stopped"));
+    }
+
+    #[test]
+    fn refresh_now_asks_the_worker_and_waits_between_two_calls() {
+        let (refresher, _snapshots, control) = Refresher::fake();
+        let mut s = session("refresh-now");
+        s.refresher = Some(refresher);
+        let start = Instant::now();
+        s.refresh_now(start);
+        assert!(matches!(control.try_recv(), Ok(Control::Refresh)));
+        assert_eq!(s.status, REFRESHING);
+        // A second call soon after sends nothing.
+        s.refresh_now(start + Duration::from_secs(5));
+        assert!(control.try_recv().is_err());
+        assert_eq!(s.status, REFRESH_WAIT);
+        // After the gap, the call sends a message again.
+        s.refresh_now(start + REFRESH_GAP);
+        assert!(matches!(control.try_recv(), Ok(Control::Refresh)));
+    }
+
+    #[test]
+    fn refresh_now_without_a_worker_says_so() {
+        let mut s = session("refresh-none-worker");
+        s.refresh_now(Instant::now());
+        assert_eq!(s.status, REFRESH_STOPPED);
+    }
+
+    #[test]
+    fn a_nexum_change_asks_the_worker_for_the_new_map() {
+        let (refresher, _snapshots, control) = Refresher::fake();
+        let mut s = session("nexum-refresh");
+        s.refresher = Some(refresher);
+        s.cfg.nexum.url = Some("https://nexum.example".into());
+        s.nexum_saved();
+        assert_eq!(s.status, NEXUM_LOADING);
+        let Ok(Control::Nexum(sent)) = control.try_recv() else { panic!("no Nexum message") };
+        assert_eq!(sent.url.as_deref(), Some("https://nexum.example"));
+    }
+
+    #[test]
+    fn map_name_uses_the_name_in_the_wormhole_data() {
+        let mut s = session("map-name-data");
+        s.cfg.nexum = NexumConfig { url: Some("https://nexum.example".into()), key: None, map_id: Some("m1".into()) };
+        assert_eq!(s.map_name(), "m1");
+        let origin = router_core::sources::nexum::map_url(&s.cfg.nexum);
+        s.wormhole_data = vec![SourceData { source: SourceId::Nexum, fetched_at: 0, origin, name: Some("Home".into()), holes: Vec::new() }];
+        assert_eq!(s.map_name(), "Home");
+    }
+
+    #[test]
+    fn avoiding_a_system_or_region_searches_again_and_saves() {
+        let mut s = session("avoid");
+        let _ = std::fs::remove_file(&s.cfg_path);
+        s.add_list("Jita, Dodixie");
+        let first = s.routes[0].path.nodes.clone();
+        let ends = [s.uni.system(first[0]).region.clone(), s.uni.system(*first.last().unwrap()).region.clone()];
+        let middle = *first.iter().find(|&&n| !ends.contains(&s.uni.system(n).region)).unwrap();
+        let (name, region) = (s.uni.name(middle).to_string(), s.uni.system(middle).region.clone());
+
+        s.toggle_avoid_system(middle);
+        assert!(!s.routes[0].path.nodes.contains(&middle));
+        assert!(std::fs::read_to_string(&s.cfg_path).unwrap().contains(&name));
+        s.toggle_avoid_system(middle);
+        assert_eq!((s.settings.avoid.len(), s.routes[0].path.nodes.clone()), (0, first));
+
+        s.toggle_avoid_region(&region);
+        assert!(s.routes[0].path.nodes.iter().all(|&n| s.uni.system(n).region != region));
+        // The "never" switch keeps the region out of every route, and the file keeps the switch.
+        s.set_avoid_never_region(&region, true);
+        assert!(s.routes.iter().all(|r| r.path.nodes.iter().all(|&n| s.uni.system(n).region != region)));
+        assert!(std::fs::read_to_string(&s.cfg_path).unwrap().contains("\"never\": true"));
+        s.set_avoid_never_region(&region, false);
+        s.clear_avoid();
+        assert!(s.settings.avoid.is_empty());
+        assert!(s.routes[0].path.nodes.contains(&middle));
+    }
+
+    #[test]
+    fn a_never_destination_says_the_avoid_list_is_in_the_way() {
+        let mut s = session("avoid-no-route");
+        let _ = std::fs::remove_file(&s.cfg_path);
+        s.add_list("Jita, Perimeter");
+        let perimeter = *s.waypoints.last().unwrap();
+        s.toggle_avoid_system(perimeter);
+        assert!(!s.routes.is_empty(), "prefer still gives a route");
+        s.set_avoid_never_system(perimeter, true);
+        assert!(s.routes.is_empty());
+        assert_eq!(s.status, "No route from Jita to Perimeter. Your avoid list might be in the way.");
+    }
+
+    #[test]
+    fn a_dragged_value_applies_once_after_the_quiet_time() {
+        let mut s = session("apply-later");
+        let _ = std::fs::remove_file(&s.cfg_path);
+        s.add_list("Jita, Amarr");
+        s.status = "unread".into();
+        let start = Instant::now();
+        s.settings.costs.cap_weight = 1.0;
+        s.apply_later(start);
+        // A second change restarts the quiet time.
+        s.settings.costs.cap_weight = 2.0;
+        s.apply_later(start + Duration::from_millis(300));
+        assert_eq!(s.apply_due(start + Duration::from_millis(600)), Some(APPLY_DELAY - Duration::from_millis(300)));
+        assert_eq!(s.status, "unread", "no search yet");
+        assert!(!s.cfg_path.exists(), "no write yet");
+        assert_eq!(s.apply_due(start + APPLY_DELAY + Duration::from_millis(300)), None);
+        assert_eq!(s.status, "Config saved!");
+        assert!(std::fs::read_to_string(&s.cfg_path).unwrap().contains("2.0"));
+        // Nothing waits now.
+        s.status.clear();
+        assert_eq!(s.apply_due(start + Duration::from_secs(10)), None);
+        assert_eq!(s.status, "");
+    }
+
+    #[test]
+    fn closing_a_window_applies_a_waiting_change_at_once() {
+        let mut s = session("apply-flush");
+        let _ = std::fs::remove_file(&s.cfg_path);
+        s.flush_apply();
+        assert!(!s.cfg_path.exists(), "nothing waited");
+        s.settings.costs.unknown_sig_penalty = 7.0;
+        s.apply_later(Instant::now());
+        s.flush_apply();
+        assert!(std::fs::read_to_string(&s.cfg_path).unwrap().contains("7.0"));
+        assert_eq!(s.apply_due(Instant::now() + Duration::from_secs(10)), None);
     }
 
     fn names(s: &Session) -> Vec<&str> {
@@ -411,8 +889,8 @@ mod tests {
         assert_eq!(names(&s), ["UALX-3", "Jita"]);
         let lines: Vec<String> = s.routes.iter().map(|r| format!("{}{}", jumps_label(r.jumps), route_extras(r))).collect();
         assert_eq!(lines.len(), 3, "{}", s.status);
-        // The 2-wormhole route of 30 jumps costs 8 jumps more now: its wormholes have no signature.
-        assert_eq!(lines, ["30 jumps", "30 jumps", "31 jumps"]);
+        // The list shows three different routes. A route that only detours the first one is not in it.
+        assert_eq!(lines, ["30 jumps", "31 jumps", "41 jumps"]);
     }
 
     #[test]

@@ -13,6 +13,18 @@
   "cap_weight": 0.6,
   "unknown_sig_penalty": 4.0,
   "unknown_sig_broken": true,
+  "avoid_systems": [
+    {
+      "name": "Rens",
+      "never": true
+    }
+  ],
+  "avoid_regions": [
+    {
+      "name": "Lonetrek",
+      "never": false
+    }
+  ],
   "nexum": {
     "url": "https://nexum.example",
     "key": "nxm_key",

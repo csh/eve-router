@@ -12,10 +12,12 @@ use router_core::esi::active::{ActiveRoute, Hop};
 use router_core::esi::client::{IMAGES_URL, portrait};
 use router_core::esi::pilots::{HullSync, PilotView, Pilots, StartPlan, pilots_by_step};
 use router_core::labels::{hull_label, ship_text, wormhole_hint};
-use router_core::route::Stop;
+use router_core::refresh::kept_route;
+use router_core::route::{Path, Stop};
 use router_core::settings::HullSource;
-use router_core::universe::display_sec;
+use router_core::universe::{Universe, display_sec};
 use std::collections::HashMap;
+use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 
 /// At most this many avatars show in one cell. More give "+n other characters".
@@ -102,7 +104,7 @@ pub fn avatar(ui: &mut Ui, portraits: &mut Portraits, pilot: &PilotView, size: f
         }
     };
     if pilot.active {
-        ui.painter().rect_stroke(response.rect, radius, Stroke::new(1.0, theme::ACCENT), StrokeKind::Outside);
+        ui.painter().rect_stroke(response.rect, radius, Stroke::new(1.0, theme::accent(ui)), StrokeKind::Outside);
     }
     response.on_hover_text(&pilot.name)
 }
@@ -125,11 +127,28 @@ pub fn avatar_row(ui: &mut Ui, portraits: &mut Portraits, here: &[PilotView]) {
     }
 }
 
+/// The status text when a route start finds that its route is not in the list any more.
+pub const ROUTE_GONE: &str = "The routes changed, and that route is gone. Start the route again.";
+
+/// The route of a route start: its path, and the map of that path. A refresh can move the
+/// route in the list, so the app finds the route again with `kept_route`.
+pub struct ChosenRoute {
+    uni: Arc<Universe>,
+    path: Path,
+}
+
+impl ChosenRoute {
+    /// Route `route` of the route list.
+    fn new(s: &Session, route: usize) -> Option<ChosenRoute> {
+        s.routes.get(route).map(|r| ChosenRoute { uni: Arc::clone(&s.uni), path: r.path.clone() })
+    }
+}
+
 /// The step of a route start.
 pub enum Start {
     /// Two or more characters: choose one.
     Pick {
-        route: usize,
+        route: ChosenRoute,
         chosen: u64,
     },
     Confirm(Box<StartPlan>),
@@ -145,7 +164,7 @@ pub struct PilotsUi {
     paste: String,
     pub start: Option<Start>,
     /// The route to start after the current login.
-    start_after_login: Option<usize>,
+    start_after_login: Option<ChosenRoute>,
     stop: bool,
     reroute: Option<Box<ActiveRoute>>,
     show_offline: bool,
@@ -179,12 +198,8 @@ impl PilotsUi {
             s.status = notice;
         }
         // The login is done: continue the route start.
-        if had_login
-            && s.pilots.login.is_none()
-            && let Some(route) = self.start_after_login.take()
-        {
-            self.characters_open = false;
-            self.begin_start(s, route);
+        if had_login && s.pilots.login.is_none() {
+            self.continue_after_login(s);
         }
         let progress = s.pilots.active.as_ref().map(|a| a.progress);
         if progress != self.last_progress {
@@ -197,6 +212,25 @@ impl PilotsUi {
         }
     }
 
+    /// Start the route that waited for the login. Drop it if the route is gone.
+    fn continue_after_login(&mut self, s: &mut Session) {
+        let Some(chosen) = self.start_after_login.take() else { return };
+        self.characters_open = false;
+        if let Some(route) = resolve(s, &chosen) {
+            self.begin_start(s, route);
+        }
+    }
+
+    /// The index of the route of the open pick. Close the pick if the route is gone.
+    fn pick_index(&mut self, s: &mut Session) -> Option<usize> {
+        let Some(Start::Pick { route, .. }) = &self.start else { return None };
+        let route = resolve(s, route);
+        if route.is_none() {
+            self.start = None;
+        }
+        route
+    }
+
     fn login(&mut self, s: &mut Session) {
         self.paste.clear();
         if let Err(e) = s.pilots.start_login() {
@@ -207,18 +241,19 @@ impl PilotsUi {
 
     /// "Start route #n": choose the character, then confirm.
     pub fn begin_start(&mut self, s: &mut Session, route: usize) {
+        let Some(picked) = ChosenRoute::new(s, route) else { return };
         let ids: Vec<u64> = s.pilots.senders().into_iter().map(|c| c.id).collect();
         match ids.len() {
             // A waypoint does nothing without the game client, so an offline pilot is not in the list.
             0 if s.pilots.characters().iter().any(|c| !c.live.expired) => s.status = Pilots::NO_SENDER.into(),
             0 => {
-                self.start_after_login = Some(route);
+                self.start_after_login = Some(picked);
                 self.login(s);
             }
             1 => self.confirm(s, route, ids[0]),
             _ => {
                 let chosen = s.pilots.last_used().filter(|id| ids.contains(id)).unwrap_or(ids[0]);
-                self.start = Some(Start::Pick { route, chosen });
+                self.start = Some(Start::Pick { route: picked, chosen });
             }
         }
     }
@@ -234,14 +269,17 @@ impl PilotsUi {
     }
 
     /// The "Characters (n)" button of the top bar.
-    pub fn characters_button(&mut self, ui: &mut Ui, s: &Session) {
+    /// Returns true when the player clicked it.
+    pub fn characters_button(&mut self, ui: &mut Ui, s: &Session) -> bool {
         if !s.pilots.shows_characters() {
-            return;
+            return false;
         }
         let count = s.pilots.characters().len();
-        if ui.button(format!("Characters ({count})")).clicked() {
+        let clicked = ui.button(format!("Characters ({count})")).clicked();
+        if clicked {
             self.characters_open = true;
         }
+        clicked
     }
 
     /// All windows of this module.
@@ -270,7 +308,7 @@ impl PilotsUi {
             return;
         }
         let response = Modal::new(Id::new("characters")).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
-            ui.set_width(520.0);
+            ui.set_width(crate::theme::modal_width(ui, 520.0));
             crate::settings_window::title(ui, "Characters");
             // No keyring: offer a login for this session only.
             if s.pilots.accounts.is_none() && s.pilots.keyring_error.is_some() {
@@ -377,7 +415,7 @@ impl PilotsUi {
         });
         if busy {
             ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new().color(theme::ACCENT));
+                ui.add(egui::Spinner::new().color(theme::accent(ui)));
                 ui.label(RichText::new("Logging in…").color(theme::TEXT_DIM));
             });
         }
@@ -391,15 +429,22 @@ impl PilotsUi {
     }
 
     fn start_window(&mut self, ui: &mut Ui, s: &mut Session) {
+        // Find the route again: a refresh or a hull change can move it or remove it.
+        let route = if matches!(self.start, Some(Start::Pick { .. })) {
+            let Some(route) = self.pick_index(s) else { return };
+            route
+        } else {
+            0
+        };
         let Some(start) = &mut self.start else { return };
         let mut next = None;
         let mut close = false;
         let mut plan_for = None;
         let response = Modal::new(Id::new("start")).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
-            ui.set_width(480.0);
+            ui.set_width(crate::theme::modal_width(ui, 480.0));
             match start {
-                Start::Pick { route, chosen } => {
-                    crate::settings_window::title(ui, &format!("Send route #{} to…", *route + 1));
+                Start::Pick { chosen, .. } => {
+                    crate::settings_window::title(ui, &format!("Send route #{} to…", route + 1));
                     for pilot in s.pilots.senders() {
                         ui.horizontal(|ui| {
                             ui.radio_value(chosen, pilot.id, "");
@@ -414,7 +459,7 @@ impl PilotsUi {
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
                         if ui.button("Continue").clicked() {
-                            next = Some((*route, *chosen));
+                            next = Some((route, *chosen));
                         }
                         close = ui.button("Cancel").clicked();
                     });
@@ -451,7 +496,7 @@ impl PilotsUi {
                         let send = if plan.online == Some(false) { "Send anyway" } else { "Send" };
                         match (&here, &plan.from_here) {
                             (Some(here), Some(from_here)) => {
-                                if ui.add(Button::new(format!("Route from {here}")).fill(theme::ACCENT.gamma_multiply(0.35))).clicked() {
+                                if ui.add(Button::new(format!("Route from {here}")).fill(theme::accent(ui).gamma_multiply(0.35))).clicked() {
                                     s.pilots.start_route(from_here.clone());
                                     close = true;
                                 }
@@ -461,7 +506,7 @@ impl PilotsUi {
                                 }
                             }
                             _ => {
-                                if ui.add(Button::new(send).fill(theme::ACCENT.gamma_multiply(0.35))).clicked() {
+                                if ui.add(Button::new(send).fill(theme::accent(ui).gamma_multiply(0.35))).clicked() {
                                     s.pilots.start_route(plan.planned.clone());
                                     close = true;
                                 }
@@ -498,13 +543,13 @@ impl PilotsUi {
         }
         let Some(send) = s.pilots.send.clone() else { return };
         Modal::new(Id::new("sending")).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
-            ui.set_width(420.0);
+            ui.set_width(crate::theme::modal_width(ui, 420.0));
             let total = send.systems.len();
             match &send.failed {
                 None => {
                     crate::settings_window::title(ui, "Start route");
                     ui.label(RichText::new(format!("Sending waypoints {}/{total}…", send.done + 1)).color(theme::TEXT));
-                    ui.add(egui::ProgressBar::new(send.done as f32 / total.max(1) as f32).fill(theme::ACCENT));
+                    ui.add(egui::ProgressBar::new(send.done as f32 / total.max(1) as f32).fill(theme::accent(ui)));
                 }
                 Some(error) => {
                     crate::settings_window::title(ui, "Send failed");
@@ -566,11 +611,11 @@ impl PilotsUi {
             ui.horizontal(|ui| {
                 // Oxanium and the egui fallback fonts have no right arrow glyph. Oxanium has "»".
                 ui.label(RichText::new(format!("Route #{} » {destination} · ", active.number)).color(theme::TEXT));
-                ui.label(RichText::new(&active.character_name).family(theme::bold()).color(theme::ACCENT));
+                ui.label(RichText::new(&active.character_name).family(theme::bold()).color(theme::accent(ui)));
                 ui.label(RichText::new(format!(" · {}/{jumps} jumps", active.progress)).color(theme::TEXT));
             });
             let ratio = if jumps == 0 { 1.0 } else { active.progress as f32 / jumps as f32 };
-            ui.add(egui::ProgressBar::new(ratio).fill(theme::ACCENT).desired_height(6.0));
+            ui.add(egui::ProgressBar::new(ratio).fill(theme::accent(ui)).desired_height(6.0));
             self.banner(ui, s, &active, &destination);
         });
         if stop {
@@ -651,7 +696,7 @@ impl PilotsUi {
                 .column(Column::exact(32.0))
                 .column(Column::exact(100.0))
                 .column(Column::initial(140.0).at_least(90.0).resizable(true))
-                .column(Column::exact(44.0))
+                .column(Column::exact(72.0))
                 .column(Column::initial(190.0).at_least(70.0).resizable(true).clip(true))
                 .column(Column::initial(140.0).at_least(80.0).resizable(true))
                 .column(Column::remainder().at_least(120.0))
@@ -661,7 +706,7 @@ impl PilotsUi {
             }
             table
                 .header(20.0, |mut row| {
-                    for text in ["", "#", "Stop", "System", "Sec", "Pilots", "Region", "Via"] {
+                    for text in ["", "#", "Stop", "System", "Security", "Pilots", "Region", "Via"] {
                         row.col(|ui| header(ui, text));
                     }
                 })
@@ -684,14 +729,14 @@ impl PilotsUi {
                                 ui.painter().line_segment([l, c], stroke);
                                 ui.painter().line_segment([c, r], stroke);
                             } else if current {
-                                ui.label(RichText::new("▶").color(theme::ACCENT));
+                                ui.label(RichText::new("▶").color(theme::accent(ui)));
                             }
                         });
                         row.col(|ui| _ = ui.label(RichText::new(i.to_string()).color(theme::TEXT_DIM)));
                         row.col(|ui| {
                             if let Some(stop) = active.stop_at(i) {
                                 let text = RichText::new(stop.label().to_uppercase()).size(11.0).extra_letter_spacing(1.0);
-                                ui.label(text.color(dim(theme::ACCENT)));
+                                ui.label(text.color(dim(theme::accent(ui))));
                             }
                         });
                         row.col(|ui| {
@@ -722,7 +767,7 @@ impl PilotsUi {
                                 _ => (step.via.clone(), theme::TEXT_DIM),
                             };
                             let via = via.replace('\u{2192}', "»");
-                            ui.add(Label::new(RichText::new(&via).color(dim(color))).truncate()).on_hover_text(&via);
+                            ui.add(Label::new(RichText::new(&via).color(dim(color))).truncate());
                         });
                     });
                 });
@@ -742,7 +787,7 @@ impl PilotsUi {
             let mut draw = |ui: &mut Ui, pilot: &PilotView| {
                 let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), AVATAR + 4.0), Sense::click());
                 if response.hovered() {
-                    ui.painter().rect_filled(rect, 0.0, theme::ACCENT_DIM);
+                    ui.painter().rect_filled(rect, 0.0, theme::accent(ui).linear_multiply(0.18));
                     theme::selection_bar(ui, rect);
                 }
                 let mut child = ui
@@ -832,6 +877,15 @@ fn ship_row(ui: &mut Ui, pilot: &PilotView) {
     });
 }
 
+/// The index of the chosen route in the route list. Set `ROUTE_GONE` if there is none.
+fn resolve(s: &mut Session, chosen: &ChosenRoute) -> Option<usize> {
+    let route = kept_route(&s.routes, &s.uni, &chosen.uni, &chosen.path);
+    if route.is_none() {
+        s.status = ROUTE_GONE.into();
+    }
+    route
+}
+
 fn system_name(s: &Session, id: u32) -> String {
     s.uni.by_id.get(&id).map_or_else(|| id.to_string(), |&n| s.uni.name(n).to_string())
 }
@@ -845,14 +899,14 @@ fn destination(s: &Session, route: &ActiveRoute) -> String {
 fn question(ui: &mut Ui, id: &str, title: &str, text: &str, buttons: &[(&str, bool)]) -> Option<usize> {
     let mut clicked = None;
     Modal::new(Id::new(id)).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
-        ui.set_width(440.0);
+        ui.set_width(crate::theme::modal_width(ui, 440.0));
         crate::settings_window::title(ui, title);
         ui.label(RichText::new(text).color(theme::TEXT));
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             for (i, (label, primary)) in buttons.iter().enumerate() {
                 let button = Button::new(*label);
-                let button = if *primary { button.fill(theme::ACCENT.gamma_multiply(0.35)) } else { button };
+                let button = if *primary { button.fill(theme::accent(ui).gamma_multiply(0.35)) } else { button };
                 if ui.add(button).clicked() {
                     clicked = Some(i);
                 }
@@ -865,6 +919,14 @@ fn question(ui: &mut Ui, id: &str, title: &str, text: &str, buttons: &[(&str, bo
 #[cfg(test)]
 mod tests {
     use super::*;
+    use router_core::config::Config;
+    use router_core::labels::Shortcuts;
+    use router_core::test_support::{hole, overlay_universe, settings, snapshot};
+    use router_core::wormhole::Wormhole;
+    use std::sync::Arc;
+
+    const JITA: u32 = 30000142;
+    const PERIMETER: u32 = 30000144;
 
     #[test]
     fn overflow_wording() {
@@ -876,5 +938,64 @@ mod tests {
     fn initials_of_names() {
         assert_eq!(initials("Alice Ander"), "AA");
         assert_eq!(initials("bob"), "B");
+    }
+
+    fn session_with_routes() -> Session {
+        let uni = overlay_universe();
+        let settings = settings(&uni, Some("black-ops"));
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
+        let path = std::env::temp_dir().join("eve-router-egui-test-pilots-view.json");
+        let mut s = Session::new(Arc::new(uni), settings, Config::default(), path, shortcuts);
+        s.add_list("Jita, Amarr");
+        assert!(s.routes.len() >= 2, "{}", s.status);
+        s
+    }
+
+    #[test]
+    fn a_moved_route_is_still_the_one_sent() {
+        let mut s = session_with_routes();
+        let path = s.routes[1].path.clone();
+        let mut ui = PilotsUi { start: Some(Start::Pick { route: ChosenRoute::new(&s, 1).unwrap(), chosen: 1 }), ..Default::default() };
+        s.routes.swap(0, 1);
+        assert_eq!(ui.pick_index(&mut s), Some(0));
+        assert_eq!(s.routes[0].path, path);
+        assert!(ui.start.is_some());
+    }
+
+    /// Review focus: a stargate and a wormhole between the same two systems.
+    #[test]
+    fn the_pick_of_a_parallel_route_stays_on_that_route() {
+        let hole_route = || Wormhole { sig_a: Some("ABC-123".into()), ..hole(JITA, PERIMETER) };
+        let mut s = session_with_routes();
+        s.uni = snapshot(vec![hole_route()]).uni;
+        s.replace_list("Jita, Perimeter");
+        assert_eq!(s.routes[0].path.nodes, s.routes[1].path.nodes);
+        assert_eq!((s.routes[0].wormholes, s.routes[1].wormholes), (0, 1));
+        let mut ui = PilotsUi { start: Some(Start::Pick { route: ChosenRoute::new(&s, 1).unwrap(), chosen: 1 }), ..Default::default() };
+        assert_eq!(ui.pick_index(&mut s), Some(1));
+        // A refresh with the same wormhole gives a new map. The pick stays on the wormhole route.
+        s.apply_snapshot(snapshot(vec![hole_route()]));
+        assert_eq!(ui.pick_index(&mut s), Some(1));
+        assert_eq!(s.routes[1].wormholes, 1);
+    }
+
+    #[test]
+    fn a_gone_route_closes_the_pick() {
+        let mut s = session_with_routes();
+        let mut ui = PilotsUi { start: Some(Start::Pick { route: ChosenRoute::new(&s, 1).unwrap(), chosen: 1 }), ..Default::default() };
+        s.routes.truncate(1);
+        assert_eq!(ui.pick_index(&mut s), None);
+        assert!(ui.start.is_none());
+        assert_eq!(s.status, ROUTE_GONE);
+    }
+
+    #[test]
+    fn a_gone_route_drops_the_start_after_login() {
+        let mut s = session_with_routes();
+        let mut ui = PilotsUi { start_after_login: ChosenRoute::new(&s, 1), ..Default::default() };
+        s.routes.truncate(1);
+        ui.continue_after_login(&mut s);
+        assert!(ui.start_after_login.is_none() && ui.start.is_none());
+        assert_eq!(s.status, ROUTE_GONE);
     }
 }

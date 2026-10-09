@@ -63,7 +63,7 @@ fn banner(app: &App) -> Option<(String, Color)> {
         let here = live.and_then(|l| l.system).map_or_else(|| "?".into(), |s| app.system_name(s));
         return Some((format!("Off route — {name} is in {here}. r Re-route from here · x Stop route"), Color::Yellow));
     }
-    if let Some(hint) = wormhole_hint(app.uni, active) {
+    if let Some(hint) = wormhole_hint(&app.uni, active) {
         return Some((hint, Color::Magenta));
     }
     if app.pilots.limited {

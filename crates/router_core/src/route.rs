@@ -19,6 +19,19 @@ pub const JUMP: u64 = 1000;
 /// so a route first has the fewest unwanted jumps, then the lowest cost.
 pub const PENALTY: u64 = 1_000_000 * JUMP;
 
+/// Two routes of a list share at most this fraction of their links, unless one uses a wormhole
+/// or a bridge that the other does not use. A route with more in common is a detour of the other.
+pub const MAX_SHARED: f64 = 0.7;
+
+/// The cost that each link of a route found earlier adds while the search looks for another route.
+const REUSE_COST: u64 = JUMP / 2;
+
+/// An alternative route costs at most this many times the cost of the cheapest route.
+const MAX_COST_RATIO: u64 = 2;
+
+/// The searches for alternatives, for each route that the list needs.
+const ATTEMPTS: usize = 3;
+
 /// The default cost of 1% of the gate capacitor, in milli-jumps. A bridge jump of 5% costs 3 jumps more.
 pub const DEFAULT_CAP_WEIGHT: u32 = 600;
 
@@ -85,6 +98,8 @@ pub struct Route {
     pub bridge_cap_pct: Option<f32>,
     /// The number of wormhole jumps with no known signature at the departure system.
     pub unknown_sigs: usize,
+    /// The number of systems that the route enters although they are on the avoid list.
+    pub avoided: usize,
     /// The step index of each given system: the start, the midpoints, the destination.
     pub stops: Vec<usize>,
 }
@@ -118,11 +133,22 @@ impl Route {
             k => Stop::Midpoint(k),
         })
     }
+
+    /// The legs of the route: the step of each stop and the step of the next stop, in order.
+    /// A leg has `end - start` jumps.
+    pub fn legs(&self) -> Vec<(usize, usize)> {
+        self.stops.windows(2).map(|w| (w[0], w[1])).collect()
+    }
 }
 
 /// True if the wormhole has no known signature in the system `from`.
 fn sig_unknown(uni: &Universe, w: &Wormhole, from: NodeIndex) -> bool {
     w.sig_at(uni.system(from).id).is_none()
+}
+
+/// The `reuse` cost of an edge. An empty `reuse` gives 0.
+fn reuse_cost(reuse: &[u64], edge: EdgeIndex) -> u64 {
+    reuse.get(edge.index()).copied().unwrap_or(0)
 }
 
 /// What a `Router` needs to price the links of a universe.
@@ -169,6 +195,8 @@ pub struct Router<'a> {
     node_danger: Vec<u64>,
     /// True if the current settings allow the edge, by `EdgeIndex`.
     edge_ok: Vec<bool>,
+    /// True for a system that no route may enter, by `NodeIndex`. It is empty until `set_never`.
+    never: Vec<bool>,
     /// The cost that an edge adds to the cost of a jump into its target, by `EdgeIndex`.
     edge_extra: Vec<u64>,
 }
@@ -233,11 +261,18 @@ impl<'a> Router<'a> {
             })
             .collect();
         let node_danger = vec![0; graph.node_count()];
-        Router { uni, rules, node_cost, node_danger, edge_ok, edge_extra }
+        Router { uni, rules, node_cost, node_danger, edge_ok, never: Vec::new(), edge_extra }
     }
 
     fn link_allowed(&self, e: EdgeReference<'_, Link>) -> bool {
-        self.edge_ok[e.id().index()]
+        self.edge_ok[e.id().index()] && !self.never.get(e.target().index()).copied().unwrap_or(false)
+    }
+
+    /// Set the systems that no route may enter, by `NodeIndex`. A later call replaces the earlier
+    /// systems. The start of a route is not a jump into a system, so it can be one of them.
+    pub fn set_never(&mut self, never: Vec<bool>) {
+        assert_eq!(never.len(), self.node_cost.len(), "one flag for each system");
+        self.never = never;
     }
 
     /// Set the danger cost of each system, in milli-jumps, by `NodeIndex`. A jump into a system pays
@@ -266,9 +301,9 @@ impl<'a> Router<'a> {
         self.link_allowed(e) && !bans.nodes[e.target().index()] && !bans.edges.contains(&e.id())
     }
 
-    /// The edge for one step of a path: the cheapest edge between the two systems. At equal cost,
-    /// a stargate comes first, because it needs no overlay.
-    fn pick_edge(&self, a: NodeIndex, b: NodeIndex, bans: &Bans) -> EdgeIndex {
+    /// The edge for one step of a path: the cheapest edge between the two systems, with the
+    /// `reuse` cost. At equal cost, a stargate comes first, because it needs no overlay.
+    fn pick_edge(&self, a: NodeIndex, b: NodeIndex, bans: &Bans, reuse: &[u64]) -> EdgeIndex {
         self.uni
             .graph
             .edges_connecting(a, b)
@@ -279,16 +314,22 @@ impl<'a> Router<'a> {
                     Link::JumpBridge => 1,
                     Link::Wormhole(_) => 2,
                 };
-                (self.step_cost(*e), rank)
+                (self.step_cost(*e) + reuse_cost(reuse, e.id()), rank)
             })
             .map(|e| e.id())
             .expect("astar returned a step with no usable edge")
     }
 
     fn shortest(&self, from: NodeIndex, to: NodeIndex, bans: &Bans) -> Option<Path> {
+        self.shortest_with(from, to, bans, &[])
+    }
+
+    /// The cheapest path when each edge also costs its `reuse` cost, by `EdgeIndex`. An empty
+    /// `reuse` adds nothing. The cost of the path counts the `reuse` costs.
+    fn shortest_with(&self, from: NodeIndex, to: NodeIndex, bans: &Bans, reuse: &[u64]) -> Option<Path> {
         let graph = EdgeFiltered::from_fn(&self.uni.graph, |e: EdgeReference<'_, Link>| self.usable(e, bans));
-        let (cost, nodes) = astar(&graph, from, |n| n == to, |e| self.step_cost(e), |_| 0)?;
-        let edges = nodes.windows(2).map(|w| self.pick_edge(w[0], w[1], bans)).collect();
+        let (cost, nodes) = astar(&graph, from, |n| n == to, |e| self.step_cost(e) + reuse_cost(reuse, e.id()), |_| 0)?;
+        let edges = nodes.windows(2).map(|w| self.pick_edge(w[0], w[1], bans, reuse)).collect();
         Some(Path { nodes, edges, cost })
     }
 
@@ -342,12 +383,72 @@ impl<'a> Router<'a> {
         found
     }
 
+    /// True if `a` and `b` are two choices for a pilot, and not one route and a detour of it.
+    /// They are, if they use other wormholes or bridges, or share at most `MAX_SHARED` of their links.
+    fn distinct(&self, a: &Path, b: &Path) -> bool {
+        let overlay = |p: &Path| -> Vec<EdgeIndex> {
+            let mut links: Vec<EdgeIndex> = p.edges.iter().copied().filter(|&e| !matches!(self.uni.graph[e], Link::Stargate)).collect();
+            links.sort();
+            links
+        };
+        if overlay(a) != overlay(b) {
+            return true;
+        }
+        let (x, y): (HashSet<_>, HashSet<_>) = (a.edges.iter().collect(), b.edges.iter().collect());
+        let union = x.union(&y).count();
+        union == 0 || x.intersection(&y).count() as f64 / union as f64 <= MAX_SHARED
+    }
+
+    /// Up to `n` paths from `from` to `to` for a list of routes. The first is the cheapest path.
+    /// The paths after it are the cheapest paths that are `distinct` from each other, so the list
+    /// shows choices and not detours. A search that finds a choice makes the links of the paths
+    /// found before it dearer. If fewer than `n` choices exist, the cheapest other paths fill the
+    /// list, so it is never shorter than the `n` cheapest paths.
+    pub fn alternatives(&self, from: NodeIndex, to: NodeIndex, n: usize) -> Vec<Path> {
+        let cheapest = self.k_shortest(from, to, n);
+        // Yen's algorithm finds every loopless path, so a short list has no other path to offer.
+        if n < 2 || cheapest.len() < 2 {
+            return cheapest;
+        }
+        let best = cheapest[0].cost;
+        let bans = Bans::new(self.uni.graph.node_count());
+        let mut reuse = vec![0u64; self.uni.graph.edge_count()];
+        let mut chosen = vec![cheapest[0].clone()];
+        for e in &cheapest[0].edges {
+            reuse[e.index()] += REUSE_COST;
+        }
+        for _ in 0..n * ATTEMPTS {
+            if chosen.len() == n {
+                break;
+            }
+            let Some(mut path) = self.shortest_with(from, to, &bans, &reuse) else { break };
+            // The path has its cost with the `reuse` costs. The list shows the cost without them.
+            path.cost = path.edges.iter().map(|&e| self.edge_cost(e)).sum();
+            for e in &path.edges {
+                reuse[e.index()] += REUSE_COST;
+            }
+            if path.cost <= best.saturating_mul(MAX_COST_RATIO) && chosen.iter().all(|c| self.distinct(c, &path)) {
+                chosen.push(path);
+            }
+        }
+        chosen[1..].sort_by_key(|p| p.cost);
+        for p in cheapest {
+            if chosen.len() == n {
+                break;
+            }
+            if !chosen.iter().any(|c| c.edges == p.edges) {
+                chosen.push(p);
+            }
+        }
+        chosen
+    }
+
     /// The `n` cheapest routes through all waypoints, in order.
     pub fn routes(&self, waypoints: &[NodeIndex], n: usize) -> Result<Vec<Route>, String> {
         if waypoints.len() < 2 {
             return Err("Give two or more systems".into());
         }
-        let legs: Vec<Vec<Path>> = waypoints.par_windows(2).map(|w| self.k_shortest(w[0], w[1], n)).collect();
+        let legs: Vec<Vec<Path>> = waypoints.par_windows(2).map(|w| self.alternatives(w[0], w[1], n)).collect();
         for (w, leg) in waypoints.windows(2).zip(&legs) {
             if leg.is_empty() {
                 return Err(format!("No route from {} to {}", self.uni.name(w[0]), self.uni.name(w[1])));
@@ -499,9 +600,11 @@ impl<'a> Router<'a> {
             bridge_tj: None,
             bridge_cap_pct: None,
             unknown_sigs: 0,
+            avoided: 0,
             stops: Vec::new(),
             path,
         };
+        route.avoided = route.path.nodes[1..].iter().filter(|n| self.node_danger[n.index()] >= PENALTY).count();
         let mut tj = Some(0.0);
         let mut cap_pct = Some(0.0);
         for &e in &route.path.edges {
@@ -555,6 +658,24 @@ impl<'a> Router<'a> {
 mod tests {
     use super::*;
     use crate::test_support::{hole, sde_dir, universe};
+
+    #[test]
+    fn the_legs_run_from_stop_to_stop() {
+        let route = Route {
+            path: Path { nodes: Vec::new(), edges: Vec::new(), cost: 0 },
+            jumps: 9,
+            wormholes: 0,
+            bridges: 0,
+            bridge_tj: None,
+            bridge_cap_pct: None,
+            unknown_sigs: 0,
+            avoided: 0,
+            stops: vec![0, 3, 5, 9],
+        };
+        assert_eq!(route.legs(), [(0, 3), (3, 5), (5, 9)]);
+        let one = Route { stops: vec![0, 4], ..route };
+        assert_eq!(one.legs(), [(0, 4)]);
+    }
 
     fn router(mode: Mode) -> Router<'static> {
         Router::new(universe(), RouterOptions { mode, ..Default::default() })
@@ -680,6 +801,44 @@ mod tests {
         for p in &paths {
             let set: HashSet<_> = p.nodes.iter().collect();
             assert_eq!(set.len(), p.nodes.len(), "path has a loop");
+        }
+    }
+
+    /// The fraction of links that two paths share: the shared links over all links of both.
+    fn shared(a: &Path, b: &Path) -> f64 {
+        let (a, b): (HashSet<_>, HashSet<_>) = (a.edges.iter().collect(), b.edges.iter().collect());
+        a.intersection(&b).count() as f64 / a.union(&b).count() as f64
+    }
+
+    #[test]
+    fn the_routes_of_a_list_differ_by_more_than_a_detour() {
+        let routes = router(Mode::Shortest).routes(&[node("Jita"), node("Dodixie")], 5).unwrap();
+        assert_eq!(routes.len(), 5);
+        for (i, a) in routes.iter().enumerate() {
+            for b in &routes[i + 1..] {
+                assert!(shared(&a.path, &b.path) <= MAX_SHARED, "{:?} and {:?} are near duplicates", a.path.nodes, b.path.nodes);
+            }
+        }
+    }
+
+    #[test]
+    fn the_first_route_is_the_cheapest_route() {
+        let r = router(Mode::Shortest);
+        let nodes = [node("Jita"), node("Dodixie")];
+        let best = r.routes(&nodes, 1).unwrap().remove(0);
+        let list = r.routes(&nodes, 5).unwrap();
+        assert_eq!(list[0].path, best.path);
+        // The other routes cost no less than the first.
+        assert!(list.iter().all(|route| route.path.cost >= best.path.cost));
+    }
+
+    #[test]
+    fn the_list_is_never_shorter_than_the_cheapest_paths() {
+        // From Jita to Perimeter, a pair of systems that share a gate: few distinct routes exist.
+        let r = router(Mode::Shortest);
+        let nodes = [node("Jita"), node("Perimeter")];
+        for n in [2, 6, 12] {
+            assert_eq!(r.routes(&nodes, n).unwrap().len(), r.k_shortest(nodes[0], nodes[1], n).len(), "n = {n}");
         }
     }
 
@@ -810,6 +969,20 @@ mod tests {
             paths.iter().map(|p| (p.edges.clone(), p.cost)).collect::<Vec<_>>(),
             [(vec![hole], JUMP), (vec![gate], JUMP + JUMP / 2)]
         );
+    }
+
+    #[test]
+    fn a_route_counts_the_avoided_systems() {
+        let uni = parallel_universe();
+        let mut r = Router::new(uni, RouterOptions::default());
+        let nodes = [uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap()];
+        assert_eq!(r.routes(&nodes, 1).unwrap()[0].avoided, 0);
+        let mut danger = vec![0; uni.graph.node_count()];
+        danger[nodes[1].index()] = PENALTY;
+        r.set_danger(danger);
+        let route = r.routes(&nodes, 1).unwrap().remove(0);
+        assert_eq!(route.avoided, 1);
+        assert_eq!(crate::labels::route_extras(&route), " (1 avoided system)");
     }
 
     #[test]
