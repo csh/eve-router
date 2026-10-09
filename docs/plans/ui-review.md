@@ -34,7 +34,7 @@ Severity: **H** blocks a use case or misleads. **M** costs time or trust. **L** 
 | F4 | M | The top bar says "Routes - 5 +". The panel below says "Routes (3)". One word, two meanings. | Name the first "Show up to 5 routes". Move it into the popover. |
 | F5 | M | During an active route the planner and route list vanish. The disabled route controls stay visible. | Hide the disabled controls. Show a compact travel view (see "Warp overlay"). |
 | F6 | L | Pilot picker and search result rows use fixed text offsets (+170, +200, +220 px). Long names overlap. | Use table columns with clipping. |
-| F7 | L | The Avoid window is fixed at 760 px, Settings at 560 px, Characters at 520 px. | Use `min(width, window - 32)`. |
+| F7 | L | **Done.** The Avoid window is fixed at 760 px, Settings at 560 px, Characters at 520 px. | Use `min(width, window - 32)`. |
 
 ### Flow
 
@@ -106,7 +106,7 @@ Three width classes. One code path with a layout switch, not three apps.
 
 | Class | Width | Layout |
 |---|---|---|
-| **Sidebar** | 320 to 520 px | One column. A tab strip: Plan, Route, Pilots. The route summary strip stays above the tabs. Route table shows System, Security, Via only. |
+| **Sidebar** | 320 to 520 px | One column. A tab strip: Plan, Route, Extra. The route summary strip stays above the tabs. Route table shows System, Security, Via only. |
 | **Half desktop** | 640 to 1100 px | Two columns: planner and routes at the left, route table at the right. Favourites and pilots move into a drawer that opens from a left rail. |
 | **Full / floating** | 1100 px and up | The current three zones, with a resizable sidebar. |
 
@@ -221,11 +221,11 @@ Do not copy CCP art or font files. Draw the icons and choose an open font.
 | 0 | Done. Screenshot pass at 1260 x 560, 1260 x 820 and 900 x 700. Confirms F13 and F1, and adds F17 to F19. | 30 minutes |
 | 1 | Message levels and message cleanup (M1 to M8, M13). Pure text and color. | 3 hours |
 | 2 | Done. Route strip and route list rows (the bold element, F2, F13, F17, F18). | 1 day |
-| 3 | Done, not yet checked on screen. Responsive shell: remove the minimum size, width classes, tab strip (F1, F3, F5). | 2 days |
+| 3 | Done. Sidebar checked on screen, Half and Full not checked. Responsive shell: remove the minimum size, width classes, tab strip (F1, F3, F5). | 2 days |
 | 4 | Settings popover (S1 to S5, M9). Needs the layout from step 3. | 1.5 days |
 | 5 | From / To fields and the current-location default (F8, F11). | 0.5 day |
 | 6 | Warp overlay and the hint struct. | 1.5 days |
-| 7 | Restyle of controls and icons ("EVE look"). | 2 days |
+| 7 | Restyle of controls and icons ("EVE look"). **Started:** Photon faction themes, compact mode, flat panels. Controls, icons and the left rail remain. | 1.5 days left |
 
 Steps 1, 2 and 5 do not depend on the settings revamp and can start first.
 
@@ -278,19 +278,36 @@ Open points:
 
 ## Step 3 result
 
-Built and unit tested. Nobody has looked at the result on screen yet.
+Built, clippy clean, 231 core and 39 egui tests pass. The user checked **Sidebar** mode on screen. **Half and Full are not checked.** Nobody may drive the UI with automation (a game on the same PC may flag it as macros).
 
 - The minimum window size is 320 x 420. Below 640 px the class is Sidebar, below 1100 px it is Half, else Full.
-- **Full:** as before. The route controls hide (not grey out) while a route is active (F5). The label "Routes" is now "Show up to" (F4).
-- **Half:** the planner and the route list sit in a left column. The route table fills the right side. A "☰" button in the top bar opens a drawer with the favourites and the pilots.
-- **Sidebar:** the route summary and strip stay above a Plan, Route and Pilots tab strip.
-- Below Full, the top bar wraps and the route options sit in one "Route options" menu (F3). Step 4 replaces the menu with the full popover.
+- **Full:** as before. The route controls hide (not grey out) while a route is active (F5). "Routes" is now "Show up to" (F4).
+- **Half:** the planner and the route list sit in a left column. The route table fills the right side. A "☰" button opens a drawer with the favourites and the pilots.
+- **Sidebar:** the summary strip stays above a Plan, Route and Extra tab strip. Extra holds, in order: Pilots, Favourites, Data sources, Connections loaded.
+- Panel renames: "Shortcuts" is "Connections loaded" (M11). The favourites panel is "Favourites" with the info "jumps from X" (F15). A new "Data sources" panel shows Nexum and EVE-Scout in full words.
+- Below Full, the top bar wraps and the route options sit in one "Route options" menu (F3). Step 4 replaces the menu.
 - The route table drops "#", "Stop" and "Region" below 560 px of width.
-- The planner puts the search box on its own row below 640 px. The status bar shows the sync sources as dots only.
-- Windows follow the app width, up to their old size (F7).
+- The planner puts the search box on its own row below 640 px. The buttons wrap. The waypoint grid drops the region column and scrolls both ways.
+- A long route summary ends in "…" (`fit_text`). The status bar shows sync sources as dots only in compact width.
+- Windows follow the app width (F7, done): `theme::modal_width`. The Settings window uses one column below 500 px. The Avoid window uses a 4-column table below 640 px.
 
-Open points:
+## Changes after step 3 (branch `photon-ui-reskin`, commits `0869b03`, `6da434e`, `a40bc9a`)
 
-- Check all three classes on screen: 320, 500, 800 and 1280 px wide.
-- The Characters and Avoid windows keep their own layout inside a small window.
+Read from the code on 2026-10-09. Nothing was run on screen.
 
+- **Photon theme (part of step 7):** four faction themes (Caldari, Amarr, Gallente, Minmatar) in `theme::FactionTheme`. The accent is no longer a constant. Use `theme::accent(ui)`. The old `ACCENT`, `ACCENT_DIM` and `corner_ticks` are gone. Panels have a flat 1 px border. Hover uses a fill, per "EVE look".
+- **Compact mode:** `Config.theme` and `Config.compact` (both saved). `theme::is_compact(ui)` reads the row height. Route row, planner and panel heights come from functions that take `compact`. A "⤢ Compact / ⤡ Normal" button sits in the top bar. Settings has "Photon Theme" and "Layout Density".
+- **Tooltips removed** on the Via column, the capacitor line, the sync status (kept in compact only) and the sidebar separator line.
+- `Cargo.toml` (not committed): release profile with fat LTO, one codegen unit, strip, `panic = "abort"`. Docs `web-support.md` and `web-test-strategy.md` are new and not committed.
+
+## Open points
+
+1. **Regression, fix first (10 minutes).** `route_list` in `view.rs` builds `legs_galley` ("2 + 12") and reserves room for it, but the paint call was deleted in `0869b03`. The text no longer shows. Paint it again at the right edge, or remove the reserve.
+2. The removed tooltips undo A3 ("hover only") in reverse: a cut Via text now has no way to read it in full. Decide: show the full text in a tooltip only when it is cut.
+3. The user must check Half (640 to 1100 px) and Full (1100 px and up) on screen. Check the Photon themes and compact mode in all three classes.
+4. The Characters window and the Pilot picker keep a fixed inner layout. Check them below 520 px.
+5. Step 2 item: hide "0 TJ" and "0.0% capacitor used" in the summary when the value is 0.
+6. `min_inner_size` is 320 x 420. The user may want a lower height for a very small window.
+7. Theme and compact are saved through `save_quietly`. Settings step 4 must keep both controls (S1 says every control applies at once, which these already do).
+8. Add a unit test for `FactionTheme::from_name` and the config round trip (`theme`, `compact`).
+9. Commit or drop the `Cargo.toml` release profile change and the two web docs. They are unrelated to the UI.
