@@ -474,18 +474,20 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                 let mut edit: Option<(usize, i32)> = None;
                 let count = s.settings.favourites.len();
                 for (i, &fav) in s.settings.favourites.iter().enumerate() {
-                    ui.horizontal_wrapped(|ui| {
-                        let name = egui::Label::new(RichText::new(s.uni.name(fav)).color(theme::TEXT)).truncate();
-                        ui.allocate_ui_with_layout(vec2(180.0, 20.0), egui::Layout::left_to_right(egui::Align::Center), |ui| ui.add(name));
-                        if ui.add_enabled(i > 0, Button::new("⏶").small()).clicked() {
-                            edit = Some((i, -1));
+                    // The name is at the left. The buttons are at the right, in the width of the search box.
+                    ui.allocate_ui_with_layout(vec2(field, 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                        if ui.add(Button::new("🗙").small()).on_hover_text("Remove").clicked() {
+                            edit = Some((i, 0));
                         }
                         if ui.add_enabled(i + 1 < count, Button::new("⏷").small()).clicked() {
                             edit = Some((i, 1));
                         }
-                        if ui.add(Button::new("🗙").small()).on_hover_text("Remove").clicked() {
-                            edit = Some((i, 0));
+                        if ui.add_enabled(i > 0, Button::new("⏶").small()).clicked() {
+                            edit = Some((i, -1));
                         }
+                        ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
+                            ui.add(egui::Label::new(RichText::new(s.uni.name(fav)).color(theme::TEXT)).truncate());
+                        });
                     });
                 }
                 if let Some((i, step)) = edit {

@@ -304,9 +304,8 @@ impl View {
         ui.allocate_ui(vec2(ui.available_width(), list_height), |ui| route_list(ui, s));
     }
 
-    /// The Sidebar class: the summary of the selected route, a tab strip and one tab.
+    /// The Sidebar class: a tab strip and one tab.
     fn tabbed_view(&mut self, ui: &mut Ui, s: &mut Session) {
-        summary_strip(ui, s);
         ui.columns(Tab::ALL.len(), |columns| {
             for (column, tab) in columns.iter_mut().zip(Tab::ALL) {
                 let size = vec2(column.available_width(), 26.0);
@@ -356,13 +355,35 @@ impl View {
         // Below the full width the route options sit in one menu.
         let locked = s.pilots.active.is_some();
         if class == WidthClass::Sidebar {
-            // One row: the mode, the route options, and a menu with the app buttons at the right.
+            // One row: the mode and the route options. The app buttons follow when they fit,
+            // else they go in a "More" menu at the right.
+            let avoid = match s.settings.avoid.len() {
+                0 => "Avoid".to_string(),
+                n => format!("Avoid ({n})"),
+            };
+            let characters = if s.pilots.shows_characters() { format!("Characters ({})", s.pilots.characters().len()) } else { String::new() };
+            let spacing = ui.spacing().item_spacing.x;
+            let pad = 2.0 * ui.spacing().button_padding.x + 2.0;
+            let width = |ui: &Ui, text: &str| -> f32 {
+                if text.is_empty() {
+                    return 0.0;
+                }
+                let font = egui::TextStyle::Button.resolve(ui.style());
+                ui.painter().layout_no_wrap(text.to_string(), font, Color32::WHITE).size().x + pad + spacing
+            };
+            let route_part = if locked { 0.0 } else { 120.0 + 18.0 + width(ui, "Route options") + spacing };
+            let inline = route_part + width(ui, &avoid) + width(ui, &characters) + width(ui, "⚙");
+            let inline = inline <= ui.available_width();
             ui.horizontal(|ui| {
                 if !locked {
                     mode_combo(ui, s, 120.0);
                     self.route_options_menu(ui, s);
                 }
-                ui.with_layout(Layout::right_to_left(Align::Center), |ui| self.more_menu(ui, s));
+                if inline {
+                    self.app_buttons(ui, s, true);
+                } else {
+                    ui.with_layout(Layout::right_to_left(Align::Center), |ui| self.more_menu(ui, s));
+                }
             });
             return;
         }
@@ -377,7 +398,7 @@ impl View {
                 mode_combo(ui, s, 150.0);
                 self.route_options_menu(ui, s);
             }
-            self.app_buttons(ui, s);
+            self.app_buttons(ui, s, false);
         });
     }
 
@@ -419,7 +440,7 @@ impl View {
     }
 
     /// The Avoid, Characters and Settings buttons of the Half class.
-    fn app_buttons(&mut self, ui: &mut Ui, s: &mut Session) {
+    fn app_buttons(&mut self, ui: &mut Ui, s: &mut Session, short: bool) {
         let avoid = match s.settings.avoid.len() {
             0 => "Avoid".to_string(),
             n => format!("Avoid ({n})"),
@@ -431,7 +452,8 @@ impl View {
         }
         button.on_disabled_hover_text(settings_window::LOCKED);
         self.pilots.characters_button(ui, s);
-        let settings = ui.button("⚙ Settings");
+        let settings = ui.button(if short { "⚙" } else { "⚙ Settings" });
+        let settings = if short { settings.on_hover_text("Settings") } else { settings };
         if settings.clicked() {
             self.settings = Some(SettingsForm::new(s));
         }
@@ -1005,20 +1027,6 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
         ui.ctx().copy_text(route_text(&s.uni, &s.settings.rules, s.selected, route, s.now));
         s.status = format!("Route #{} copied to the clipboard", s.selected + 1);
     }
-}
-
-/// The summary and the strip of the selected route. It stays above the tabs of the Sidebar class.
-fn summary_strip(ui: &mut Ui, s: &Session) {
-    let Some(route) = s.selected_route() else { return };
-    let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), 38.0), Sense::hover());
-    let painter = ui.painter_at(rect);
-    let font = egui::TextStyle::Body.resolve(ui.style());
-    let text = format!("#{}  {}", s.selected + 1, route_summary(route));
-    let galley = fit_text(&painter, &text, font, theme::TEXT_SOFT, rect.width() - 4.0);
-    painter.galley(rect.left_top() + vec2(2.0, 2.0), galley, theme::TEXT_SOFT);
-    let strip_rect = egui::Rect::from_min_max(rect.left_top() + vec2(2.0, 20.0), rect.right_bottom() - vec2(2.0, 2.0));
-    strip::paint(&painter, &s.uni, route, strip_rect);
-    ui.add_space(4.0);
 }
 
 /// The panels of the sidebar. `pilots_first` is the order of the Pilots tab: the pilots, then the
