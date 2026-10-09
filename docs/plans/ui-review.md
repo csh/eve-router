@@ -311,3 +311,26 @@ Read from the code on 2026-10-09. Nothing was run on screen.
 7. Theme and compact are saved through `save_quietly`. Settings step 4 must keep both controls (S1 says every control applies at once, which these already do).
 8. Add a unit test for `FactionTheme::from_name` and the config round trip (`theme`, `compact`).
 9. Commit or drop the `Cargo.toml` release profile change and the two web docs. They are unrelated to the UI.
+
+## Photon reference (in-game windows, 2026-10-09)
+
+Five client screenshots: Market, Fitting, Ship Tree, Notepad, Wallet. Use them for step 7. The images are not in the repo.
+
+| Element | What the client does | Router now |
+|---|---|---|
+| Window title bar | A thin bar. A small icon at the left, a dim title, then a kebab menu, minimize and close at the right. | OS title bar. Panel headers are uppercase letter-spaced text. |
+| Tabs | Text only. The active tab is bright with a 2 px accent underline. The inactive tab is dim. No box, no fill. The same style serves the sub tabs ("Overview", "Incursions LP"). | Sidebar tabs follow the egui default. Restyle them as underline tabs. |
+| Buttons | Flat. A 1 px light blue-grey border. No fill. Small text. The main action (Buy) has a blue fill. | Stock egui buttons with the accent border on hover. |
+| Corner cut | The bottom-right corner of the main button and of the stat tile is cut at 45 degrees. | Square corners. |
+| Corner brackets | Small L-shaped brackets at the four corners of a selected card or a tooltip. | Removed in `0869b03`. Use brackets on the selected route row only. |
+| Group header row | A full-width darker band with a small triangle (▸ ▾) and the name. Child rows have no lines. | Panels with a header bar. |
+| Selected row | A flat grey-blue fill. No side bar. | A 3 px accent bar plus a tint. |
+| Collapsible section | A triangle, a label, and the state at the right ("Stable", "0.0 dps"). | None. Use this for the Extra tab panels. |
+| Table | A dim header with a sort arrow. No row lines. Plain text rows. | Stripe fill on rows. |
+| Search field | A dark inset box. A magnifier icon at the left. A clear "×" at the right. | Plain text edit. |
+| Dropdown | A dark box, a thin border, a chevron at the right. | Stock `ComboBox`. |
+| Stat tile | An icon at the left. A dim label. A thin line. A large value. Gold tint for PLEX. | The route summary strip. Keep as is. |
+| Colors | Near black with a faint blue-teal haze. Teal accent. Gold for premium. Red for danger. | Close. Add the haze (panel alpha) in step 6. |
+| Text | Wide-spaced angular face, about 12 to 13 px. Dim labels, bright values. | Oxanium. Keep. Check the size. |
+
+Order for step 7, from the cheapest: underline tabs (0.5 day), flat buttons with a cut corner (0.5 day), table header and row style (0.25 day), collapsible sections in Extra (0.25 day), search field with icon and clear (0.25 day).
