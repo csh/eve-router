@@ -239,7 +239,7 @@ impl View {
         match class {
             WidthClass::Full => {
                 let side = Frame::new().fill(theme::BG).inner_margin(Margin { left: 0, right: 10, top: 10, bottom: 10 });
-                egui::Panel::right("sidebar").resizable(false).exact_size(280.0).frame(side).show(ui, |ui| {
+                egui::Panel::right("sidebar").show_separator_line(false).resizable(false).exact_size(280.0).frame(side).show(ui, |ui| {
                     sidebar(ui, s, &mut self.pilots, false);
                 });
             }
