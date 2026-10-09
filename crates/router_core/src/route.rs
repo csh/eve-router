@@ -23,6 +23,11 @@ pub const PENALTY: u64 = 1_000_000 * JUMP;
 /// or a bridge that the other does not use. A route with more in common is a detour of the other.
 pub const MAX_SHARED: f64 = 0.7;
 
+/// The cost that a wormhole jump adds to its jump, in milli-jumps. Of two routes with the same
+/// cost, the route with fewer wormholes costs less. It is far below any soft cost, and a route
+/// needs 1000 wormholes before these costs add up to one jump.
+pub const WORMHOLE_TIE: u64 = 1;
+
 /// The cost that each link of a route found earlier adds while the search looks for another route.
 const REUSE_COST: u64 = JUMP / 2;
 
@@ -256,7 +261,9 @@ impl<'a> Router<'a> {
                     let pct = rules.cost(uni, e.source()).and_then(|c| c.cap_pct).unwrap_or(0.0);
                     (f64::from(pct) * f64::from(cap_weight)).round() as u64
                 }
-                Link::Wormhole(ref w) if wormholes && sig_unknown(uni, w, e.source()) => u64::from(unknown_sig_penalty),
+                Link::Wormhole(ref w) if wormholes => {
+                    WORMHOLE_TIE + if sig_unknown(uni, w, e.source()) { u64::from(unknown_sig_penalty) } else { 0 }
+                }
                 _ => 0,
             })
             .collect();
@@ -967,8 +974,32 @@ mod tests {
         let paths = r.k_shortest(jita, perimeter, 2);
         assert_eq!(
             paths.iter().map(|p| (p.edges.clone(), p.cost)).collect::<Vec<_>>(),
-            [(vec![hole], JUMP), (vec![gate], JUMP + JUMP / 2)]
+            [(vec![hole], JUMP + WORMHOLE_TIE), (vec![gate], JUMP + JUMP / 2)]
         );
+    }
+
+    /// The SDE, plus a wormhole between Jita and Unpas, which share no stargate. Jita to Urlen then has
+    /// two routes of two jumps: over Perimeter by stargate, and over Unpas by the wormhole. The
+    /// wormhole route comes first by node order, so only the cost can put the stargate route first.
+    fn tie_universe() -> &'static Universe {
+        static UNI: OnceLock<Universe> = OnceLock::new();
+        UNI.get_or_init(|| {
+            let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
+            let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
+            let holes = [hole(id("Jita"), id("Unpas"))];
+            assert_eq!(uni.add_wormholes(&holes), 1);
+            uni
+        })
+    }
+
+    #[test]
+    fn on_a_tie_the_route_with_fewer_wormholes_comes_first() {
+        let uni = tie_universe();
+        // The test wormhole has no signature, so the penalty for it is off.
+        let r = Router::new(uni, RouterOptions { unknown_sig_penalty: 0, ..Default::default() });
+        let (jita, urlen) = (uni.exact("Jita").unwrap(), uni.exact("Urlen").unwrap());
+        let routes = r.routes(&[jita, urlen], 2).unwrap();
+        assert_eq!(routes.iter().map(|r| (r.jumps, r.wormholes)).collect::<Vec<_>>(), [(2, 0), (2, 1)]);
     }
 
     #[test]
@@ -1052,10 +1083,10 @@ mod tests {
     #[test]
     fn an_unknown_signature_costs_extra() {
         let free = jita_amarr(RouterOptions { unknown_sig_penalty: 0, ..Default::default() });
-        assert_eq!((free.wormholes, free.unknown_sigs, free.path.cost), (1, 1, JUMP));
+        assert_eq!((free.wormholes, free.unknown_sigs, free.path.cost), (1, 1, JUMP + WORMHOLE_TIE));
         let priced = jita_amarr(RouterOptions::default());
         assert_eq!((priced.wormholes, priced.unknown_sigs), (1, 1));
-        assert_eq!(priced.path.cost, JUMP + u64::from(DEFAULT_UNKNOWN_SIG_PENALTY));
+        assert_eq!(priced.path.cost, JUMP + WORMHOLE_TIE + u64::from(DEFAULT_UNKNOWN_SIG_PENALTY));
     }
 
     #[test]

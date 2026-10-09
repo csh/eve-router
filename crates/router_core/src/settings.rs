@@ -337,6 +337,7 @@ fn favourite_names(cfg: &Config) -> Vec<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::route::WORMHOLE_TIE;
     use crate::test_support::{FIXTURE_TIME, overlay_universe, settings};
 
     #[test]
@@ -427,9 +428,9 @@ mod tests {
         let nodes = resolve_all(&uni, &["Jita".into(), "J134702".into()]).unwrap();
         let mut s = settings(&uni, None);
         let cost = |s: &Settings| s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).map(|r| r[0].path.cost);
-        assert_eq!(cost(&s), Ok(1000 + 4000));
+        assert_eq!(cost(&s), Ok(1000 + WORMHOLE_TIE + 4000));
         s.costs.unknown_sig_penalty = 1.5;
-        assert_eq!(cost(&s), Ok(1000 + 1500));
+        assert_eq!(cost(&s), Ok(1000 + WORMHOLE_TIE + 1500));
         s.costs.unknown_sig_broken = true;
         assert!(cost(&s).is_err());
     }
