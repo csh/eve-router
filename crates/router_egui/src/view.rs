@@ -729,7 +729,7 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 let font = egui::TextStyle::Body.resolve(ui.style());
                 let left = rect.left() + (if compact { 8.0 } else { 12.0 });
                 // Line 1: the number, then the summary in one font and one color.
-                                let top = rect.top() + (if compact { 2.0 } else { 4.0 });
+                let top = rect.top() + (if compact { 2.0 } else { 4.0 });
                 let text_color = theme::TEXT_SOFT;
                 let number = painter.layout_no_wrap(format!("#{}  ", i + 1), font.clone(), theme::TEXT_DIM);
                 let legs = route.legs();
