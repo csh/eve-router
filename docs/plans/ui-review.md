@@ -333,4 +333,8 @@ Five client screenshots: Market, Fitting, Ship Tree, Notepad, Wallet. Use them f
 | Colors | Near black with a faint blue-teal haze. Teal accent. Gold for premium. Red for danger. | Close. Add the haze (panel alpha) in step 6. |
 | Text | Wide-spaced angular face, about 12 to 13 px. Dim labels, bright values. | Oxanium. Keep. Check the size. |
 
-Order for step 7, from the cheapest: underline tabs (0.5 day), flat buttons with a cut corner (0.5 day), table header and row style (0.25 day), collapsible sections in Extra (0.25 day), search field with icon and clear (0.25 day).
+Order for step 7, from the cheapest: underline tabs (done, `4c02933`, user approved), flat buttons (0.5 day; the user does **not** want the cut corner), table header and row style (0.25 day), collapsible sections in Extra (0.25 day), search field with icon and clear (0.25 day).
+
+## Open points added 2026-10-09
+
+- **Long routes make a cluttered strip.** A route of 30 to 53 jumps (no wormholes or bridges) draws one tiny square for each system. The strip shrinks and the squares get hard to tell apart. A long route without shortcuts is normal, so this case is real. Ideas for later: group runs of the same security class into one bar with a count, show only the changes of class, or cap the square size and let the strip scroll. Keep the legs, wormholes and bridges visible in every case. Fix with step 2 follow-up, about 0.5 day.
