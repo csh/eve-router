@@ -353,36 +353,73 @@ impl View {
             self.top_bar_full(ui, s);
             return;
         }
-        // Below the full width the bar wraps, and the route options sit in one menu.
+        // Below the full width the route options sit in one menu.
         let locked = s.pilots.active.is_some();
-        ui.horizontal_wrapped(|ui| {
-            if class == WidthClass::Half {
-                let hint = "Show or hide the favourites and the pilots";
-                if ui.add(Button::selectable(self.drawer_open, "☰")).on_hover_text(hint).clicked() {
-                    self.drawer_open = !self.drawer_open;
+        if class == WidthClass::Sidebar {
+            // One row: the mode, the route options, and a menu with the app buttons at the right.
+            ui.horizontal(|ui| {
+                if !locked {
+                    mode_combo(ui, s, 120.0);
+                    self.route_options_menu(ui, s);
                 }
-                ui.label(RichText::new("EVE ROUTER").family(theme::bold()).size(16.0).color(theme::accent(ui)).extra_letter_spacing(3.0));
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| self.more_menu(ui, s));
+            });
+            return;
+        }
+        ui.horizontal_wrapped(|ui| {
+            let hint = "Show or hide the favourites and the pilots";
+            if ui.add(Button::selectable(self.drawer_open, "☰")).on_hover_text(hint).clicked() {
+                self.drawer_open = !self.drawer_open;
             }
+            ui.label(RichText::new("EVE ROUTER").family(theme::bold()).size(16.0).color(theme::accent(ui)).extra_letter_spacing(3.0));
             // While a route is active, the controls that change the route are hidden.
             if !locked {
-                mode_combo(ui, s, if class == WidthClass::Half { 150.0 } else { 120.0 });
-                ui.menu_button("Route options", |ui| {
-                    ui.horizontal(|ui| {
-                        ui.label(theme::header_text("Show up to"));
-                        count_stepper(ui, s);
-                        ui.label(theme::header_text("routes"));
-                    });
-                    bridges_toggle(ui, s);
-                    wormholes_toggle(ui, s);
-                    optimize_box(ui, s);
-                });
+                mode_combo(ui, s, 150.0);
+                self.route_options_menu(ui, s);
             }
-            self.app_buttons(ui, s, class == WidthClass::Sidebar);
+            self.app_buttons(ui, s);
         });
     }
 
-    /// The Avoid, Characters and Settings buttons. `short` draws the Settings button as an icon.
-    fn app_buttons(&mut self, ui: &mut Ui, s: &mut Session, short: bool) {
+    fn route_options_menu(&mut self, ui: &mut Ui, s: &mut Session) {
+        ui.menu_button("Route options", |ui| {
+            ui.horizontal(|ui| {
+                ui.label(theme::header_text("Show up to"));
+                count_stepper(ui, s);
+                ui.label(theme::header_text("routes"));
+            });
+            bridges_toggle(ui, s);
+            wormholes_toggle(ui, s);
+            optimize_box(ui, s);
+        });
+    }
+
+    /// The menu of the Sidebar class with the Avoid, Characters and Settings entries.
+    fn more_menu(&mut self, ui: &mut Ui, s: &mut Session) {
+        ui.menu_button("More", |ui| {
+            let locked = s.pilots.active.is_some();
+            let avoid = match s.settings.avoid.len() {
+                0 => "Avoid".to_string(),
+                n => format!("Avoid ({n})"),
+            };
+            let button = ui.add_enabled(!locked, Button::new(avoid)).on_hover_text("Systems and regions that routes avoid");
+            if button.clicked() {
+                self.popup = Some(Popup::Avoid { confirm: false, search: SearchBox::new("avoid-search"), region: String::new() });
+                ui.close();
+            }
+            button.on_disabled_hover_text(settings_window::LOCKED);
+            if self.pilots.characters_button(ui, s) {
+                ui.close();
+            }
+            if ui.button("Settings").clicked() {
+                self.settings = Some(SettingsForm::new(s));
+                ui.close();
+            }
+        });
+    }
+
+    /// The Avoid, Characters and Settings buttons of the Half class.
+    fn app_buttons(&mut self, ui: &mut Ui, s: &mut Session) {
         let avoid = match s.settings.avoid.len() {
             0 => "Avoid".to_string(),
             n => format!("Avoid ({n})"),
@@ -394,12 +431,7 @@ impl View {
         }
         button.on_disabled_hover_text(settings_window::LOCKED);
         self.pilots.characters_button(ui, s);
-        let compact_hint = if s.compact_mode() { "Switch to spacious layout" } else { "Switch to compact layout" };
-        let compact_icon = if s.compact_mode() { "⤢ Compact" } else { "⤡ Normal" };
-        if ui.button(compact_icon).on_hover_text(compact_hint).clicked() {
-            s.set_compact_mode(!s.compact_mode(), ui.ctx());
-        }
-        let settings = ui.button(if short { "⚙" } else { "⚙ Settings" });
+        let settings = ui.button("⚙ Settings");
         if settings.clicked() {
             self.settings = Some(SettingsForm::new(s));
         }
@@ -414,11 +446,6 @@ impl View {
                 // The right-to-left layout draws the Settings button first, so it sits at the right edge.
                 if ui.button("⚙ Settings").clicked() {
                     self.settings = Some(SettingsForm::new(s));
-                }
-                let compact_hint = if s.compact_mode() { "Switch to spacious layout" } else { "Switch to compact layout" };
-                let compact_icon = if s.compact_mode() { "⤢ Compact" } else { "⤡ Normal" };
-                if ui.button(compact_icon).on_hover_text(compact_hint).clicked() {
-                    s.set_compact_mode(!s.compact_mode(), ui.ctx());
                 }
                 let avoid = match s.settings.avoid.len() {
                     0 => "Avoid".to_string(),

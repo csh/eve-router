@@ -269,14 +269,17 @@ impl PilotsUi {
     }
 
     /// The "Characters (n)" button of the top bar.
-    pub fn characters_button(&mut self, ui: &mut Ui, s: &Session) {
+    /// Returns true when the player clicked it.
+    pub fn characters_button(&mut self, ui: &mut Ui, s: &Session) -> bool {
         if !s.pilots.shows_characters() {
-            return;
+            return false;
         }
         let count = s.pilots.characters().len();
-        if ui.button(format!("Characters ({count})")).clicked() {
+        let clicked = ui.button(format!("Characters ({count})")).clicked();
+        if clicked {
             self.characters_open = true;
         }
+        clicked
     }
 
     /// All windows of this module.
