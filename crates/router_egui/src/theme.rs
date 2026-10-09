@@ -97,6 +97,21 @@ impl FactionTheme {
         }
     }
 
+    /// The fill of a button at rest: the dark panel color with a trace of the accent.
+    pub fn button_bg(self) -> Color32 {
+        mix(Color32::from_rgb(0x0B, 0x10, 0x14), self.accent(), 0.10)
+    }
+
+    /// The 1 px line of a button at rest: a muted accent, as the client draws it.
+    pub fn button_border(self) -> Color32 {
+        mix(LINE, self.accent(), 0.45)
+    }
+
+    /// The line of a hovered button: the accent at 75%.
+    pub fn button_border_hover(self) -> Color32 {
+        mix(LINE, self.accent(), 0.75)
+    }
+
     pub fn active_bg(self) -> Color32 {
         self.selection_bg()
     }
@@ -109,6 +124,12 @@ impl FactionTheme {
             FactionTheme::Minmatar => Color32::from_rgb(0x22, 0x12, 0x10),
         }
     }
+}
+
+/// The mix of two opaque colors. `t` is the share of `b`.
+fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
+    let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
+    Color32::from_rgb(lerp(a.r(), b.r()), lerp(a.g(), b.g()), lerp(a.b(), b.b()))
 }
 
 /// The current accent color from the active UI visuals.
@@ -203,8 +224,8 @@ pub fn apply(ctx: &egui::Context, theme: FactionTheme, compact: bool) {
         let w = &mut v.widgets;
         for (state, fill, stroke, text) in [
             (&mut w.noninteractive, PANEL, LINE, TEXT),
-            (&mut w.inactive, Color32::from_rgb(0x12, 0x1A, 0x20), LINE, TEXT),
-            (&mut w.hovered, hov_bg, accent, Color32::WHITE),
+            (&mut w.inactive, theme.button_bg(), theme.button_border(), TEXT),
+            (&mut w.hovered, hov_bg, theme.button_border_hover(), Color32::WHITE),
             (&mut w.active, act_bg, accent, Color32::WHITE),
             (&mut w.open, opn_bg, accent, TEXT),
         ] {
@@ -310,4 +331,19 @@ pub fn underline_tab(ui: &mut Ui, active: bool, text: &str, size: Vec2) -> egui:
         p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(2.0, accent(ui)));
     }
     response
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn each_theme_has_its_own_button_colors() {
+        for (i, a) in FactionTheme::ALL.iter().enumerate() {
+            for b in &FactionTheme::ALL[i + 1..] {
+                assert_ne!(a.button_border(), b.button_border());
+                assert_ne!(a.button_bg(), b.button_bg());
+            }
+        }
+    }
 }
