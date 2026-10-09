@@ -36,12 +36,7 @@ pub enum FactionTheme {
 }
 
 impl FactionTheme {
-    pub const ALL: [FactionTheme; 4] = [
-        FactionTheme::Caldari,
-        FactionTheme::Amarr,
-        FactionTheme::Gallente,
-        FactionTheme::Minmatar,
-    ];
+    pub const ALL: [FactionTheme; 4] = [FactionTheme::Caldari, FactionTheme::Amarr, FactionTheme::Gallente, FactionTheme::Minmatar];
 
     pub fn name(self) -> &'static str {
         match self {

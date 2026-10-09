@@ -166,18 +166,21 @@ impl SearchBox {
                 .order(Order::Foreground)
                 .fixed_pos(response.rect.left_bottom() + vec2(0.0, 2.0))
                 .show(ui.ctx(), |ui| {
-                    Frame::new().fill(theme::HEADER).stroke(Stroke::new(1.0, theme::accent(ui))).inner_margin(Margin::same(2)).show(ui, |ui| {
-                        // The frame adds its margin and its stroke, so the list is as wide as the field.
-                        ui.set_width(list_width(response.rect.width()) - LIST_FRAME);
-                        if self.results.is_empty() {
-                            ui.label(RichText::new("No system found").color(theme::TEXT_DIM));
-                        }
-                        for (i, node) in self.results.clone().into_iter().enumerate() {
-                            if let Some(pick) = self.result_row(ui, uni, i, node, menu) {
-                                picked = Some((pick, node));
+                    Frame::new().fill(theme::HEADER).stroke(Stroke::new(1.0, theme::accent(ui))).inner_margin(Margin::same(2)).show(
+                        ui,
+                        |ui| {
+                            // The frame adds its margin and its stroke, so the list is as wide as the field.
+                            ui.set_width(list_width(response.rect.width()) - LIST_FRAME);
+                            if self.results.is_empty() {
+                                ui.label(RichText::new("No system found").color(theme::TEXT_DIM));
                             }
-                        }
-                    });
+                            for (i, node) in self.results.clone().into_iter().enumerate() {
+                                if let Some(pick) = self.result_row(ui, uni, i, node, menu) {
+                                    picked = Some((pick, node));
+                                }
+                            }
+                        },
+                    );
                 });
             if raise {
                 ui.ctx().move_to_top(area.response.layer_id);

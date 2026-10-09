@@ -361,7 +361,8 @@ impl View {
                 0 => "Avoid".to_string(),
                 n => format!("Avoid ({n})"),
             };
-            let characters = if s.pilots.shows_characters() { format!("Characters ({})", s.pilots.characters().len()) } else { String::new() };
+            let characters =
+                if s.pilots.shows_characters() { format!("Characters ({})", s.pilots.characters().len()) } else { String::new() };
             let spacing = ui.spacing().item_spacing.x;
             let pad = 2.0 * ui.spacing().button_padding.x + 2.0;
             let width = |ui: &Ui, text: &str| -> f32 {
@@ -601,47 +602,51 @@ impl View {
                 return;
             }
             ScrollArea::both().max_height(grid_max).auto_shrink([false, true]).show(ui, |ui| {
-                egui::Grid::new("waypoints").num_columns(if narrow { 5 } else { 6 }).spacing(vec2(if narrow { 8.0 } else { 14.0 }, 4.0)).show(ui, |ui| {
-                    let last = s.waypoints.len() - 1;
-                    for (i, &node) in s.waypoints.iter().enumerate() {
-                        let sys = s.uni.system(node);
-                        let stop = s.stop(i);
-                        let color = if matches!(stop, Stop::Midpoint(_)) { theme::TEXT_DIM } else { theme::accent(ui) };
-                        ui.label(RichText::new(format!("{:>2}", i + 1)).color(theme::TEXT_DIM));
-                        ui.label(RichText::new(stop.label().to_uppercase()).color(color).size(11.0).extra_letter_spacing(1.0));
-                        let name =
-                            ui.add(Label::new(RichText::new(&sys.name).family(theme::bold()).color(Color32::WHITE)).sense(Sense::click()));
-                        ui.label(RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)));
-                        if !narrow {
-                            ui.label(RichText::new(&sys.region).color(theme::TEXT_DIM));
-                        }
-                        ui.horizontal(|ui| {
-                            if ui.add_enabled(i > 0, Button::new("⏶").small()).on_hover_text("Move up").clicked() {
-                                edit = Some(Edit::MoveUp(i));
+                egui::Grid::new("waypoints")
+                    .num_columns(if narrow { 5 } else { 6 })
+                    .spacing(vec2(if narrow { 8.0 } else { 14.0 }, 4.0))
+                    .show(ui, |ui| {
+                        let last = s.waypoints.len() - 1;
+                        for (i, &node) in s.waypoints.iter().enumerate() {
+                            let sys = s.uni.system(node);
+                            let stop = s.stop(i);
+                            let color = if matches!(stop, Stop::Midpoint(_)) { theme::TEXT_DIM } else { theme::accent(ui) };
+                            ui.label(RichText::new(format!("{:>2}", i + 1)).color(theme::TEXT_DIM));
+                            ui.label(RichText::new(stop.label().to_uppercase()).color(color).size(11.0).extra_letter_spacing(1.0));
+                            let name = ui.add(
+                                Label::new(RichText::new(&sys.name).family(theme::bold()).color(Color32::WHITE)).sense(Sense::click()),
+                            );
+                            ui.label(RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)));
+                            if !narrow {
+                                ui.label(RichText::new(&sys.region).color(theme::TEXT_DIM));
                             }
-                            if ui.add_enabled(i < last, Button::new("⏷").small()).on_hover_text("Move down").clicked() {
-                                edit = Some(Edit::MoveDown(i));
-                            }
-                            if ui.add(Button::new("🗙").small()).on_hover_text("Remove").clicked() {
-                                edit = Some(Edit::Remove(i));
-                            }
-                        });
-                        name.context_menu(|ui| {
-                            for (label, action, enabled) in [
-                                ("Set as start", Edit::SetStart(i), i > 0),
-                                ("Move up", Edit::MoveUp(i), i > 0),
-                                ("Move down", Edit::MoveDown(i), i < last),
-                                ("Remove", Edit::Remove(i), true),
-                            ] {
-                                if ui.add_enabled(enabled, Button::new(label)).clicked() {
-                                    edit = Some(action);
-                                    ui.close();
+                            ui.horizontal(|ui| {
+                                if ui.add_enabled(i > 0, Button::new("⏶").small()).on_hover_text("Move up").clicked() {
+                                    edit = Some(Edit::MoveUp(i));
                                 }
-                            }
-                        });
-                        ui.end_row();
-                    }
-                });
+                                if ui.add_enabled(i < last, Button::new("⏷").small()).on_hover_text("Move down").clicked() {
+                                    edit = Some(Edit::MoveDown(i));
+                                }
+                                if ui.add(Button::new("🗙").small()).on_hover_text("Remove").clicked() {
+                                    edit = Some(Edit::Remove(i));
+                                }
+                            });
+                            name.context_menu(|ui| {
+                                for (label, action, enabled) in [
+                                    ("Set as start", Edit::SetStart(i), i > 0),
+                                    ("Move up", Edit::MoveUp(i), i > 0),
+                                    ("Move down", Edit::MoveDown(i), i < last),
+                                    ("Remove", Edit::Remove(i), true),
+                                ] {
+                                    if ui.add_enabled(enabled, Button::new(label)).clicked() {
+                                        edit = Some(action);
+                                        ui.close();
+                                    }
+                                }
+                            });
+                            ui.end_row();
+                        }
+                    });
             });
             ui.add_space(4.0);
             ui.horizontal(|ui| {
@@ -882,8 +887,11 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
         let table_clip =
             egui::Rect::from_x_y_ranges(ui.min_rect().left()..=ui.available_rect_before_wrap().right(), ui.clip_rect().y_range());
         let header = |ui: &mut Ui, text: &str| _ = ui.label(theme::header_text(text));
-        let mut table =
-            TableBuilder::new(ui).id_salt("route-table").striped(false).sense(Sense::click()).cell_layout(Layout::left_to_right(Align::Center));
+        let mut table = TableBuilder::new(ui)
+            .id_salt("route-table")
+            .striped(false)
+            .sense(Sense::click())
+            .cell_layout(Layout::left_to_right(Align::Center));
         // The table has no Pilots column: the active route shows where the pilots are.
         if compact {
             table = table
@@ -902,7 +910,8 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
         table = table.auto_shrink(false);
         table
             .header(20.0, |mut row| {
-                let names: &[&str] = if compact { &["System", "Security", "Via"] } else { &["#", "Stop", "System", "Security", "Region", "Via"] };
+                let names: &[&str] =
+                    if compact { &["System", "Security", "Via"] } else { &["#", "Stop", "System", "Security", "Region", "Via"] };
                 for text in names {
                     row.col(|ui| {
                         header(ui, text);
@@ -968,7 +977,12 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
                         row.col(|ui| _ = ui.label(RichText::new(step.to_string()).color(theme::TEXT_DIM)));
                         row.col(|ui| {
                             if let Some(stop) = stop {
-                                ui.label(RichText::new(stop.label().to_uppercase()).color(theme::accent(ui)).size(11.0).extra_letter_spacing(1.0));
+                                ui.label(
+                                    RichText::new(stop.label().to_uppercase())
+                                        .color(theme::accent(ui))
+                                        .size(11.0)
+                                        .extra_letter_spacing(1.0),
+                                );
                             } else if avoided {
                                 ui.label(RichText::new("AVOID").color(theme::WARN).size(11.0).extra_letter_spacing(1.0));
                             }
