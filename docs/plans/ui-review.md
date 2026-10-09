@@ -302,7 +302,7 @@ Read from the code on 2026-10-09. Nothing was run on screen.
 
 ## Open points
 
-1. **Regression, fix first (10 minutes).** `route_list` in `view.rs` builds `legs_galley` ("2 + 12") and reserves room for it, but the paint call was deleted in `0869b03`. The text no longer shows. Paint it again at the right edge, or remove the reserve.
+1. Done. The leg jumps text ("2 + 12") is removed from the route list rows. The tooltip still lists each leg.
 2. The removed tooltips undo A3 ("hover only") in reverse: a cut Via text now has no way to read it in full. Decide: show the full text in a tooltip only when it is cut.
 3. The user must check Half (640 to 1100 px) and Full (1100 px and up) on screen. Check the Photon themes and compact mode in all three classes.
 4. The Characters window and the Pilot picker keep a fixed inner layout. Check them below 520 px.

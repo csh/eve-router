@@ -728,19 +728,15 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 let painter = ui.painter_at(rect);
                 let font = egui::TextStyle::Body.resolve(ui.style());
                 let left = rect.left() + (if compact { 8.0 } else { 12.0 });
-                // Line 1: the number, then the summary in one font and one color. The jumps of each leg
-                // are at the right, in the same font.
-                let top = rect.top() + (if compact { 2.0 } else { 4.0 });
+                // Line 1: the number, then the summary in one font and one color.
+                                let top = rect.top() + (if compact { 2.0 } else { 4.0 });
                 let text_color = theme::TEXT_SOFT;
                 let number = painter.layout_no_wrap(format!("#{}  ", i + 1), font.clone(), theme::TEXT_DIM);
-                let legs: Vec<usize> = route.legs().iter().map(|&(a, b)| b - a).collect();
-                let legs_text = (legs.len() > 1).then(|| legs.iter().map(usize::to_string).collect::<Vec<_>>().join(" + "));
-                let legs_galley = legs_text.map(|text| painter.layout_no_wrap(text, font.clone(), theme::TEXT_DIM));
+                let legs = route.legs();
                 let summary_left = left + number.size().x;
-                // The summary ends in "…" before it reaches the jumps of the legs. The tooltip has the whole text.
-                let reserve = legs_galley.as_ref().map_or(0.0, |g| g.size().x + 22.0);
+                // The summary ends in "…" before it reaches the right edge. The tooltip has the whole text.
                 let summary_text = route_summary(route);
-                let summary = fit_text(&painter, &summary_text, font.clone(), text_color, rect.right() - 10.0 - reserve - summary_left);
+                let summary = fit_text(&painter, &summary_text, font.clone(), text_color, rect.right() - 10.0 - summary_left);
                 painter.galley(egui::pos2(left, top), number, theme::TEXT_DIM);
                 painter.galley(egui::pos2(summary_left, top), summary, text_color);
                 // Line 2: the strip.
@@ -753,7 +749,7 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 let names = |k: usize| s.uni.name(route.path.nodes[k]);
                 let mut tip = vec![format!("#{}  {summary_text}", i + 1)];
                 if legs.len() > 1 {
-                    tip.extend(route.legs().iter().map(|&(a, b)| format!("{} » {}: {}", names(a), names(b), jumps_label(b - a))));
+                    tip.extend(legs.iter().map(|&(a, b)| format!("{} » {}: {}", names(a), names(b), jumps_label(b - a))));
                 }
                 let tip = tip.join("\n");
                 if response.on_hover_text(tip).clicked() {
