@@ -855,7 +855,12 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
             .header(20.0, |mut row| {
                 let names: &[&str] = if compact { &["System", "Security", "Via"] } else { &["#", "Stop", "System", "Security", "Region", "Via"] };
                 for text in names {
-                    row.col(|ui| header(ui, text));
+                    row.col(|ui| {
+                        header(ui, text);
+                        // The line under the header runs over every cell, as in the client.
+                        let y = ui.max_rect().bottom();
+                        ui.painter().hline(ui.max_rect().x_range(), y, Stroke::new(1.0, theme::LINE));
+                    });
                 }
             })
             .body(|body| {
