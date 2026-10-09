@@ -599,15 +599,13 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             row_label(ui, narrow, "Photon Theme");
             ui.horizontal_wrapped(|ui| {
                 let mut current_theme = s.faction_theme();
-                egui::ComboBox::from_id_salt("faction-theme-combo")
-                    .selected_text(current_theme.label())
-                    .show_ui(ui, |ui| {
-                        for &t in &theme::FactionTheme::ALL {
-                            if ui.selectable_value(&mut current_theme, t, t.label()).clicked() {
-                                s.set_faction_theme(t, ui.ctx());
-                            }
+                egui::ComboBox::from_id_salt("faction-theme-combo").selected_text(current_theme.label()).show_ui(ui, |ui| {
+                    for &t in &theme::FactionTheme::ALL {
+                        if ui.selectable_value(&mut current_theme, t, t.label()).clicked() {
+                            s.set_faction_theme(t, ui.ctx());
                         }
-                    });
+                    }
+                });
             });
             ui.end_row();
 

@@ -496,7 +496,8 @@ impl PilotsUi {
                         let send = if plan.online == Some(false) { "Send anyway" } else { "Send" };
                         match (&here, &plan.from_here) {
                             (Some(here), Some(from_here)) => {
-                                if ui.add(Button::new(format!("Route from {here}")).fill(theme::accent(ui).gamma_multiply(0.35))).clicked() {
+                                if ui.add(Button::new(format!("Route from {here}")).fill(theme::accent(ui).gamma_multiply(0.35))).clicked()
+                                {
                                     s.pilots.start_route(from_here.clone());
                                     close = true;
                                 }
