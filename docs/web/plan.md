@@ -166,8 +166,9 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 2. Set the COOP and COEP headers of spec section 10 in `[serve] headers`, so `trunk serve` is the development server. Write no server of our own.
 3. Add a CI job that builds `dist/` and runs a Playwright test: open the page, wait for the planner, enter Jita and Amarr, and expect a route.
 4. Record the compressed wasm sizes and set the size budget.
+5. Put the engines in a folder named by their content hash, and write the name into `index.html` (spec section 11). Add the `/engine-*/` row to `_headers`.
 
-**Done when:** the CI job is green and enforces the size budget.
+**Done when:** the CI job is green and enforces the size budget. A CI check rebuilds after a change in `router_engine`, and expects a new `engine-<hash>` folder that `index.html` names. A rebuild with no change gives the same name.
 
 ### Task 13: bridges and settings on web (about 1 day)
 

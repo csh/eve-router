@@ -479,7 +479,7 @@ The `_headers` file sets these headers on every response:
 | `Cross-Origin-Embedder-Policy` | `require-corp`. If a portrait fails in a real isolated page, use `credentialless`, but Safari does not support it. |
 | `Content-Security-Policy` | `default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; worker-src 'self'; connect-src 'self' https://developers.eveonline.com https://images.evetech.net https://esi.evetech.net https://login.eveonline.com https://api.eve-scout.com; img-src 'self' data: blob:; style-src 'self' 'unsafe-inline'; frame-ancestors 'none'; base-uri 'none'` |
 | `Cross-Origin-Resource-Policy` | `same-origin` |
-| `Cache-Control` | `immutable, max-age=31536000` for hashed files. `no-cache` for `index.html`. |
+| `Cache-Control` | `immutable, max-age=31536000` for the hashed UI files of `trunk` and for everything under `/engine-*/`. `no-cache` for `index.html`. |
 
 The app opens no popup (SSO uses a redirect), and it has no third-party embed, so COOP and COEP break nothing known. No user-chosen host appears in `connect-src`, because Nexum uses the proxy.
 
@@ -500,10 +500,18 @@ web/
   proxy/           the Cloudflare Worker script for Nexum
   build.sh         builds ui, engine-mt and engine-st into dist/
   Trunk.toml       dev-server headers, post_build hook for the engines
+
+dist/
+  index.html              no-cache, holds the engine folder name
+  ui-<hash>.js / .wasm    trunk
+  engine-<hash>/          immutable
+    engine-mt.js, engine-mt_bg.wasm, snippets/
+    engine-st.js, engine-st_bg.wasm
   wrangler.toml
 ```
 
 - `web/build.sh` runs `trunk build` for the UI, and `cargo build` plus `wasm-bindgen --target web` for both engine builds. `trunk serve` is the development server. `Trunk.toml` sets the COOP and COEP headers of section 10 in `[serve] headers`, and a `post_build` hook runs the two engine builds into `$TRUNK_STAGING_DIR`, so `trunk serve` and `trunk build` both give a full `dist/`. The `RUSTFLAGS` for atomics apply to the `engine-mt` command only, never through `.cargo/config.toml`.
+- Engine cache names: `build.sh` builds both engines into a temporary folder, hashes all its files, and renames the folder to `engine-<hash>`, with the first 16 hex digits of the SHA-256. The `post_build` hook writes that name into the staged `index.html` in place of a placeholder, and the loader reads it from there. A folder, not renamed files, because the `wasm-bindgen` glue finds its `.wasm` and its `snippets/` (with the `wasm-bindgen-rayon` helpers) by relative path. A new deploy thus never pairs a new UI with an old cached engine. The protocol version in `Init` stays as a second check.
 - `wasm-opt`: try `-O3` and `-Os`. Keep `-Os` unless it slows top 20 by more than 10 percent.
 - Size budget: set after the first build, then enforce in CI. Serve with Brotli.
 
