@@ -134,7 +134,7 @@ The functions are pure and keep their input order. `wormhole::merge` keeps the s
 Rules:
 
 1. Each map has a generation. Each route reply names its generation. The UI drops a reply for an old generation.
-2. Each map has a fingerprint: a hash of its node and edge lists, and of its `HullTable`. The engine worker sends it with each map. The UI compares it with its own. A mismatch is a bug. The UI then logs an error and searches on the UI thread with one thread, so the app still works.
+2. Each map has a fingerprint: a hash of its node and edge lists, and of its `HullTable`. The engine worker sends it with each map. The UI compares it with its own. A mismatch is a bug. The UI then logs an error and enters a degraded mode: it searches on the UI thread with one thread, so the app still works. This mode drops frames during a search, and it does not count against the targets of section 6.4.
 3. A native test builds a map two times from the same inputs, and compares the fingerprints.
 
 ### 4.3 Messages
@@ -368,7 +368,7 @@ Native behavior does not change. Each seam lands on native first, and the native
 **Web-only needs**
 
 - `chrono` with the `wasmbind` feature, for `chrono::Local` in `log.rs` and `wormhole.rs`.
-- `getrandom` 0.2 with the `js` feature. `oauth2` pulls it in through `rand` 0.8. It is the only `getrandom` version left on wasm after the gating above.
+- `getrandom` 0.2 with the `js` feature. `oauth2` pulls it in through `rand` 0.8. Plan task 9 runs `cargo tree -i getrandom --target wasm32-unknown-unknown` to make sure that it is the only version on wasm after the switch to `reqwest` and the gating above. If 0.3 also shows up, add its `wasm_js` feature too.
 - `wasm-bindgen`, `wasm-bindgen-futures`, `web-time`. `web-sys` and `js-sys` only where no crate of section 7.1 covers the API.
 - `gloo-storage`, `indexed_db_futures`, and `futures-timer` with the `wasm-bindgen` feature. Without that feature, `futures-timer` on wasm32 uses its native code, which starts a thread and fails.
 - `wasm-bindgen-rayon`, in `router_engine` behind the `threads` feature only.
@@ -408,7 +408,7 @@ Decided on 2026-10-10. Versions are the newest on that date. Do not write a wrap
 | A storage trait (`dyn Store`) | One concrete type with a file for each target is easier to read (section 5.5). An async trait does not work with `dyn` without boxing. |
 | `localStorage` | One `cfg` type cannot hold two wasm backends. IndexedDB works on both threads, so all saved values use it. |
 | The `oauth2` `reqwest` feature | It pins `reqwest` 0.12. That gives two `reqwest` versions, or keeps the app on 0.12. `oauth2` had no release after 2025-01. |
-| `gloo-worker` (until plan task 1 says otherwise) | Its `Codec` needs serde types, and the default is `bincode` 1.3. `rkyv` bytes then travel in a second encoding. `post_message` sends no transfer list, so each buffer is copied. It pins `gloo-utils` 0.2, but `gloo-storage` 0.4 pins 0.3. Nobody has shown it with `wasm-bindgen-rayon`. |
+| `gloo-worker` (until plan task 1 says otherwise) | By default it starts the worker from a `blob:` URL, which the CSP (`worker-src 'self'`, section 10) refuses. Only its `with_loader(true)` mode, which loads a same-origin file, can work here. Never add `blob:` to `worker-src` for it. Its `Codec` needs serde types, and the default is `bincode` 1.3. `rkyv` bytes then travel in a second encoding. `post_message` sends no transfer list, so each buffer is copied. It pins `gloo-utils` 0.2, but `gloo-storage` 0.4 pins 0.3. Nobody has shown it with `wasm-bindgen-rayon`. |
 | `async_zip` | Pre-1.0, and needs an async reader that can seek over HTTP ranges. The current hand-written zip directory read plus streaming `flate2` is simpler (section 5.3). |
 | `gloo-console`, `gloo-events`, `gloo-render`, `gloo-dialogs`, `gloo-file` | `egui` owns the canvas, the input and the frame timing. The log window does the job of the console. |
 | `gloo-history`, `gloo-utils` | Optional. The login reads the query and calls `replaceState` one time, so plain `web-sys` is enough. |
@@ -543,5 +543,5 @@ The `Makefile.toml` tasks:
 | Do refresh tokens rotate? | Matters for two tabs | Plan task 17 (a real login) |
 | The error shape of a failed code exchange | Only a fake code is tested (500, HTML) | Plan task 17 |
 | Is `router.smrkn.com` the final production domain? | The production callback must match it exactly | Before plan task 0 |
-| Does `gloo-worker` carry `rkyv` bytes and start the `wasm-bindgen-rayon` pool? | If yes, it can replace the hand-written worker loop (section 7.1) | Plan task 1 |
+| Does `gloo-worker` carry `rkyv` bytes and start the `wasm-bindgen-rayon` pool, under the real CSP and with `with_loader(true)`? | If yes, it can replace the hand-written worker loop (section 7.1) | Plan task 1 |
 | Proxy rate limit against a large alliance map | Only a 160 KB map is tested | Plan task 16 |

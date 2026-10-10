@@ -56,10 +56,10 @@ The largest unknown goes first. Work on a scratch branch. Do not merge it.
 
 1. Make a scratch `cdylib` that includes `route.rs`, `universe.rs`, `sde.rs`, `ships.rs`, `wormhole.rs` and `ansiblex.rs` by `#[path]`, and the repository `sde/` files by `include_bytes!`.
 2. Build it for `wasm32-unknown-unknown` with a pinned nightly, atomics, `build-std` and `wasm-bindgen-rayon`.
-3. Load it in a Web Worker on a page with COOP and COEP. Time top 5 and top 20 from Jita to ND-X7X with 1, 2, 4 and 8 threads.
+3. Load it in a Web Worker on a page with the COOP, COEP and CSP headers of spec section 10, not COOP and COEP only. Time top 5 and top 20 from Jita to ND-X7X with 1, 2, 4 and 8 threads.
 4. Run it in Chrome, Firefox and Safari, and in iOS Safari if a device is available.
 5. Send each result from the pool task into a `flume` outbox, and post from one `spawn_local` task (spec section 4.3). Measure the time from `send` on a pool thread to the post, in each browser. If a browser fails, run the search on the engine worker itself with no `rayon::spawn`, and record why.
-6. Start the worker two ways: a hand-written loop with a transferred `ArrayBuffer`, and `gloo-worker` with a custom `Codec` that carries the `rkyv` bytes. Each one must start the `wasm-bindgen-rayon` pool before the first search.
+6. Start the worker two ways: a hand-written loop with a transferred `ArrayBuffer`, and `gloo-worker` in its `with_loader(true)` mode with a custom `Codec` that carries the `rkyv` bytes. Its default mode starts the worker from a `blob:` URL, which the CSP refuses. Do not add `blob:` to `worker-src`. Each one must start the `wasm-bindgen-rayon` pool before the first search.
 
 **Done when:** a table with the times and a pass or fail for each browser is in spec section 6. Pin the nightly that worked. Spec section 7.1 records the `gloo-worker` result: keep it only if it starts the pool in Chrome and Firefox, else keep the hand-written loop. If no browser gets a 2-times gain at 4 threads, stop and talk to the owner before task 14.
 
@@ -135,7 +135,7 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 ### Task 9: target gating (about 1 day)
 
 1. Move the native-only dependencies and features of spec section 7 into `cfg(not(target_arch = "wasm32"))` tables. Gate `#[global_allocator]`, the frame limiter, `std::env::args`, `Listener`, `Keyring` and the file store.
-2. Add `chrono/wasmbind`, `getrandom` 0.2 with `js`, and `futures-timer/wasm-bindgen` for wasm. Make `tokio` native-only.
+2. Add `chrono/wasmbind`, `getrandom` 0.2 with `js`, and `futures-timer/wasm-bindgen` for wasm. Make `tokio` native-only. Run `cargo tree -i getrandom --target wasm32-unknown-unknown`, and give each `getrandom` version on wasm its browser feature.
 3. Add a CI job: `cargo check` and `cargo clippy` for `router_core` and `router_egui` on `wasm32-unknown-unknown`.
 
 **Done when:** both checks are green in CI, on stable. Record the size of the `cfg` gates in `router_core`, and decide whether to move `sde_update`, `sources` and `store` to a `router_data` crate (spec section 2). Split only if the engine build can then drop `esi` and its dependencies, and the gates are hard to read.
@@ -226,4 +226,4 @@ Needs task 0.
 
 ## Total
 
-About 33 working days, so 6 to 7 weeks for one developer. Task 7 and the browser testing of tasks 1, 14 and 18 carry the most risk.
+About 33 working days for the tasks as written. Add 20 to 30 percent for unknowns, so about 40 to 43 working days, or 8 to 9 weeks for one developer. Tasks 10 and 11 hold the most new code, and task 7 and the browser testing of tasks 1, 14 and 18 carry the most risk.
