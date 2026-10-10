@@ -56,6 +56,8 @@ The project owner made these decisions on 2026-10-10.
 | Async on native | A current-thread `tokio` runtime on each existing loop thread. Our only `tokio` feature is `rt`. | Async `reqwest` needs `tokio` on native, and `pollster` cannot drive it. |
 | Browser APIs | `gloo-storage` for `localStorage` and `sessionStorage`. `indexed_db_futures` for IndexedDB. | Raw `web-sys` for these APIs is callbacks and `JsValue` errors. |
 | Timers | `futures-timer` on both targets | One API on every desktop target and on wasm32 |
+| Hull identity | A hull is a `HullId` (an index into the `HullTable`). The map owns the table. No global table, no `&'static Hull`. | A pointer means nothing in the memory of another wasm module, and it cannot go into a message. An ID can. See section 4.3. |
+| Crate layout | `router_core` stays one crate. Plan task 9 decides on a `router_data` split. | A split pays only when a build can drop a dependency. Under a pure-map split, each build still needs `router_core`, so the split adds moves and no smaller build. |
 | Worker plumbing | Hand-written message loop. Plan task 1 also tests `gloo-worker`. | `gloo-worker` has serde-only codecs and no transfer (section 7.1). Nobody has shown it with `wasm-bindgen-rayon`. |
 
 ---
@@ -129,7 +131,7 @@ The functions are pure and keep their input order. `wormhole::merge` keeps the s
 Rules:
 
 1. Each map has a generation. Each route reply names its generation. The UI drops a reply for an old generation.
-2. Each map has a fingerprint: a hash of its node and edge lists. The engine worker sends it with each map. The UI compares it with its own. A mismatch is a bug. The UI then logs an error and searches on the UI thread with one thread, so the app still works.
+2. Each map has a fingerprint: a hash of its node and edge lists, and of its `HullTable`. The engine worker sends it with each map. The UI compares it with its own. A mismatch is a bug. The UI then logs an error and searches on the UI thread with one thread, so the app still works.
 3. A native test builds a map two times from the same inputs, and compares the fingerprints.
 
 ### 4.3 Messages
@@ -148,7 +150,14 @@ The engine protocol lives in `router_core::engine`, so a native test can drive i
 | Engine to UI | `Routes` | Request ID, generation, routes, favourite distances, the order note, an error text, the search time |
 | Engine to UI | `Failed` | A fatal error text for the splash screen |
 
-`Settings` holds a `&'static Hull`, which cannot cross a thread. The `Route` message sends a plain `RouteSettings` record: the hull by type ID or group name, and the capital by system ID. The engine worker maps them back with the same `HullTable`.
+`Settings` goes into the `Route` message as it is, with no translation record. It holds plain data only: the hull as a `HullId`, and the capital and favourites as `NodeIndex` values. Both sides build the `HullTable` from the same blob in the same order, so one `HullId` names one hull on both sides, as rule 2 of section 4.2 does for `NodeIndex`.
+
+The hull rules:
+
+1. `HullId` is an index into the `HullTable`, which holds the ships and the groups. It is valid only with the table that it came from.
+2. `Universe` holds the table as an `Arc<HullTable>`, so a map clone stays cheap. Code that needs hull data reads it from the `Universe` that it already gets. No function reads a global.
+3. "Same hull" compares `HullId` values, not pointers.
+4. On disk, the config keeps the hull name, as now (`cfg.hull`). A name stays valid across SDE builds. A `HullId` does not.
 
 ### 4.4 Stale requests
 
@@ -218,7 +227,7 @@ Rules:
 1. Check the bytes with `rkyv` validation (`bytecheck`) before any read. IndexedDB data is not trusted.
 2. The IndexedDB key holds the format version (`sde-blob-v1`). A wrong version or a failed check deletes the record and starts a download.
 3. Read the bytes into an `rkyv::util::AlignedVec` before access. A browser has no `mmap`, so this is one copy of a small buffer.
-4. The blob replaces `ansiblex::init(sde_dir)`. The `HullTable` lives in a `OnceLock`, so it cannot change after the first set. A new SDE build found during a session applies at the next page load.
+4. The blob replaces `ansiblex::init(sde_dir)`. The `HullTable` comes from the blob and lives in the `Universe` (section 4.3). A new SDE build found during a session thus gives a new map with a new table. The UI maps its `Settings` hull to the new table by name.
 5. Expected size: under 1 MB. Plan task 5 records the real size.
 
 ### 5.5 Storage

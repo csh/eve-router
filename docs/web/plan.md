@@ -27,13 +27,13 @@ Status: draft 2, 2026-10-10. Draft 2 adds the crate choices of spec section 7.1.
  1 spike ──────────────────────────────────────────────┐
  2 clock ─┐                                            │
  3 store ─┼─> 7 http ─> 8 loops ─> 9 gate ─> 10 engine ─> 11 shell ─> 12 build ─> 13 bridges  (M1)
- 4 distill ─> 5 blob ─> 6 map + protocol ─────────────┘                                │
+ 4 distill ─> 4a hulls ─> 5 blob ─> 6 map + protocol ─┘                                │
                                                                     14 threads (M2) <──┤
                                                                     15 scout ─> 16 nexum (M3)
                                                                     17 sso (M4) ─> 18 deploy (M5)
 ```
 
-Tasks 2, 3 and 4 do not depend on each other. Task 1 can run beside them.
+Tasks 2, 3 and 4 do not depend on each other. Task 4a needs no other task, but must land before task 5. Task 1 can run beside them.
 
 ---
 
@@ -83,19 +83,30 @@ Add a `Store` trait (`get`, `set`, `delete` of named bytes) and a file implement
 
 **Done when:** a native test runs the distill on the fixture zip and gets the same `ships.json` and `wormholes.json` as the old code. The `regenerate_repo_sde` test gives files identical to the ones in `sde/`. The peak memory numbers are in spec section 5.3.
 
+### Task 4a: hull table owned by the map (about 1 day)
+
+The reasons are in spec sections 2 and 4.3.
+
+1. Add `HullId`, an index into the `HullTable`. Replace `HullClass = &'static Hull` with it in `ansiblex.rs`, `settings.rs`, `labels.rs`, `esi/pilots.rs` and `settings_window.rs`.
+2. Remove the `static TABLE: OnceLock`, `ansiblex::init` and `ansiblex::table`. Put an `Arc<HullTable>` in `Universe`. `BridgeRules::cost` and the other readers take it from the `Universe`.
+3. Make `same_hull` and `same_class` compare IDs, not pointers.
+4. Keep the hull name in the config file.
+
+**Done when:** no `OnceLock` and no `&'static Hull` are left in `router_core`. A test builds two `Universe` values with different hull tables in one process. The config file format does not change. Native tests pass.
+
 ### Task 5: the blob (about 1.5 days)
 
 1. Add `rkyv` with validation. Add `SdeBlob` (spec section 5.4) and `SdeBlob::from_parts`.
-2. Add `Universe::from_blob`. Make `ansiblex::init` take the ship table from the blob.
+2. Add `Universe::from_blob`. It builds the `HullTable` from the ship table of the blob.
 3. Add the format version and the validation rules.
 
 **Done when:** a native test builds a blob from `sde/`, and `Universe::from_blob` gives the same graph as `Universe::from_sde`: 8490 systems, 13978 stargates, the same names, and the same edge list in the same order. A test flips one byte and expects a validation error. A test with a wrong version expects a rebuild. The blob size is in spec section 5.4.
 
-### Task 6: pure map build and the engine protocol (about 1.5 days)
+### Task 6: pure map build and the engine protocol (about 1 day)
 
 1. Split `refresh::build` into a pure `build_map(base, sources, now)` that the startup, the refresh and the UI mirror all call.
-2. Add `Universe::fingerprint` (a hash of the node and edge lists).
-3. Add `router_core::engine`: the messages of spec section 4.3, `RouteSettings`, and the `rkyv` encoding.
+2. Add `Universe::fingerprint` (a hash of the node and edge lists, and of the `HullTable`).
+3. Add `router_core::engine`: the messages of spec section 4.3, and the `rkyv` encoding. `Settings` derives `rkyv` directly.
 4. Add an in-process `Engine` that answers the messages on native. Tests drive it.
 
 **Done when:** a test builds a map two times from the same inputs and gets the same fingerprint. A test sends a `Route` message to the in-process engine, and the reply routes match `Settings::router(...).routes(...)` on the mirror. Native tests pass.
@@ -122,7 +133,7 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 2. Add `chrono/wasmbind`, `getrandom` 0.2 with `js`, and `futures-timer/wasm-bindgen` for wasm. Make `tokio` native-only.
 3. Add a CI job: `cargo check` and `cargo clippy` for `router_core` and `router_egui` on `wasm32-unknown-unknown`.
 
-**Done when:** both checks are green in CI, on stable.
+**Done when:** both checks are green in CI, on stable. Record the size of the `cfg` gates in `router_core`, and decide whether to move `sde_update`, `sources` and the `Store` trait to a `router_data` crate (spec section 2). Split only if the engine build can then drop `esi` and its dependencies, and the gates are hard to read.
 
 ### Task 10: the engine worker, single thread (about 3 days)
 
@@ -209,4 +220,4 @@ Needs task 0.
 
 ## Total
 
-About 32 to 33 working days, so 6 to 7 weeks for one developer. Task 7 and the browser testing of tasks 1, 14 and 18 carry the most risk.
+About 33 working days, so 6 to 7 weeks for one developer. Task 7 and the browser testing of tasks 1, 14 and 18 carry the most risk.
