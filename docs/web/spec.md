@@ -1,6 +1,6 @@
 # Web client: specification
 
-Status: draft 1, 2026-10-10. This document says what the browser build of `router_egui` must do, and why. The task order is in [plan.md](plan.md).
+Status: draft 2, 2026-10-10. Draft 2 adds the crate choices (sections 2 and 7.1). This document says what the browser build of `router_egui` must do, and why. The task order is in [plan.md](plan.md).
 
 **Terms**
 
@@ -52,12 +52,17 @@ The project owner made these decisions on 2026-10-10.
 | Nexum | A same-origin proxy only. No direct call from the browser. | A tested Nexum server allows only its own origin (section 3). |
 | Login | Client-side PKCE, with separate EVE app registrations for production and development | EVE SSO supports public clients. No server holds a token. |
 | Toolchain | Native stays on stable. The web build uses one pinned nightly. | The threaded engine needs `-Z build-std` and atomics. |
+| HTTP | `reqwest` 0.13 on both targets. It replaces `ureq`. | One client for native and wasm. On wasm it uses `fetch`, with timeouts through `AbortController`. Our own `Http` trait and two implementations are not needed. |
+| Async on native | A current-thread `tokio` runtime on each existing loop thread. Our only `tokio` feature is `rt`. | Async `reqwest` needs `tokio` on native, and `pollster` cannot drive it. |
+| Browser APIs | `gloo-storage` for `localStorage` and `sessionStorage`. `indexed_db_futures` for IndexedDB. | Raw `web-sys` for these APIs is callbacks and `JsValue` errors. |
+| Timers | `futures-timer` on both targets | One API on every desktop target and on wasm32 |
+| Worker plumbing | Hand-written message loop. Plan task 1 also tests `gloo-worker`. | `gloo-worker` has serde-only codecs and no transfer (section 7.1). Nobody has shown it with `wasm-bindgen-rayon`. |
 
 ---
 
 ## 3. Network rules from the CORS and PKCE findings
 
-Source: `docs/plans/web-support.md`, sections 2.3, 2.4 and 3. Those checks used `curl` and a Firefox console on 2026-10-09, plus the CCP SSO documentation. This specification does not test them again. It copies the rules that the code must obey, so this document stands alone.
+Source: `docs/plans/web-support.md` (deleted in commit `14264cd`, read it with `git show 088d9da:docs/plans/web-support.md`), sections 2.3, 2.4 and 3. Those checks used `curl` and a Firefox console on 2026-10-09, plus the CCP SSO documentation. This specification does not test them again. It copies the rules that the code must obey, so this document stands alone.
 
 | Endpoint | Rule |
 | :--- | :--- |
@@ -70,7 +75,7 @@ Source: `docs/plans/web-support.md`, sections 2.3, 2.4 and 3. Those checks used 
 | `api.eve-scout.com` | Direct. |
 | A Nexum server | Not direct. The tested server sends `ACAO` with its own origin only, for any caller. The browser blocks the response. All Nexum traffic goes through the proxy. |
 
-All cross-origin requests use `credentials: "omit"`.
+All cross-origin requests send no credentials. `reqwest` on wasm has no `credentials: "omit"` setting. It uses the fetch default, `same-origin`, which sends no cookies on a cross-origin request. Thus the default is correct. Never call `fetch_credentials_include`. `reqwest` on wasm uses CORS mode by default, so never call `fetch_mode_no_cors`.
 
 **Still untested:** Chrome, Safari, and COEP on a page that is really cross-origin isolated. Plan task 18 tests them.
 
@@ -129,7 +134,7 @@ Rules:
 
 ### 4.3 Messages
 
-The engine protocol lives in `router_core::engine`, so a native test can drive it with no browser. Each message is an `rkyv` archive in an `ArrayBuffer`, transferred and not copied. The UI and the engine come from one build, but the first message still carries a protocol version.
+The engine protocol lives in `router_core::engine`, so a native test can drive it with no browser. Each message is an `rkyv` archive in an `ArrayBuffer`, transferred and not copied. A hand-written loop on `wasm-bindgen` and `web-sys` sends the messages (section 7.1 explains why not `gloo-worker`). The UI and the engine come from one build, but the first message still carries a protocol version.
 
 | Direction | Message | Content |
 | :--- | :--- | :--- |
@@ -271,9 +276,10 @@ Native behavior does not change. Each seam lands on native first, and the native
 | Seam | Native | Web |
 | :--- | :--- | :--- |
 | Clock | `web_time::Instant` and `web_time::SystemTime`. On native these are the `std` types. | `performance.now()` and `Date.now()` |
-| Storage (`Store` trait: `get`, `set`, `delete` of named bytes) | Files, at the current paths | `localStorage` for small values on the UI thread. IndexedDB for large values in the engine worker. |
-| HTTP (async `Http` trait: `get`, `head`, `get_range`, `post_form`, with headers, a body limit and a timeout) | `ureq`, driven by `pollster::block_on` on the current threads | `fetch` in the window or the worker scope, with `AbortController` for the timeouts |
-| Loops (`Refresher`, `Tracker`) | The loop body is an `async fn`. A thread runs it with `pollster`, as now. | `wasm_bindgen_futures::spawn_local` and a timer future |
+| Storage (`Store` trait: `get`, `set`, `delete` of named bytes) | Files, at the current paths | `gloo-storage` (`localStorage`) for small values on the UI thread. `indexed_db_futures` (IndexedDB) for large values in the engine worker. |
+| HTTP (no own trait: a `reqwest::Client`, with the body limit and timeouts set by the caller) | `reqwest` on a current-thread `tokio` runtime | `reqwest` on `fetch`, in the window or the worker scope. `AbortController` gives the timeouts. |
+| Loops (`Refresher`, `Tracker`) | The loop body is an `async fn`. Its thread runs it with `tokio` `block_on`, in place of `pollster`. | `wasm_bindgen_futures::spawn_local` |
+| Timers | `futures-timer` (one global helper thread) | `futures-timer` with its `wasm-bindgen` feature (`gloo-timers` under it) |
 
 **Storage split on web**
 
@@ -289,7 +295,7 @@ Native behavior does not change. Each seam lands on native first, and the native
 
 | Item | Where |
 | :--- | :--- |
-| `ureq` (and `rustls` and `ring` under it) | `sources/mod.rs`, `esi/client.rs`, `esi/sso.rs`, `sde_update.rs` |
+| `tokio` (the runtime only, `reqwest` gates its own native parts) | The loop threads and the portrait load |
 | `std::thread` and blocking channels | `refresh.rs`, `sources/nexum.rs`, `sources/evescout.rs`, `esi/tracker.rs`, `esi/pilots.rs`, `esi/sso.rs`, `app.rs`, `pilots_view.rs`, `settings_window.rs`, `view.rs` |
 | `std::fs` and `&Path` arguments | `config.rs`, `sources/mod.rs`, `esi/store.rs`, `esi/active.rs`, `overlay.rs`, `sde.rs`, `sde_update.rs`, `ships.rs`, `wormhole_types.rs` |
 | `Instant::now`, `SystemTime::now` | `wormhole.rs`, `esi/tracker.rs`, `esi/sso.rs`, `esi/client.rs`, `startup.rs`, `app.rs`, `view.rs` |
@@ -301,10 +307,51 @@ Native behavior does not change. Each seam lands on native first, and the native
 
 - `chrono` with the `wasmbind` feature, for `chrono::Local` in `log.rs` and `wormhole.rs`.
 - `getrandom` 0.2 with the `js` feature. `oauth2` pulls it in through `rand` 0.8. It is the only `getrandom` version left on wasm after the gating above.
-- `web-sys`, `js-sys`, `wasm-bindgen`, `wasm-bindgen-futures`, `web-time`.
+- `wasm-bindgen`, `wasm-bindgen-futures`, `web-time`. `web-sys` and `js-sys` only where no crate of section 7.1 covers the API.
+- `gloo-storage`, `indexed_db_futures`, and `futures-timer` with the `wasm-bindgen` feature. Without that feature, `futures-timer` on wasm32 uses its native code, which starts a thread and fails.
 - `wasm-bindgen-rayon`, in `router_engine` behind the `threads` feature only.
 
 Add each dependency with `cargo add`.
+
+### 7.1 Crates
+
+Decided on 2026-10-10. Versions are the newest on that date. Do not write a wrapper where a crate below already does the job.
+
+**Use**
+
+| Crate | Job | Notes |
+| :--- | :--- | :--- |
+| `reqwest` 0.13 | All HTTP, both targets | Replaces `ureq`. On wasm: `fetch` from the global scope (so it works in a Web Worker), `timeout` through `AbortController`, `bytes_stream`, and custom headers, so explicit `Range` values work. The default TLS is `rustls` with `aws-lc-rs`, which needs a C toolchain and CMake on some hosts. Plan task 7 decides between that and `rustls-no-provider` with `ring`, and builds on each release target. |
+| `tokio` | Native runtime | Feature `rt` only. One current-thread runtime for each loop thread, entered with `block_on`. |
+| `futures-timer` 3.0 | Timer futures, both targets | Native: pure `std`. wasm: the `wasm-bindgen` feature. |
+| `gloo-storage` 0.4 | `localStorage`, `sessionStorage` | UI thread only. A Web Worker has neither. |
+| `indexed_db_futures` 0.6 | IndexedDB | Engine worker. Futures in place of IndexedDB callbacks. |
+| `web-time` | Clock | Section 7, clock seam |
+| `wasm-bindgen-rayon` | Pool threads | `router_engine`, `threads` feature only |
+| `oauth2` 5.0 | PKCE, code exchange, refresh, revoke | Kept. See the adapter rule below. |
+| `trunk` | UI build and development server | It builds the UI, runs `wasm-bindgen` and `wasm-opt`, and sets the development COOP and COEP headers through `[serve] headers` in `Trunk.toml`. It also builds `data-type="worker"` assets. `engine-mt` needs its own `RUSTFLAGS` and `-Z build-std`, so `build.sh` builds it outside `trunk` (section 11). |
+
+**Do not use**
+
+| Crate | Why not |
+| :--- | :--- |
+| `ureq` | `reqwest` covers both targets |
+| `pollster` | It cannot drive native `reqwest`. `tokio` `block_on` does the same job. |
+| `gloo-net` | `reqwest` covers HTTP |
+| `rexie`, `idb` | `indexed_db_futures` chosen. `rexie` had no release after 2024-08. |
+| The `oauth2` `reqwest` feature | It pins `reqwest` 0.12. That gives two `reqwest` versions, or keeps the app on 0.12. `oauth2` had no release after 2025-01. |
+| `gloo-worker` (until plan task 1 says otherwise) | Its `Codec` needs serde types, and the default is `bincode` 1.3. `rkyv` bytes then travel in a second encoding. `post_message` sends no transfer list, so each buffer is copied. It pins `gloo-utils` 0.2, but `gloo-storage` 0.4 pins 0.3. Nobody has shown it with `wasm-bindgen-rayon`. |
+| `async_zip` | Pre-1.0, and needs an async reader that can seek over HTTP ranges. The current hand-written zip directory read plus streaming `flate2` is simpler (section 5.3). |
+| `gloo-console`, `gloo-events`, `gloo-render`, `gloo-dialogs`, `gloo-file` | `egui` owns the canvas, the input and the frame timing. The log window does the job of the console. |
+| `gloo-history`, `gloo-utils` | Optional. The login reads the query and calls `replaceState` one time, so plain `web-sys` is enough. |
+
+**Rules for async code**
+
+1. Never put `#[tokio::main]` on `main`. `eframe` must own the main thread, and macOS requires it.
+2. The UI thread never waits on a future. Background work sends results on a channel. The UI calls `try_recv` each frame, and the sender calls `request_repaint`, as now.
+3. Shared async code in `router_core` must not require `Send`. On wasm, `reqwest` futures hold a `JsValue` and are not `Send`. Thus no `tokio::spawn` on a multi-thread runtime, and no `Send` bound on shared async functions.
+4. On wasm, `futures_timer::Delay` sits in a `SendWrapper`, and it panics when polled on another thread. Keep timers in the engine worker loop or on the UI thread, never on a `rayon` pool thread.
+5. The `oauth2` adapter is one closure. `oauth2` 5.0 implements `AsyncHttpClient` for any `Fn(HttpRequest) -> impl Future<Output = Result<HttpResponse, E>>`. The closure converts the request, calls `reqwest::Client::execute`, and copies the status, the headers and the body (with the `MAX_BODY` limit). It replaces the `ureq` `Http` struct in `esi/sso.rs`. Write no adapter type or trait around it.
 
 ---
 
@@ -329,7 +376,7 @@ The rules come from the CCP SSO documentation and the findings of 2026-10-09 (se
 6. The app removes the query with `history.replaceState`, runs the existing JWT checks (issuer, audience, expiry, subject), and saves the refresh token in the `localStorage` `TokenStore`.
 7. The tracker starts for the character.
 
-The web build implements `oauth2::AsyncHttpClient` on the `Http` seam. It keeps the PKCE helpers, `parse_callback` and `read_claims`. It does not build `Listener`, `tiny_http` or `webbrowser`. "Remove" revokes the token at `REVOKE_URL`, as on native.
+Both builds give `oauth2` the closure of section 7.1, rule 5, on a `reqwest::Client`. The native client sets `redirect::Policy::none()`. A browser `fetch` follows redirects, and `reqwest` on wasm cannot stop that. It keeps the PKCE helpers, `parse_callback` and `read_claims`. It does not build `Listener`, `tiny_http` or `webbrowser`. "Remove" revokes the token at `REVOKE_URL`, as on native.
 
 ### 8.3 Risks
 
@@ -380,16 +427,17 @@ The development server sends the same COOP and COEP headers, so `engine-mt` runs
 crates/
   router_core/     + engine protocol, seams, SdeBlob, streaming distill
   router_egui/     + lib.rs (#[wasm_bindgen(start)] -> WebRunner), engine client, map mirror
-  router_engine/   new: cdylib, the engine worker entry, IndexedDB store, fetch Http
+  router_engine/   new: cdylib, the engine worker entry, IndexedDB store
 web/
   index.html       canvas, loader that picks engine-mt or engine-st
   _headers
   proxy/           the Cloudflare Worker script for Nexum
   build.sh         builds ui, engine-mt and engine-st into dist/
+  Trunk.toml       dev-server headers, post_build hook for the engines
   wrangler.toml
 ```
 
-- `web/build.sh` runs `trunk build` for the UI, and `cargo build` plus `wasm-bindgen --target web` for both engine builds. The `RUSTFLAGS` for atomics apply to the `engine-mt` command only, never through `.cargo/config.toml`.
+- `web/build.sh` runs `trunk build` for the UI, and `cargo build` plus `wasm-bindgen --target web` for both engine builds. `trunk serve` is the development server. `Trunk.toml` sets the COOP and COEP headers of section 10 in `[serve] headers`, and a `post_build` hook runs the two engine builds into `$TRUNK_STAGING_DIR`, so `trunk serve` and `trunk build` both give a full `dist/`. The `RUSTFLAGS` for atomics apply to the `engine-mt` command only, never through `.cargo/config.toml`.
 - `wasm-opt`: try `-O3` and `-Os`. Keep `-Os` unless it slows top 20 by more than 10 percent.
 - Size budget: set after the first build, then enforce in CI. Serve with Brotli.
 
@@ -407,4 +455,5 @@ web/
 | Do refresh tokens rotate? | Matters for two tabs | Plan task 17 (a real login) |
 | The error shape of a failed code exchange | Only a fake code is tested (500, HTML) | Plan task 17 |
 | Is `router.smrkn.com` the final production domain? | The production callback must match it exactly | Before plan task 0 |
+| Does `gloo-worker` carry `rkyv` bytes and start the `wasm-bindgen-rayon` pool? | If yes, it can replace the hand-written worker loop (section 7.1) | Plan task 1 |
 | Proxy rate limit against a large alliance map | Only a 160 KB map is tested | Plan task 16 |

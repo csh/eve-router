@@ -1,6 +1,6 @@
 # Web client: plan
 
-Status: draft 1, 2026-10-10. The tasks that make `router_egui` run in a browser. The requirements and the reasons are in [spec.md](spec.md). Section numbers below point into that document.
+Status: draft 2, 2026-10-10. Draft 2 adds the crate choices of spec section 7.1. The tasks that make `router_egui` run in a browser. The requirements and the reasons are in [spec.md](spec.md). Section numbers below point into that document.
 
 ## Rules for every task
 
@@ -50,7 +50,7 @@ The project owner does this. Tasks 1 to 16 do not need it.
 
 **Done when:** both `client_id` values exist, and CI has the secret and the token.
 
-### Task 1: thread spike (about 1 day)
+### Task 1: thread spike (about 1.5 days)
 
 The largest unknown goes first. Work on a scratch branch. Do not merge it.
 
@@ -58,8 +58,9 @@ The largest unknown goes first. Work on a scratch branch. Do not merge it.
 2. Build it for `wasm32-unknown-unknown` with a pinned nightly, atomics, `build-std` and `wasm-bindgen-rayon`.
 3. Load it in a Web Worker on a page with COOP and COEP. Time top 5 and top 20 from Jita to ND-X7X with 1, 2, 4 and 8 threads.
 4. Run it in Chrome, Firefox and Safari, and in iOS Safari if a device is available.
+5. Start the worker two ways: a hand-written loop with a transferred `ArrayBuffer`, and `gloo-worker` with a custom `Codec` that carries the `rkyv` bytes. Each one must start the `wasm-bindgen-rayon` pool before the first search.
 
-**Done when:** a table with the times and a pass or fail for each browser is in spec section 6. Pin the nightly that worked. If no browser gets a 2-times gain at 4 threads, stop and talk to the owner before task 14.
+**Done when:** a table with the times and a pass or fail for each browser is in spec section 6. Pin the nightly that worked. Spec section 7.1 records the `gloo-worker` result: keep it only if it starts the pool in Chrome and Firefox, else keep the hand-written loop. If no browser gets a 2-times gain at 4 threads, stop and talk to the owner before task 14.
 
 ### Task 2: clock seam (about 0.5 day)
 
@@ -99,24 +100,26 @@ Add a `Store` trait (`get`, `set`, `delete` of named bytes) and a file implement
 
 **Done when:** a test builds a map two times from the same inputs and gets the same fingerprint. A test sends a `Route` message to the in-process engine, and the reply routes match `Settings::router(...).routes(...)` on the mirror. Native tests pass.
 
-### Task 7: async HTTP seam (about 3 to 4 days, the largest task)
+### Task 7: move HTTP to `reqwest` (about 2 to 3 days, the largest task)
 
-1. Add the async `Http` trait of spec section 7 and a `ureq` implementation driven by `pollster::block_on`.
-2. Convert `sources/mod.rs`, `sources/evescout.rs`, `sources/nexum.rs` (the `SIG_WORKERS` threads become `buffer_unordered(8)`), `esi/client.rs`, `esi/sso.rs` (an `oauth2::AsyncHttpClient`), `sde_update.rs` (an async `RangeSource` that keeps `HEAD` and explicit `start-end` ranges), and the portrait load.
-3. Keep the 5, 10 and 30 second timeouts.
+1. Add `reqwest` 0.13 and `tokio` (feature `rt`). Pick the TLS features (spec section 7.1): the default `aws-lc-rs`, or `rustls-no-provider` with `ring`. Build on each release target before you pick.
+2. Convert `sources/mod.rs`, `sources/evescout.rs`, `sources/nexum.rs` (the `SIG_WORKERS` threads become `buffer_unordered(8)`), `esi/client.rs`, `sde_update.rs` (an async `RangeSource` that keeps `HEAD` and explicit `start-end` ranges), and the portrait load. Each blocking caller enters a current-thread `tokio` runtime with `block_on`.
+3. In `esi/sso.rs`, replace the `ureq` `Http` struct with the `oauth2` closure of spec section 7.1, rule 5.
+4. Keep the 5, 10 and 30 second timeouts, the `MAX_BODY` limit, and no redirects on the token endpoint.
+5. Remove `ureq` from `Cargo.toml`.
 
-**Done when:** no `ureq` call is left outside the native `Http` implementation. The local test servers still pass every test.
+**Done when:** the workspace has no `ureq`. No shared async function has a `Send` bound. The local test servers still pass every test.
 
 ### Task 8: async loop bodies (about 2 days)
 
-Make the loop bodies of `Refresher` and `Tracker` async functions. On native, the current threads run them with `pollster`, and the control channels and intervals do not change.
+Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_timer::Delay` for the intervals. On native, the current threads run them with `tokio` `block_on`, and the control channels and intervals do not change.
 
 **Done when:** native tests pass, and the loop bodies use no blocking call.
 
 ### Task 9: target gating (about 1 day)
 
 1. Move the native-only dependencies and features of spec section 7 into `cfg(not(target_arch = "wasm32"))` tables. Gate `#[global_allocator]`, the frame limiter, `std::env::args`, `Listener`, `Keyring` and the file store.
-2. Add `chrono/wasmbind` and `getrandom` 0.2 with `js` for wasm.
+2. Add `chrono/wasmbind`, `getrandom` 0.2 with `js`, and `futures-timer/wasm-bindgen` for wasm. Make `tokio` native-only.
 3. Add a CI job: `cargo check` and `cargo clippy` for `router_core` and `router_egui` on `wasm32-unknown-unknown`.
 
 **Done when:** both checks are green in CI, on stable.
@@ -124,7 +127,7 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. On native, th
 ### Task 10: the engine worker, single thread (about 3 days)
 
 1. Add the `router_engine` crate (`cdylib`) with a `#[wasm_bindgen]` worker entry and a message loop.
-2. Add the `fetch` `Http` for the worker scope, and the IndexedDB `Store`.
+2. Add the IndexedDB `Store` with `indexed_db_futures`. `reqwest` already works in the worker scope.
 3. Implement the SDE start of spec section 5: read the blob, else run phase A and phase B. Send `Progress`, `Blob` and `Map`.
 4. Answer `Route` messages with the drop rules of spec section 4.4.
 
@@ -136,15 +139,15 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. On native, th
 2. Add `web/index.html` and the loader. The loader picks `engine-st` for now.
 3. Add the engine client: post messages, keep the newest request ID, apply `Map` to the mirror, compare fingerprints.
 4. Show the SDE progress on the splash screen.
-5. Add the `localStorage` `Store` for the config.
+5. Add the `localStorage` `Store` for the config, with `gloo-storage`.
 6. Measure the first load in Chrome: download time, distill time, and the peak memory of the engine worker.
 
 **Done when:** the planner runs in a browser with the real CCP SDE, and a reload reads the blob and sends no SDE request except `latest.jsonl`. The measurements are in spec section 5.3.
 
 ### Task 12: build script and smoke test (about 1.5 days)
 
-1. Write `web/build.sh` (spec section 11). Pin the nightly in it.
-2. Serve `dist/` in development with the COOP and COEP headers of spec section 10.
+1. Write `web/build.sh` and `Trunk.toml` (spec section 11). Pin the nightly in `build.sh`.
+2. Set the COOP and COEP headers of spec section 10 in `[serve] headers`, so `trunk serve` is the development server. Write no server of our own.
 3. Add a CI job that builds `dist/` and runs a Playwright test: open the page, wait for the planner, enter Jita and Amarr, and expect a route.
 4. Record the compressed wasm sizes and set the size budget.
 
@@ -168,7 +171,7 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. On native, th
 
 ### Task 15: EVE-Scout and the refresh (about 1 day)
 
-Run the `Refresher` in the engine worker with a timer future. Fetch EVE-Scout directly. Keep its cache in IndexedDB. Send a `Map` message after each refresh. Wire `F5` to `Refresh`.
+Run the `Refresher` in the engine worker with `spawn_local` and `futures_timer::Delay`. Fetch EVE-Scout directly. Keep its cache in IndexedDB. Send a `Map` message after each refresh. Wire `F5` to `Refresh`.
 
 **Done when:** EVE-Scout wormholes show in a browser and refresh each 5 minutes. The `Log` window shows each fetch.
 
@@ -188,7 +191,7 @@ Needs task 0.
 
 1. Add the web login of spec section 8.2, and the `localStorage` `TokenStore`.
 2. Run the `Tracker` on the UI thread with `spawn_local`.
-3. Load portraits with a CORS `fetch` and decode them with `image`.
+3. Load portraits with `reqwest` (CORS mode by default) and decode them with `image`.
 4. Decide the two-tab rule (spec section 12). The candidate is a Web Lock around the tracker.
 5. Record the code-exchange error shape and whether refresh tokens rotate, from a real login.
 
@@ -206,4 +209,4 @@ Needs task 0.
 
 ## Total
 
-About 33 working days, so 6 to 7 weeks for one developer. Task 7 and the browser testing of tasks 1, 14 and 18 carry the most risk.
+About 32 to 33 working days, so 6 to 7 weeks for one developer. Task 7 and the browser testing of tasks 1, 14 and 18 carry the most risk.
