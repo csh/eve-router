@@ -51,7 +51,8 @@ The project owner made these decisions on 2026-10-10.
 | SDE | Fetch from CCP at load time. Distill in the engine worker. Store as an `rkyv` blob in IndexedDB. The app opens only when the full blob exists (section 5.2). | A later load reads one small record and skips the 191 MB of JSON. One load step means one blob, no map without hulls, and no hull that waits for a table. |
 | Nexum | A same-origin proxy only. No direct call from the browser. | A tested Nexum server allows only its own origin (section 3). |
 | Login | Client-side PKCE, with separate EVE app registrations for production and development | EVE SSO supports public clients. No server holds a token. |
-| Toolchain | Native stays on stable. The web build uses one pinned nightly. | The threaded engine needs `-Z build-std` and atomics. |
+| Toolchain | Everything builds on stable, except `engine-mt`, which uses one pinned nightly. | Only the threaded engine needs `-Z build-std` and atomics. |
+| Build runner | `cargo-make`, with one `Makefile.toml` at the repository root. No shell scripts. | It runs on Linux, macOS and Windows. Each task sets its own toolchain and `env`, so the nightly and the atomics `RUSTFLAGS` apply to `engine-mt` only. `install_crate` pins the tool versions. |
 | HTTP | `reqwest` 0.13 on both targets. It replaces `ureq`. | One client for native and wasm. On wasm it uses `fetch`, with timeouts through `AbortController`. Our own `Http` trait and two implementations are not needed. |
 | Async on native | A current-thread `tokio` runtime on each existing loop thread. Our only `tokio` feature is `rt`. | Async `reqwest` needs `tokio` on native, and `pollster` cannot drive it. |
 | Storage | One concrete `Store` type in `router_core::store`, with one file for each target: `native.rs` (files) and `web.rs` (IndexedDB). `cfg` picks the file. No trait, no `localStorage`. See section 5.5. | The pattern of `std`, `getrandom` and `web-time`. Each backend reads as plain code, jump to definition goes to the real code, and the wasm CI check fails if the two files drift. An async trait does not work with `dyn` without boxing. One `cfg` type cannot hold two wasm backends, so the UI and the engine both use IndexedDB. |
@@ -303,7 +304,7 @@ A wasm module with shared memory needs `SharedArrayBuffer`, and the browser give
 | Build | Toolchain and flags | Used when |
 | :--- | :--- | :--- |
 | `engine-mt` | Pinned nightly, `-C target-feature=+atomics,+bulk-memory`, `-Z build-std=panic_abort,std`, cargo feature `threads` | `crossOriginIsolated` is true and the pool starts |
-| `engine-st` | The same nightly, no atomics, no `threads` feature | Any other case |
+| `engine-st` | Stable, no atomics, no `threads` feature | Any other case |
 
 The UI loader reads `crossOriginIsolated` and starts the right engine worker. In `engine-st`, the `rayon` calls run on one thread, because `rayon-core` uses the current thread when it cannot start threads. The route code does not change for either build.
 
@@ -392,7 +393,8 @@ Decided on 2026-10-10. Versions are the newest on that date. Do not write a wrap
 | `web-time` | Clock | Section 7, clock seam |
 | `wasm-bindgen-rayon` | Pool threads | `router_engine`, `threads` feature only |
 | `oauth2` 5.0 | PKCE, code exchange, refresh, revoke | Kept. See the adapter rule below. |
-| `trunk` | UI build and development server | It builds the UI, runs `wasm-bindgen` and `wasm-opt`, and sets the development COOP and COEP headers through `[serve] headers` in `Trunk.toml`. It also builds `data-type="worker"` assets. `engine-mt` needs its own `RUSTFLAGS` and `-Z build-std`, so `build.sh` builds it outside `trunk` (section 11). |
+| `trunk` | UI build and development server | It builds the UI, runs `wasm-bindgen` and `wasm-opt`, and sets the development COOP and COEP headers through `[serve] headers` in `Trunk.toml`. It also builds `data-type="worker"` assets. `engine-mt` needs its own `RUSTFLAGS` and `-Z build-std`, so `cargo-make` builds both engines outside `trunk` (section 11). |
+| `cargo-make` | The build runner (section 11) | Tasks in `Makefile.toml`. Per-task `toolchain` and `env`. Its built-in `duckscript` runs the hash and rename steps on every OS (`sha256sum` is in the `duckscript` SDK). The last release was 0.37.24, on 2025-01-18. |
 
 **Do not use**
 
@@ -494,12 +496,13 @@ crates/
   router_core/     + engine protocol, store/ (native.rs, web.rs), SdeBlob, streaming distill
   router_egui/     + lib.rs (#[wasm_bindgen(start)] -> WebRunner), engine client, map mirror
   router_engine/   new: cdylib, the engine worker entry and message loop
+Makefile.toml      cargo-make tasks: web, serve, engines, engine-mt, engine-st
 web/
   index.html       canvas, loader that picks engine-mt or engine-st
   _headers
   proxy/           the Cloudflare Worker script for Nexum
-  build.sh         builds ui, engine-mt and engine-st into dist/
   Trunk.toml       dev-server headers, post_build hook for the engines
+  wrangler.toml
 
 dist/
   index.html              no-cache, holds the engine folder name
@@ -507,11 +510,22 @@ dist/
   engine-<hash>/          immutable
     engine-mt.js, engine-mt_bg.wasm, snippets/
     engine-st.js, engine-st_bg.wasm
-  wrangler.toml
 ```
 
-- `web/build.sh` runs `trunk build` for the UI, and `cargo build` plus `wasm-bindgen --target web` for both engine builds. `trunk serve` is the development server. `Trunk.toml` sets the COOP and COEP headers of section 10 in `[serve] headers`, and a `post_build` hook runs the two engine builds into `$TRUNK_STAGING_DIR`, so `trunk serve` and `trunk build` both give a full `dist/`. The `RUSTFLAGS` for atomics apply to the `engine-mt` command only, never through `.cargo/config.toml`.
-- Engine cache names: `build.sh` builds both engines into a temporary folder, hashes all its files, and renames the folder to `engine-<hash>`, with the first 16 hex digits of the SHA-256. The `post_build` hook writes that name into the staged `index.html` in place of a placeholder, and the loader reads it from there. A folder, not renamed files, because the `wasm-bindgen` glue finds its `.wasm` and its `snippets/` (with the `wasm-bindgen-rayon` helpers) by relative path. A new deploy thus never pairs a new UI with an old cached engine. The protocol version in `Init` stays as a second check.
+The `Makefile.toml` tasks:
+
+| Task | What it does | Toolchain and `env` |
+| :--- | :--- | :--- |
+| `engine-st` | `cargo build -p router_engine --target wasm32-unknown-unknown --release`, then `wasm-bindgen --target web` | Stable |
+| `engine-mt` | The same, with `--features threads` and `-Z build-std=panic_abort,std` | The pinned nightly. `RUSTFLAGS` with `+atomics,+bulk-memory`, set in this task only. |
+| `engines` | Runs both, hashes the output and renames the folder to `engine-<hash>` (`duckscript`) | None |
+| `web` | `trunk build --release`. Its `post_build` hook runs `cargo make engines` into the staging folder. | Stable |
+| `serve` | `trunk serve`, with the same hook | Stable |
+
+`install_crate` pins `trunk` and `wasm-bindgen-cli`. The `wasm-bindgen-cli` version must equal the `wasm-bindgen` crate version in `Cargo.lock`, or the glue does not load.
+
+- `cargo make web` builds `dist/`, and `cargo make serve` is the development server. Both run `trunk` for the UI, and the `post_build` hook builds the engines. `Trunk.toml` sets the COOP and COEP headers of section 10 in `[serve] headers`, and a `post_build` hook runs the two engine builds into `$TRUNK_STAGING_DIR`, so `trunk serve` and `trunk build` both give a full `dist/`. The `RUSTFLAGS` for atomics apply to the `engine-mt` task only, never through `.cargo/config.toml`.
+- Engine cache names: the `engines` task builds both engines into a temporary folder, hashes all its files, and renames the folder to `engine-<hash>`, with the first 16 hex digits of the SHA-256. The `post_build` hook writes that name into the staged `index.html` in place of a placeholder, and the loader reads it from there. A folder, not renamed files, because the `wasm-bindgen` glue finds its `.wasm` and its `snippets/` (with the `wasm-bindgen-rayon` helpers) by relative path. A new deploy thus never pairs a new UI with an old cached engine. The protocol version in `Init` stays as a second check.
 - `wasm-opt`: try `-O3` and `-Os`. Keep `-Os` unless it slows top 20 by more than 10 percent.
 - Size budget: set after the first build, then enforce in CI. Serve with Brotli.
 

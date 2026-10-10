@@ -160,9 +160,9 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 
 **Done when:** the planner runs in a browser with the real CCP SDE, and a reload reads the blob and sends no SDE request except `latest.jsonl`. The measurements are in spec section 5.3.
 
-### Task 12: build script and smoke test (about 1.5 days)
+### Task 12: build tasks and smoke test (about 1.5 days)
 
-1. Write `web/build.sh` and `Trunk.toml` (spec section 11). Pin the nightly in `build.sh`.
+1. Write `Makefile.toml` and `web/Trunk.toml` (spec section 11). Pin the nightly in the `engine-mt` task, and pin `trunk` and `wasm-bindgen-cli` with `install_crate`. Run `cargo make web` on Linux, macOS and Windows.
 2. Set the COOP and COEP headers of spec section 10 in `[serve] headers`, so `trunk serve` is the development server. Write no server of our own.
 3. Add a CI job that builds `dist/` and runs a Playwright test: open the page, wait for the planner, enter Jita and Amarr, and expect a route.
 4. Record the compressed wasm sizes and set the size budget.
