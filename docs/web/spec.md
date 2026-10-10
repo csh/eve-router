@@ -1,6 +1,6 @@
 # Web client: specification
 
-Status: draft 3, 2026-10-10. Draft 2 adds the crate choices (sections 2 and 7.1). Draft 3 adds the hull IDs (section 4.3) and the `Store` layout (section 5.5). This document says what the browser build of `router_egui` must do, and why. The task order is in [plan.md](plan.md).
+Status: draft 4, 2026-10-10. Draft 2 adds the crate choices (sections 2 and 7.1). Draft 3 adds the hull IDs (section 4.3) and the `Store` layout (section 5.5). Draft 4 adds the one-step first load (5.2), the `flume` outbox (4.3), the engine folder hash and `cargo-make` (11). This document says what the browser build of `router_egui` must do, and why. The task order is in [plan.md](plan.md).
 
 **Terms**
 
@@ -125,7 +125,7 @@ The UI owns the config and the bridge text, and only the owner of a key writes i
 
 The UI needs the map each frame: the system search, the route table, the labels, the pilots. A round trip for each of these is not possible in an immediate-mode UI. Thus the UI thread keeps its own `Universe`, built from the same inputs with the same functions:
 
-1. the blob bytes (the engine worker sends them one time),
+1. the blob bytes (the engine worker sends them one time for each SDE build),
 2. the bridge text,
 3. the merged wormhole list and the `now` value that the engine worker used.
 
@@ -393,7 +393,7 @@ Decided on 2026-10-10. Versions are the newest on that date. Do not write a wrap
 | `web-time` | Clock | Section 7, clock seam |
 | `wasm-bindgen-rayon` | Pool threads | `router_engine`, `threads` feature only |
 | `oauth2` 5.0 | PKCE, code exchange, refresh, revoke | Kept. See the adapter rule below. |
-| `trunk` | UI build and development server | It builds the UI, runs `wasm-bindgen` and `wasm-opt`, and sets the development COOP and COEP headers through `[serve] headers` in `Trunk.toml`. It also builds `data-type="worker"` assets. `engine-mt` needs its own `RUSTFLAGS` and `-Z build-std`, so `cargo-make` builds both engines outside `trunk` (section 11). |
+| `trunk` | UI build and development server | It builds the UI, runs `wasm-bindgen` and `wasm-opt`, and sets the development COOP, COEP and CSP headers through `[serve] headers` in `Trunk.toml`. It also builds `data-type="worker"` assets. `engine-mt` needs its own `RUSTFLAGS` and `-Z build-std`, so `cargo-make` builds both engines outside `trunk` (section 11). |
 | `cargo-make` | The build runner (section 11) | Tasks in `Makefile.toml`. Per-task `toolchain` and `env`. Its built-in `duckscript` runs the hash and rename steps on every OS (`sha256sum` is in the `duckscript` SDK). The last release was 0.37.24, on 2025-01-18. |
 
 **Do not use**
@@ -485,7 +485,7 @@ The `_headers` file sets these headers on every response:
 
 The app opens no popup (SSO uses a redirect), and it has no third-party embed, so COOP and COEP break nothing known. No user-chosen host appears in `connect-src`, because Nexum uses the proxy.
 
-The development server sends the same COOP and COEP headers, so `engine-mt` runs in development too.
+The development server sends the same COOP, COEP and CSP headers. Thus `engine-mt` runs in development too, and a CSP error shows in development, not first in production.
 
 ---
 
@@ -516,13 +516,13 @@ The `Makefile.toml` tasks:
 
 | Task | What it does | Toolchain and `env` |
 | :--- | :--- | :--- |
-| `engine-st` | `cargo build -p router_engine --target wasm32-unknown-unknown --release`, then `wasm-bindgen --target web` | Stable |
+| `engine-st` | `cargo build -p router_engine --target wasm32-unknown-unknown --release`, then `wasm-bindgen --target web`, then `wasm-opt` | Stable |
 | `engine-mt` | The same, with `--features threads` and `-Z build-std=panic_abort,std` | The pinned nightly. `RUSTFLAGS` with `+atomics,+bulk-memory`, set in this task only. |
 | `engines` | Runs both, hashes the output and renames the folder to `engine-<hash>` (`duckscript`) | None |
 | `web` | `trunk build --release`. Its `post_build` hook runs `cargo make engines` into the staging folder. | Stable |
 | `serve` | `trunk serve`, with the same hook | Stable |
 
-`install_crate` pins `trunk` and `wasm-bindgen-cli`. The `wasm-bindgen-cli` version must equal the `wasm-bindgen` crate version in `Cargo.lock`, or the glue does not load.
+`install_crate` pins `trunk`, `wasm-bindgen-cli` and `wasm-opt`. `trunk` runs `wasm-opt` for the UI, but the engines are built outside `trunk`, so their tasks run it themselves. The `wasm-bindgen-cli` version must equal the `wasm-bindgen` crate version in `Cargo.lock`, or the glue does not load.
 
 - `cargo make web` builds `dist/`, and `cargo make serve` is the development server. Both run `trunk` for the UI, and the `post_build` hook builds the engines. `Trunk.toml` sets the COOP and COEP headers of section 10 in `[serve] headers`, and a `post_build` hook runs the two engine builds into `$TRUNK_STAGING_DIR`, so `trunk serve` and `trunk build` both give a full `dist/`. The `RUSTFLAGS` for atomics apply to the `engine-mt` task only, never through `.cargo/config.toml`.
 - Engine cache names: the `engines` task builds both engines into a temporary folder, hashes all its files, and renames the folder to `engine-<hash>`, with the first 16 hex digits of the SHA-256. The `post_build` hook writes that name into the staged `index.html` in place of a placeholder, and the loader reads it from there. A folder, not renamed files, because the `wasm-bindgen` glue finds its `.wasm` and its `snippets/` (with the `wasm-bindgen-rayon` helpers) by relative path. A new deploy thus never pairs a new UI with an old cached engine. The protocol version in `Init` stays as a second check.

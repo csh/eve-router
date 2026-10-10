@@ -1,6 +1,6 @@
 # Web client: plan
 
-Status: draft 3, 2026-10-10. Draft 2 adds the crate choices of spec section 7.1. Draft 3 adds task 4a and the `Store` layout. The tasks that make `router_egui` run in a browser. The requirements and the reasons are in [spec.md](spec.md). Section numbers below point into that document.
+Status: draft 4, 2026-10-10. Draft 2 adds the crate choices of spec section 7.1. Draft 3 adds task 4a and the `Store` layout. Draft 4 matches spec draft 4. The tasks that make `router_egui` run in a browser. The requirements and the reasons are in [spec.md](spec.md). Section numbers below point into that document.
 
 ## Rules for every task
 
@@ -116,7 +116,7 @@ The reasons are in spec sections 2 and 4.3.
 
 **Done when:** a test builds a map two times from the same inputs and gets the same fingerprint. A test sends a `Route` message to the in-process engine, and the reply routes match `Settings::router(...).routes(...)` on the mirror. Native tests pass.
 
-### Task 7: move HTTP to `reqwest` (about 2 to 3 days, the largest task)
+### Task 7: move HTTP to `reqwest` (about 2 to 3 days)
 
 1. Add `reqwest` 0.13 and `tokio` (feature `rt`). Pick the TLS features (spec section 7.1): the default `aws-lc-rs`, or `rustls-no-provider` with `ring`. Build on each release target before you pick.
 2. Convert `sources/mod.rs`, `sources/evescout.rs`, `sources/nexum.rs` (the `SIG_WORKERS` threads become `buffer_unordered(8)`), `esi/client.rs`, `sde_update.rs` (an async `RangeSource` that keeps `HEAD` and explicit `start-end` ranges), and the portrait load. Each blocking caller enters a current-thread `tokio` runtime with `block_on`.
@@ -134,7 +134,7 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 
 ### Task 9: target gating (about 1 day)
 
-1. Move the native-only dependencies and features of spec section 7 into `cfg(not(target_arch = "wasm32"))` tables. Gate `#[global_allocator]`, the frame limiter, `std::env::args`, `Listener`, `Keyring` and the file store.
+1. Move the native-only dependencies and features of spec section 7 into `cfg(not(target_arch = "wasm32"))` tables. Gate `#[global_allocator]`, the frame limiter, `std::env::args`, `Listener` and `Keyring`. `store/mod.rs` already gates the file store (task 3).
 2. Add `chrono/wasmbind`, `getrandom` 0.2 with `js`, and `futures-timer/wasm-bindgen` for wasm. Make `tokio` native-only. Run `cargo tree -i getrandom --target wasm32-unknown-unknown`, and give each `getrandom` version on wasm its browser feature.
 3. Add a CI job: `cargo check` and `cargo clippy` for `router_core` and `router_egui` on `wasm32-unknown-unknown`.
 
@@ -145,7 +145,7 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 1. Add the `router_engine` crate (`cdylib`) with a `#[wasm_bindgen]` worker entry and a message loop.
 2. Add `store/web.rs` with `indexed_db_futures`: the same public API as `native.rs`, with the in-memory copy and the background writes of spec section 5.5. The engine awaits `flush` after a blob write. `reqwest` already works in the worker scope.
 3. Implement the SDE start of spec section 5: read the blob, else download, distill and write the full blob (section 5.2). Send `Progress`, then `Blob` and `Map`.
-4. Answer `Route` messages with the drop rules of spec section 4.4.
+4. Answer `Route` messages with the drop rules of spec section 4.4. Send every message to the UI through the `flume` outbox of spec section 4.3.
 
 **Done when:** a `wasm-bindgen-test` run in headless Chromium syncs the fixture zip from a local server, writes the blob, reads it again on a second start, and answers one `Route` message.
 
@@ -163,7 +163,7 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 ### Task 12: build tasks and smoke test (about 1.5 days)
 
 1. Write `Makefile.toml` and `web/Trunk.toml` (spec section 11). Pin the nightly in the `engine-mt` task, and pin `trunk` and `wasm-bindgen-cli` with `install_crate`. Run `cargo make web` on Linux, macOS and Windows.
-2. Set the COOP and COEP headers of spec section 10 in `[serve] headers`, so `trunk serve` is the development server. Write no server of our own.
+2. Set the COOP, COEP and CSP headers of spec section 10 in `[serve] headers`, so `trunk serve` is the development server. Write no server of our own.
 3. Add a CI job that builds `dist/` and runs a Playwright test: open the page, wait for the planner, enter Jita and Amarr, and expect a route.
 4. Record the compressed wasm sizes and set the size budget.
 5. Put the engines in a folder named by their content hash, and write the name into `index.html` (spec section 11). Add the `/engine-*/` row to `_headers`.
@@ -181,14 +181,14 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 
 1. Add the `threads` feature to `router_engine` with `wasm-bindgen-rayon`. Build `engine-mt` with the flags of spec section 6.1.
 2. The loader reads `crossOriginIsolated` and picks `engine-mt` or `engine-st`. A failed pool start uses `engine-st`.
-3. Run searches with `rayon::spawn`, and add the shared cancel flag of spec section 4.4.
+3. Run searches with `rayon::spawn`, send each reply into the outbox, and add the shared cancel flag of spec section 4.4.
 4. Measure the targets of spec section 6.4 in Chrome, Firefox and Safari. Set the pool size and the shared memory maximum.
 
 **Done when:** the targets pass in Chrome and no target browser fails. Else ship `engine-st` only, and record why. The numbers are in spec section 6. This is milestone M2.
 
 ### Task 15: EVE-Scout and the refresh (about 1 day)
 
-Run the `Refresher` in the engine worker with `spawn_local` and `futures_timer::Delay`. Fetch EVE-Scout directly. Keep its cache in IndexedDB. Send a `Map` message after each refresh. Wire `F5` to `Refresh`.
+Run the `Refresher` in the engine worker with `spawn_local` and `futures_timer::Delay`. Fetch EVE-Scout directly. Keep its cache in the `Store`, as an engine-owned key. Send a `Map` message after each refresh. Wire `F5` to `Refresh`.
 
 **Done when:** EVE-Scout wormholes show in a browser and refresh each 5 minutes. The `Log` window shows each fetch.
 
