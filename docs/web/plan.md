@@ -58,7 +58,8 @@ The largest unknown goes first. Work on a scratch branch. Do not merge it.
 2. Build it for `wasm32-unknown-unknown` with a pinned nightly, atomics, `build-std` and `wasm-bindgen-rayon`.
 3. Load it in a Web Worker on a page with COOP and COEP. Time top 5 and top 20 from Jita to ND-X7X with 1, 2, 4 and 8 threads.
 4. Run it in Chrome, Firefox and Safari, and in iOS Safari if a device is available.
-5. Start the worker two ways: a hand-written loop with a transferred `ArrayBuffer`, and `gloo-worker` with a custom `Codec` that carries the `rkyv` bytes. Each one must start the `wasm-bindgen-rayon` pool before the first search.
+5. Send each result from the pool task into a `flume` outbox, and post from one `spawn_local` task (spec section 4.3). Measure the time from `send` on a pool thread to the post, in each browser. If a browser fails, run the search on the engine worker itself with no `rayon::spawn`, and record why.
+6. Start the worker two ways: a hand-written loop with a transferred `ArrayBuffer`, and `gloo-worker` with a custom `Codec` that carries the `rkyv` bytes. Each one must start the `wasm-bindgen-rayon` pool before the first search.
 
 **Done when:** a table with the times and a pass or fail for each browser is in spec section 6. Pin the nightly that worked. Spec section 7.1 records the `gloo-worker` result: keep it only if it starts the pool in Chrome and Firefox, else keep the hand-written loop. If no browser gets a 2-times gain at 4 threads, stop and talk to the owner before task 14.
 
@@ -127,7 +128,7 @@ The reasons are in spec sections 2 and 4.3.
 
 ### Task 8: async loop bodies (about 2 days)
 
-Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_timer::Delay` for the intervals. On native, the current threads run them with `tokio` `block_on`, and the control channels and intervals do not change.
+Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_timer::Delay` for the intervals. On native, the current threads run them with `tokio` `block_on`, and the intervals do not change. Move the control channels from `std::sync::mpsc` to `flume` (spec section 7.1): the loops use `recv_async`, and the UI keeps `try_recv`.
 
 **Done when:** native tests pass, and the loop bodies use no blocking call.
 

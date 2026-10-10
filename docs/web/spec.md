@@ -140,6 +140,17 @@ Rules:
 
 The engine protocol lives in `router_core::engine`, so a native test can drive it with no browser. Each message is an `rkyv` archive in an `ArrayBuffer`, transferred and not copied. A hand-written loop on `wasm-bindgen` and `web-sys` sends the messages (section 7.1 explains why not `gloo-worker`). The UI and the engine come from one build, but the first message still carries a protocol version.
 
+**The outbox.** Every message from the engine to the UI goes through one `flume` channel, the outbox. One task, started once with `spawn_local`, receives from it with `recv_async`, encodes each message and posts it. No other code posts to the UI.
+
+```rust
+let (outbox, rx) = flume::unbounded::<EngineToUi>();
+spawn_local(async move {
+    while let Ok(msg) = rx.recv_async().await { post_to_ui(msg); }
+});
+```
+
+Each sender is a clone of `outbox`. A pool thread, the refresh task and the SDE download all send into it, from any thread. A send from a pool thread wakes the outbox task through the multi-thread futures executor of an atomics build (`Atomics.waitAsync`, or a same-origin helper worker where the browser lacks it). If the engine later streams routes one by one, the pool threads send more messages, and the outbox does not change.
+
 | Direction | Message | Content |
 | :--- | :--- | :--- |
 | UI to engine | `Init` | Protocol version, Nexum settings, EVE-Scout switches, bridge text, pool size |
@@ -169,7 +180,7 @@ The UI already waits `APPLY_DELAY` (500 ms) after the last change before it sear
 
 1. The UI keeps only the newest request ID. It drops any older reply.
 2. The engine worker keeps only the newest queued `Route` message. It drops older queued ones without a search.
-3. In threaded mode, the engine worker runs a search on the pool with `rayon::spawn`, so its own message loop stays free. A newer `Route` message sets a shared `AtomicBool`. `k_shortest`, `alternatives` and `routes` read it between loop passes, and stop early. In single-thread mode a search cannot stop. That is acceptable, because rule 2 still drops the queued requests.
+3. In threaded mode, the engine worker runs a search on the pool with `rayon::spawn`, so its own message loop stays free. The pool task sends its `Routes` reply into the outbox (section 4.3). Inside the search, `par_iter` and `rayon::join` spread and collect the work, so each request gives one reply. In single-thread mode, the engine worker calls the search directly and sends the reply into the same outbox. A newer `Route` message sets a shared `AtomicBool`. `k_shortest`, `alternatives` and `routes` read it between loop passes, and stop early. In single-thread mode a search cannot stop. That is acceptable, because rule 2 still drops the queued requests.
 
 ---
 
@@ -377,6 +388,7 @@ Decided on 2026-10-10. Versions are the newest on that date. Do not write a wrap
 | `rkyv` | The blob and the engine messages | With validation (`bytecheck`). No container format of our own. |
 | `indexed_db_futures` 0.6 | IndexedDB | Inside `store/web.rs` only, on the UI thread and in the engine worker. Futures in place of IndexedDB callbacks. |
 | `gloo-storage` 0.4 | `sessionStorage` | The login state only (section 8.2). UI thread only. |
+| `flume` 0.12 | All channels: the engine outbox (section 4.3), and the control channels of `Refresher` and `Tracker` | `default-features = false, features = ["async"]`. One type gives `try_recv` (the UI, each frame), `recv` and `recv_timeout` (native threads) and `recv_async` (async loops), on both targets. Speed is not the reason: the outbox carries a few messages each second. It uses `std::sync::Mutex`. In an atomics build, a contended lock blocks with `Atomics.wait`, which a browser forbids on the main thread. Thus never call a blocking `flume` method on the main thread of an atomics build. The UI wasm has no atomics, and the atomics build runs only in Web Workers, so the current layout obeys this rule. |
 | `web-time` | Clock | Section 7, clock seam |
 | `wasm-bindgen-rayon` | Pool threads | `router_engine`, `threads` feature only |
 | `oauth2` 5.0 | PKCE, code exchange, refresh, revoke | Kept. See the adapter rule below. |
@@ -388,6 +400,7 @@ Decided on 2026-10-10. Versions are the newest on that date. Do not write a wrap
 | :--- | :--- |
 | `ureq` | `reqwest` covers both targets |
 | `pollster` | It cannot drive native `reqwest`. `tokio` `block_on` does the same job. |
+| `futures::channel`, `std::sync::mpsc` | `flume` gives one channel type for the sync, blocking and async sides. `futures::channel` has only the async side, and `std::sync::mpsc` only the sync side. |
 | `gloo-net` | `reqwest` covers HTTP |
 | `rexie`, `idb` | `indexed_db_futures` chosen. `rexie` had no release after 2024-08. |
 | A storage trait (`dyn Store`) | One concrete type with a file for each target is easier to read (section 5.5). An async trait does not work with `dyn` without boxing. |
