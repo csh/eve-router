@@ -87,12 +87,13 @@ Add a `Store` trait (`get`, `set`, `delete` of named bytes) and a file implement
 
 The reasons are in spec sections 2 and 4.3.
 
-1. Add `HullId`, an index into the `HullTable`. Replace `HullClass = &'static Hull` with it in `ansiblex.rs`, `settings.rs`, `labels.rs`, `esi/pilots.rs` and `settings_window.rs`.
+1. Add `HullRef` (`Ship(type_id)` or `Group(group_id)`, spec section 4.3). Replace `HullClass = &'static Hull` with it in `ansiblex.rs`, `settings.rs`, `labels.rs`, `esi/pilots.rs` and `settings_window.rs`. Keep `group_id` on each `Hull`, from `ships.json`.
 2. Remove the `static TABLE: OnceLock`, `ansiblex::init` and `ansiblex::table`. Put an `Arc<HullTable>` in `Universe`. `BridgeRules::cost` and the other readers take it from the `Universe`.
 3. Make `same_hull` and `same_class` compare IDs, not pointers.
-4. Keep the hull name in the config file.
+4. Keep the hull name in the config file. A ship name resolves to `Ship`, and a group name or key resolves to `Group`.
+5. Make sure that the picker and a followed pilot always give `Ship`.
 
-**Done when:** no `OnceLock` and no `&'static Hull` are left in `router_core`. A test builds two `Universe` values with different hull tables in one process. The config file format does not change. Native tests pass.
+**Done when:** no `OnceLock` and no `&'static Hull` are left in `router_core`. A test builds two `Universe` values with different hull tables in one process. A test gives two ships of one group with different masses, and expects each ship's own mass, not the group maximum. The config file format does not change. Native tests pass.
 
 ### Task 5: the blob (about 1.5 days)
 

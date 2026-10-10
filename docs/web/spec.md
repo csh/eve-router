@@ -56,7 +56,7 @@ The project owner made these decisions on 2026-10-10.
 | Async on native | A current-thread `tokio` runtime on each existing loop thread. Our only `tokio` feature is `rt`. | Async `reqwest` needs `tokio` on native, and `pollster` cannot drive it. |
 | Browser APIs | `gloo-storage` for `localStorage` and `sessionStorage`. `indexed_db_futures` for IndexedDB. | Raw `web-sys` for these APIs is callbacks and `JsValue` errors. |
 | Timers | `futures-timer` on both targets | One API on every desktop target and on wasm32 |
-| Hull identity | A hull is a `HullId` (an index into the `HullTable`). The map owns the table. No global table, no `&'static Hull`. | A pointer means nothing in the memory of another wasm module, and it cannot go into a message. An ID can. See section 4.3. |
+| Hull identity | A hull is the EVE type ID of one ship. A group is only a fallback that the user names in the config or on the command line. The map owns the hull table. No global table, no `&'static Hull`. | A pointer means nothing in the memory of another wasm module, and it cannot go into a message. A type ID can, and it is stable across SDE builds. A group uses the highest cost and mass of its ships, so the engine must get the exact ship when the app knows it. See section 4.3. |
 | Crate layout | `router_core` stays one crate. Plan task 9 decides on a `router_data` split. | A split pays only when a build can drop a dependency. Under a pure-map split, each build still needs `router_core`, so the split adds moves and no smaller build. |
 | Worker plumbing | Hand-written message loop. Plan task 1 also tests `gloo-worker`. | `gloo-worker` has serde-only codecs and no transfer (section 7.1). Nobody has shown it with `wasm-bindgen-rayon`. |
 
@@ -150,14 +150,16 @@ The engine protocol lives in `router_core::engine`, so a native test can drive i
 | Engine to UI | `Routes` | Request ID, generation, routes, favourite distances, the order note, an error text, the search time |
 | Engine to UI | `Failed` | A fatal error text for the splash screen |
 
-`Settings` goes into the `Route` message as it is, with no translation record. It holds plain data only: the hull as a `HullId`, and the capital and favourites as `NodeIndex` values. Both sides build the `HullTable` from the same blob in the same order, so one `HullId` names one hull on both sides, as rule 2 of section 4.2 does for `NodeIndex`.
+`Settings` goes into the `Route` message as it is, with no translation record. It holds plain data only: the hull as a `HullRef`, and the capital and favourites as `NodeIndex` values.
 
 The hull rules:
 
-1. `HullId` is an index into the `HullTable`, which holds the ships and the groups. It is valid only with the table that it came from.
-2. `Universe` holds the table as an `Arc<HullTable>`, so a map clone stays cheap. Code that needs hull data reads it from the `Universe` that it already gets. No function reads a global.
-3. "Same hull" compares `HullId` values, not pointers.
-4. On disk, the config keeps the hull name, as now (`cfg.hull`). A name stays valid across SDE builds. A `HullId` does not.
+1. `HullRef` is `Ship(type_id)` or `Group(group_id)`, with the EVE IDs from the SDE. Both IDs are stable across SDE builds, and they mean the same thing in both wasm modules. No index has to match.
+2. The UI sends `Ship` whenever it knows the ship: the hull picker lists ships only, and a followed pilot gives the type ID of the current ship. The engine then uses the cost and the mass of that exact ship.
+3. `Group` is only for a group that the user names in the config or on the command line (for example `black-ops`). A group takes the highest bridge cost and the highest mass of its ships (`ansiblex.rs`, `HullTable::new`). Thus it is a worst case, not the cost of one ship. In the SDE of 2026-10-10, all 48 groups have one cost each, but masses differ in a group (Special Edition Yachts: 1.0 to 13.1 million kg), and CCP can change the cost of one ship.
+4. `Universe` holds the `HullTable` as an `Arc<HullTable>`, so a map clone stays cheap. Lookups go from the ID to the row in that table. Code that needs hull data reads it from the `Universe` that it already gets. No function reads a global.
+5. "Same hull" compares `HullRef` values, not pointers.
+6. On disk, the config keeps the hull name, as now (`cfg.hull`). A user can edit the name in `eve-router.json` by hand. An unknown name gives the "Unknown hull" error, as now.
 
 ### 4.4 Stale requests
 
@@ -227,7 +229,7 @@ Rules:
 1. Check the bytes with `rkyv` validation (`bytecheck`) before any read. IndexedDB data is not trusted.
 2. The IndexedDB key holds the format version (`sde-blob-v1`). A wrong version or a failed check deletes the record and starts a download.
 3. Read the bytes into an `rkyv::util::AlignedVec` before access. A browser has no `mmap`, so this is one copy of a small buffer.
-4. The blob replaces `ansiblex::init(sde_dir)`. The `HullTable` comes from the blob and lives in the `Universe` (section 4.3). A new SDE build found during a session thus gives a new map with a new table. The UI maps its `Settings` hull to the new table by name.
+4. The blob replaces `ansiblex::init(sde_dir)`. The `HullTable` comes from the blob and lives in the `Universe` (section 4.3). A new SDE build found during a session thus gives a new map with a new table. The `HullRef` in `Settings` stays valid, because type IDs and group IDs do not change. A ship that the new SDE removes gives no hull, as an unknown type does now.
 5. Expected size: under 1 MB. Plan task 5 records the real size.
 
 ### 5.5 Storage
