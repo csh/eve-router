@@ -1,6 +1,6 @@
 # Web client: plan
 
-Status: draft 2, 2026-10-10. Draft 2 adds the crate choices of spec section 7.1. The tasks that make `router_egui` run in a browser. The requirements and the reasons are in [spec.md](spec.md). Section numbers below point into that document.
+Status: draft 3, 2026-10-10. Draft 2 adds the crate choices of spec section 7.1. Draft 3 adds task 4a and the `Store` layout. The tasks that make `router_egui` run in a browser. The requirements and the reasons are in [spec.md](spec.md). Section numbers below point into that document.
 
 ## Rules for every task
 
@@ -70,9 +70,12 @@ Use `web_time::Instant` and `web_time::SystemTime` in place of the `std` types i
 
 ### Task 3: storage seam (about 2 days)
 
-Add a `Store` trait (`get`, `set`, `delete` of named bytes) and a file implementation. Move these onto it: `config.rs`, the source caches in `sources/mod.rs`, the character list in `esi/store.rs`, `esi/active.rs`, and the bridge file of `overlay.rs`. Functions take a key, not a `&Path`. `TokenStore` stays as it is.
+1. Add `router_core::store` with `mod.rs` and `native.rs` (spec section 5.5). `Store` has `async fn open`, `fn get`, `fn set`, `fn delete` and `async fn flush`. On native, `open` and `flush` return at once. Write no trait.
+2. Move these onto it: `config.rs`, the source caches in `sources/mod.rs`, the character list in `esi/store.rs`, `esi/active.rs`, and the bridge file of `overlay.rs`. Functions take a `&Store` and a key, not a `&Path`. `TokenStore` stays as it is on native.
+3. Write the key rules into the module doc of `mod.rs`.
+4. Tests keep using temp directories.
 
-**Done when:** no `&Path` argument is left in this logic. The file paths on disk do not change. Native tests pass.
+**Done when:** no `&Path` argument is left in this logic. The file paths on disk do not change. No caller of `get`, `set` or `delete` is async. Native tests pass.
 
 ### Task 4: SDE as bytes, and the streaming distill (about 2 days)
 
@@ -134,12 +137,12 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 2. Add `chrono/wasmbind`, `getrandom` 0.2 with `js`, and `futures-timer/wasm-bindgen` for wasm. Make `tokio` native-only.
 3. Add a CI job: `cargo check` and `cargo clippy` for `router_core` and `router_egui` on `wasm32-unknown-unknown`.
 
-**Done when:** both checks are green in CI, on stable. Record the size of the `cfg` gates in `router_core`, and decide whether to move `sde_update`, `sources` and the `Store` trait to a `router_data` crate (spec section 2). Split only if the engine build can then drop `esi` and its dependencies, and the gates are hard to read.
+**Done when:** both checks are green in CI, on stable. Record the size of the `cfg` gates in `router_core`, and decide whether to move `sde_update`, `sources` and `store` to a `router_data` crate (spec section 2). Split only if the engine build can then drop `esi` and its dependencies, and the gates are hard to read.
 
 ### Task 10: the engine worker, single thread (about 3 days)
 
 1. Add the `router_engine` crate (`cdylib`) with a `#[wasm_bindgen]` worker entry and a message loop.
-2. Add the IndexedDB `Store` with `indexed_db_futures`. `reqwest` already works in the worker scope.
+2. Add `store/web.rs` with `indexed_db_futures`: the same public API as `native.rs`, with the in-memory copy and the background writes of spec section 5.5. The engine awaits `flush` after a blob write. `reqwest` already works in the worker scope.
 3. Implement the SDE start of spec section 5: read the blob, else run phase A and phase B. Send `Progress`, `Blob` and `Map`.
 4. Answer `Route` messages with the drop rules of spec section 4.4.
 
@@ -151,7 +154,7 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 2. Add `web/index.html` and the loader. The loader picks `engine-st` for now.
 3. Add the engine client: post messages, keep the newest request ID, apply `Map` to the mirror, compare fingerprints.
 4. Show the SDE progress on the splash screen.
-5. Add the `localStorage` `Store` for the config, with `gloo-storage`.
+5. Open the `Store` in the async start function, before `WebRunner` starts, and load the config from it.
 6. Measure the first load in Chrome: download time, distill time, and the peak memory of the engine worker.
 
 **Done when:** the planner runs in a browser with the real CCP SDE, and a reload reads the blob and sends no SDE request except `latest.jsonl`. The measurements are in spec section 5.3.
@@ -167,7 +170,7 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 
 ### Task 13: bridges and settings on web (about 1 day)
 
-1. Add a paste box for the SMT bridge list. Save the text in `localStorage`. Send it to the engine with `SetBridges`.
+1. Add a paste box for the SMT bridge list. Save the text in the `Store`. Send it to the engine with `SetBridges`.
 2. Check that settings, avoid lists, favourites and theme survive a full reload.
 
 **Done when:** a pasted bridge list survives a reload and shows in the Shortcuts box. This is milestone M1.
@@ -201,7 +204,7 @@ Run the `Refresher` in the engine worker with `spawn_local` and `futures_timer::
 
 Needs task 0.
 
-1. Add the web login of spec section 8.2, and the `localStorage` `TokenStore`.
+1. Add the web login of spec section 8.2, and a `TokenStore` on the `Store`. Keep the login state in `sessionStorage` with `gloo-storage`.
 2. Run the `Tracker` on the UI thread with `spawn_local`.
 3. Load portraits with `reqwest` (CORS mode by default) and decode them with `image`.
 4. Decide the two-tab rule (spec section 12). The candidate is a Web Lock around the tracker.

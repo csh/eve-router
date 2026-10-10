@@ -1,6 +1,6 @@
 # Web client: specification
 
-Status: draft 2, 2026-10-10. Draft 2 adds the crate choices (sections 2 and 7.1). This document says what the browser build of `router_egui` must do, and why. The task order is in [plan.md](plan.md).
+Status: draft 3, 2026-10-10. Draft 2 adds the crate choices (sections 2 and 7.1). Draft 3 adds the hull IDs (section 4.3) and the `Store` layout (section 5.5). This document says what the browser build of `router_egui` must do, and why. The task order is in [plan.md](plan.md).
 
 **Terms**
 
@@ -54,7 +54,9 @@ The project owner made these decisions on 2026-10-10.
 | Toolchain | Native stays on stable. The web build uses one pinned nightly. | The threaded engine needs `-Z build-std` and atomics. |
 | HTTP | `reqwest` 0.13 on both targets. It replaces `ureq`. | One client for native and wasm. On wasm it uses `fetch`, with timeouts through `AbortController`. Our own `Http` trait and two implementations are not needed. |
 | Async on native | A current-thread `tokio` runtime on each existing loop thread. Our only `tokio` feature is `rt`. | Async `reqwest` needs `tokio` on native, and `pollster` cannot drive it. |
-| Browser APIs | `gloo-storage` for `localStorage` and `sessionStorage`. `indexed_db_futures` for IndexedDB. | Raw `web-sys` for these APIs is callbacks and `JsValue` errors. |
+| Storage | One concrete `Store` type in `router_core::store`, with one file for each target: `native.rs` (files) and `web.rs` (IndexedDB). `cfg` picks the file. No trait, no `localStorage`. See section 5.5. | The pattern of `std`, `getrandom` and `web-time`. Each backend reads as plain code, jump to definition goes to the real code, and the wasm CI check fails if the two files drift. An async trait does not work with `dyn` without boxing. One `cfg` type cannot hold two wasm backends, so the UI and the engine both use IndexedDB. |
+| Binary format | `rkyv` for the blob and for the engine messages | `rkyv` is small, and it removes the need to write and maintain our own container formats. |
+| Browser APIs | `indexed_db_futures` for IndexedDB. `gloo-storage` for `sessionStorage` only (the login state). | Raw `web-sys` for these APIs is callbacks and `JsValue` errors. |
 | Timers | `futures-timer` on both targets | One API on every desktop target and on wasm32 |
 | Hull identity | A hull is the EVE type ID of one ship. A group is only a fallback that the user names in the config or on the command line. The map owns the hull table. No global table, no `&'static Hull`. | A pointer means nothing in the memory of another wasm module, and it cannot go into a message. A type ID can, and it is stable across SDE builds. A group uses the highest cost and mass of its ships, so the engine must get the exact ship when the app knows it. See section 4.3. |
 | Crate layout | `router_core` stays one crate. Plan task 9 decides on a `router_data` split. | A split pays only when a build can drop a dependency. Under a pure-map split, each build still needs `router_core`, so the split adds moves and no smaller build. |
@@ -89,7 +91,7 @@ All cross-origin requests send no credentials. `reqwest` on wasm has no `credent
  Browser tab (cross-origin isolated)
  +----------------------------------------------------------------------------+
  |  UI thread: router_egui wasm (no atomics)                                   |
- |    egui canvas, settings, localStorage, SSO, ESI tracker, portraits         |
+ |    egui canvas, settings, SSO, ESI tracker, portraits, Store (config)       |
  |    map mirror: same Universe as the engine, read-only, for names and draws  |
  |                         |  postMessage (rkyv bytes, transferred)  ^         |
  |                         v                                         |         |
@@ -109,14 +111,14 @@ All cross-origin requests send no credentials. `reqwest` on wasm has no `credent
 
 | Job | Owner | Why |
 | :--- | :--- | :--- |
-| Rendering, input, settings | UI thread | Only the main thread has the canvas and `localStorage`. |
-| SSO, ESI tracker, portraits | UI thread | Small requests. They need `window.location`, `sessionStorage` and `localStorage`. |
+| Rendering, input, settings | UI thread | Only the main thread has the canvas. The UI owns the config keys (section 5.5). |
+| SSO, ESI tracker, portraits | UI thread | Small requests. They need `window.location` and `sessionStorage`. |
 | SDE check, download, distill, blob | Engine worker | The distill reads 191 MB of JSON. It must not freeze the UI. |
 | Wormhole fetch and map build | Engine worker | A large Nexum map is a few MB of JSON, plus one signature request for each wormhole system. |
 | Route search, optimize, favourite distances | Engine worker | Yen's algorithm runs one search for each node of the previous path. Top 20 on a long route thus runs hundreds of searches. |
 | Top-1 search for "re-route from here" (`esi::pilots::route_from`) | UI thread | It is one A* search, much cheaper than a top-N search. It can stay local. |
 
-A Web Worker has no `localStorage`. Thus the UI thread sends the engine worker the values that it needs: the Nexum settings, the EVE-Scout switches and the bridge text.
+The UI owns the config and the bridge text, and only the owner of a key writes it (section 5.5). Thus the UI thread sends the engine worker the values that it needs: the Nexum settings, the EVE-Scout switches and the bridge text.
 
 ### 4.2 The map mirror
 
@@ -234,9 +236,39 @@ Rules:
 
 ### 5.5 Storage
 
-The blob goes to IndexedDB: database `eve-router`, object store `kv`, key `sde-blob-v1`, value one `ArrayBuffer`. One record makes the write atomic, so an interrupted update leaves the old blob. The engine worker calls `navigator.storage.persist()` one time, so the browser does not evict the record under storage pressure. If the browser refuses, the app still works and downloads the SDE again after an eviction.
+All saved values go through one type, `router_core::store::Store`. It holds named byte values. The module has three files:
 
-IndexedDB works in a window and in a Web Worker in every target browser. The blob is small, so the Origin Private File System gives no gain.
+```
+crates/router_core/src/store/
+  mod.rs     the cfg switch, the module doc, the key rules
+  native.rs  Store on files
+  web.rs     Store on IndexedDB, with the in-memory copy
+```
+
+`mod.rs` holds the only `cfg` lines: `native.rs` for every target except wasm32, `web.rs` for wasm32, and `pub use` of the one `Store`. Both files give the same public API:
+
+| Method | Native (`native.rs`) | Web (`web.rs`) |
+| :--- | :--- | :--- |
+| `async fn open` | Returns at once | Opens the database and reads all keys into memory |
+| `fn get` | Reads the file | Reads the in-memory copy |
+| `fn set` | Writes the file, as now | Updates the in-memory copy, then starts a background IndexedDB write |
+| `fn delete` | Removes the file | Removes the key from memory, then starts a background delete |
+| `async fn flush` | Returns at once | Waits until all background writes end |
+
+`get`, `set` and `delete` are sync on both targets, so no caller changes to async. Only the startup code awaits `open`, and only the engine awaits `flush`. Native keeps its file paths and its behavior. The TUI and the egui app still see each other's files.
+
+The web details:
+
+- Database `eve-router`, object store `kv`, one record for each key. The blob is key `sde-blob-v1`, value one `ArrayBuffer`. One record makes each write atomic, so an interrupted update leaves the old blob.
+- The UI and the engine worker each open their own `Store` on the same database. IndexedDB works in a window and in a Web Worker in every target browser.
+- The engine worker calls `navigator.storage.persist()` one time, so the browser does not evict the records under storage pressure. If the browser refuses, the app still works and downloads the SDE again after an eviction.
+- The values are small (the blob is about 0.5 MB), so the in-memory copy costs little. The Origin Private File System gives no gain.
+
+The key rules:
+
+1. Each key has one owner, and only the owner writes it. The UI owns the config, the character list, the active route, the bridge text and the refresh tokens. The engine owns the blob and the source caches. The type system does not enforce this rule, so the module doc states it too.
+2. A background write that is in flight when the tab closes can be lost. For a settings change, that is the last few milliseconds. The engine awaits `flush` after each blob write.
+3. Two tabs do not see each other's writes until a reload. The last write wins.
 
 ### 5.6 Update check
 
@@ -287,7 +319,7 @@ Native behavior does not change. Each seam lands on native first, and the native
 | Seam | Native | Web |
 | :--- | :--- | :--- |
 | Clock | `web_time::Instant` and `web_time::SystemTime`. On native these are the `std` types. | `performance.now()` and `Date.now()` |
-| Storage (`Store` trait: `get`, `set`, `delete` of named bytes) | Files, at the current paths | `gloo-storage` (`localStorage`) for small values on the UI thread. `indexed_db_futures` (IndexedDB) for large values in the engine worker. |
+| Storage (`Store`, section 5.5) | `store/native.rs`: files, at the current paths | `store/web.rs`: IndexedDB with an in-memory copy, on the UI thread and in the engine worker |
 | HTTP (no own trait: a `reqwest::Client`, with the body limit and timeouts set by the caller) | `reqwest` on a current-thread `tokio` runtime | `reqwest` on `fetch`, in the window or the worker scope. `AbortController` gives the timeouts. |
 | Loops (`Refresher`, `Tracker`) | The loop body is an `async fn`. Its thread runs it with `tokio` `block_on`, in place of `pollster`. | `wasm_bindgen_futures::spawn_local` |
 | Timers | `futures-timer` (one global helper thread) | `futures-timer` with its `wasm-bindgen` feature (`gloo-timers` under it) |
@@ -296,11 +328,11 @@ Native behavior does not change. Each seam lands on native first, and the native
 
 | Value | Store |
 | :--- | :--- |
-| Config (settings, avoid lists, theme, favourites, Nexum URL, key and map ID) | `localStorage` |
-| Character list, active route, bridge text | `localStorage` |
-| Refresh tokens (`TokenStore`) | `localStorage` |
-| PKCE verifier and state, during a login | `sessionStorage` |
-| SDE blob, Nexum cache, EVE-Scout cache | IndexedDB |
+| Config (settings, avoid lists, theme, favourites, Nexum URL, key and map ID) | `Store`, owned by the UI |
+| Character list, active route, bridge text | `Store`, owned by the UI |
+| Refresh tokens (`TokenStore`) | `Store`, owned by the UI |
+| PKCE verifier and state, during a login | `sessionStorage`, through `gloo-storage` |
+| SDE blob, Nexum cache, EVE-Scout cache | `Store`, owned by the engine |
 
 **Native-only code to gate.** These crates and calls do not build or do not work on `wasm32-unknown-unknown`. Each goes to a `[target.'cfg(not(target_arch = "wasm32"))'.dependencies]` table, or behind a seam:
 
@@ -335,8 +367,9 @@ Decided on 2026-10-10. Versions are the newest on that date. Do not write a wrap
 | `reqwest` 0.13 | All HTTP, both targets | Replaces `ureq`. On wasm: `fetch` from the global scope (so it works in a Web Worker), `timeout` through `AbortController`, `bytes_stream`, and custom headers, so explicit `Range` values work. The default TLS is `rustls` with `aws-lc-rs`, which needs a C toolchain and CMake on some hosts. Plan task 7 decides between that and `rustls-no-provider` with `ring`, and builds on each release target. |
 | `tokio` | Native runtime | Feature `rt` only. One current-thread runtime for each loop thread, entered with `block_on`. |
 | `futures-timer` 3.0 | Timer futures, both targets | Native: pure `std`. wasm: the `wasm-bindgen` feature. |
-| `gloo-storage` 0.4 | `localStorage`, `sessionStorage` | UI thread only. A Web Worker has neither. |
-| `indexed_db_futures` 0.6 | IndexedDB | Engine worker. Futures in place of IndexedDB callbacks. |
+| `rkyv` | The blob and the engine messages | With validation (`bytecheck`). No container format of our own. |
+| `indexed_db_futures` 0.6 | IndexedDB | Inside `store/web.rs` only, on the UI thread and in the engine worker. Futures in place of IndexedDB callbacks. |
+| `gloo-storage` 0.4 | `sessionStorage` | The login state only (section 8.2). UI thread only. |
 | `web-time` | Clock | Section 7, clock seam |
 | `wasm-bindgen-rayon` | Pool threads | `router_engine`, `threads` feature only |
 | `oauth2` 5.0 | PKCE, code exchange, refresh, revoke | Kept. See the adapter rule below. |
@@ -350,6 +383,8 @@ Decided on 2026-10-10. Versions are the newest on that date. Do not write a wrap
 | `pollster` | It cannot drive native `reqwest`. `tokio` `block_on` does the same job. |
 | `gloo-net` | `reqwest` covers HTTP |
 | `rexie`, `idb` | `indexed_db_futures` chosen. `rexie` had no release after 2024-08. |
+| A storage trait (`dyn Store`) | One concrete type with a file for each target is easier to read (section 5.5). An async trait does not work with `dyn` without boxing. |
+| `localStorage` | One `cfg` type cannot hold two wasm backends. IndexedDB works on both threads, so all saved values use it. |
 | The `oauth2` `reqwest` feature | It pins `reqwest` 0.12. That gives two `reqwest` versions, or keeps the app on 0.12. `oauth2` had no release after 2025-01. |
 | `gloo-worker` (until plan task 1 says otherwise) | Its `Codec` needs serde types, and the default is `bincode` 1.3. `rkyv` bytes then travel in a second encoding. `post_message` sends no transfer list, so each buffer is copied. It pins `gloo-utils` 0.2, but `gloo-storage` 0.4 pins 0.3. Nobody has shown it with `wasm-bindgen-rayon`. |
 | `async_zip` | Pre-1.0, and needs an async reader that can seek over HTTP ranges. The current hand-written zip directory read plus streaming `flate2` is simpler (section 5.3). |
@@ -384,15 +419,15 @@ The rules come from the CCP SSO documentation and the findings of 2026-10-09 (se
 3. SSO sends the browser back to `/?code=<CODE>&state=<STATE>`.
 4. At start, the app reads the query. It compares `state` with `sessionStorage`. A mismatch stops the login.
 5. The app sends a form `POST` to the token URL: `grant_type=authorization_code`, `client_id`, `code`, `code_verifier`. No secret.
-6. The app removes the query with `history.replaceState`, runs the existing JWT checks (issuer, audience, expiry, subject), and saves the refresh token in the `localStorage` `TokenStore`.
+6. The app removes the query with `history.replaceState`, runs the existing JWT checks (issuer, audience, expiry, subject), and saves the refresh token in the `TokenStore`, which sits on the `Store` (section 5.5).
 7. The tracker starts for the character.
 
-Both builds give `oauth2` the closure of section 7.1, rule 5, on a `reqwest::Client`. The native client sets `redirect::Policy::none()`. A browser `fetch` follows redirects, and `reqwest` on wasm cannot stop that. It keeps the PKCE helpers, `parse_callback` and `read_claims`. It does not build `Listener`, `tiny_http` or `webbrowser`. "Remove" revokes the token at `REVOKE_URL`, as on native.
+Both builds give `oauth2` the closure of section 7.1, rule 5, on a `reqwest::Client`. The native client sets `redirect::Policy::none()`. A browser `fetch` follows redirects, and `reqwest` on wasm cannot stop that. The web build keeps the PKCE helpers, `parse_callback` and `read_claims`. It does not build `Listener`, `tiny_http` or `webbrowser`. "Remove" revokes the token at `REVOKE_URL`, as on native.
 
 ### 8.3 Risks
 
-- Any script on the page can read a refresh token in `localStorage`. The controls: the strict CSP (section 10), no third-party scripts, and a clear "Remove" that revokes the token.
-- The Nexum key sits in `localStorage` too, and it crosses our edge on each proxied request. It has the same exposure as a refresh token.
+- Any script on the page can read a refresh token in IndexedDB. The controls: the strict CSP (section 10), no third-party scripts, and a clear "Remove" that revokes the token.
+- The Nexum key sits in IndexedDB too, and it crosses our edge on each proxied request. It has the same exposure as a refresh token.
 - Two tabs can poll the same character and race on a token refresh. See section 12.
 
 ---
@@ -436,9 +471,9 @@ The development server sends the same COOP and COEP headers, so `engine-mt` runs
 
 ```
 crates/
-  router_core/     + engine protocol, seams, SdeBlob, streaming distill
+  router_core/     + engine protocol, store/ (native.rs, web.rs), SdeBlob, streaming distill
   router_egui/     + lib.rs (#[wasm_bindgen(start)] -> WebRunner), engine client, map mirror
-  router_engine/   new: cdylib, the engine worker entry, IndexedDB store
+  router_engine/   new: cdylib, the engine worker entry and message loop
 web/
   index.html       canvas, loader that picks engine-mt or engine-st
   _headers
