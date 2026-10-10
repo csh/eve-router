@@ -143,7 +143,7 @@ Make the loop bodies of `Refresher` and `Tracker` async functions. Use `futures_
 
 1. Add the `router_engine` crate (`cdylib`) with a `#[wasm_bindgen]` worker entry and a message loop.
 2. Add `store/web.rs` with `indexed_db_futures`: the same public API as `native.rs`, with the in-memory copy and the background writes of spec section 5.5. The engine awaits `flush` after a blob write. `reqwest` already works in the worker scope.
-3. Implement the SDE start of spec section 5: read the blob, else run phase A and phase B. Send `Progress`, `Blob` and `Map`.
+3. Implement the SDE start of spec section 5: read the blob, else download, distill and write the full blob (section 5.2). Send `Progress`, then `Blob` and `Map`.
 4. Answer `Route` messages with the drop rules of spec section 4.4.
 
 **Done when:** a `wasm-bindgen-test` run in headless Chromium syncs the fixture zip from a local server, writes the blob, reads it again on a second start, and answers one `Route` message.

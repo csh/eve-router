@@ -48,7 +48,7 @@ The project owner made these decisions on 2026-10-10.
 | Rendering | `eframe::WebRunner`, WebGL2 through the existing `glow` feature | The native build already uses `glow`. `wgpu` adds size and gives no gain for a panel UI. |
 | Hosting | Cloudflare Workers Static Assets, with a `_headers` file | Threads need the COOP and COEP headers. Cloudflare sets them with no code. The same project hosts the Nexum proxy. |
 | Parallelism | One engine worker, plus a `wasm-bindgen-rayon` pool inside it | The existing `par_iter` and `rayon::join` calls run unchanged on real threads. The UI thread never waits for a search. |
-| SDE | Fetch from CCP at load time. Distill in the engine worker. Store as an `rkyv` blob in IndexedDB. | A later load reads one small record and skips the 191 MB of JSON. |
+| SDE | Fetch from CCP at load time. Distill in the engine worker. Store as an `rkyv` blob in IndexedDB. The app opens only when the full blob exists (section 5.2). | A later load reads one small record and skips the 191 MB of JSON. One load step means one blob, no map without hulls, and no hull that waits for a table. |
 | Nexum | A same-origin proxy only. No direct call from the browser. | A tested Nexum server allows only its own origin (section 3). |
 | Login | Client-side PKCE, with separate EVE app registrations for production and development | EVE SSO supports public clients. No server holds a token. |
 | Toolchain | Native stays on stable. The web build uses one pinned nightly. | The threaded engine needs `-Z build-std` and atomics. |
@@ -147,7 +147,7 @@ The engine protocol lives in `router_core::engine`, so a native test can drive i
 | UI to engine | `Refresh` | Refresh the wormholes now (the `F5` key) |
 | UI to engine | `SetNexum`, `SetBridges` | New values. The engine builds a new map. |
 | Engine to UI | `Progress` | SDE stage and byte counts, for the splash screen |
-| Engine to UI | `Blob` | The blob bytes, one time for each SDE build |
+| Engine to UI | `Blob` | The full blob bytes, one time for each SDE build. A `Map` message with a new generation always follows. The UI rebuilds its mirror on each `Blob`. |
 | Engine to UI | `Map` | Generation, fingerprint, `now`, the merged wormholes, the Shortcuts counts, the log rows |
 | Engine to UI | `Routes` | Request ID, generation, routes, favourite distances, the order note, an error text, the search time |
 | Engine to UI | `Failed` | A fatal error text for the splash screen |
@@ -192,12 +192,19 @@ Build 3586130, read from the zip central directory on 2026-10-10:
 
 The map needs 1.8 MB. The ship and wormhole tables need 25 MB, which is 93 percent of the download. The native code inflates all of `types.jsonl` into one 154 MB buffer, then parses every line into a struct. A browser tab must not do that.
 
-### 5.2 Two phases on the first load
+### 5.2 The first load
 
-1. **Phase A, the map (1.8 MB).** Fetch the four map entries. Build the `Universe`. Send the blob bytes and the first `Map` message with gates and bridges only. The planner is ready.
-2. **Phase B, the tables (25 MB).** Fetch `groups.jsonl`, `types.jsonl` and `typeDogma.jsonl`. Distill the ship table and the wormhole type table (section 5.3). Write the full blob to IndexedDB. Start the wormhole fetches, because the size class of a Nexum wormhole needs the wormhole type table.
+The app opens only when the full blob exists. On a first load, with no blob in IndexedDB:
 
-Until phase B ends, the hull list and the wormhole routes are not available. The UI says so on the status line. On a later load, the blob holds everything, and both phases are skipped.
+1. Fetch the seven entries of section 5.1 (26.79 MB).
+2. Distill the ship table and the wormhole type table (section 5.3), and build the `Universe`.
+3. Write the blob to IndexedDB and `flush`.
+4. Send `Blob`, then the first `Map` message. The planner opens.
+5. Start the wormhole fetches. The size class of a Nexum wormhole needs the wormhole type table, which now exists.
+
+The splash screen shows the `Progress` messages: the stage, and the bytes so far against the total. A later load reads the blob and opens with no SDE download.
+
+Why one step and not a fast map first: a map without the hull table needs a second blob, a second mirror build, and a hull from the config that waits for a table that does not exist yet. The cost is the wait on a first load only. At 50 Mbit/s the download takes about 4 seconds, and at 10 Mbit/s about 21 seconds, plus the distill time that plan task 11 measures.
 
 ### 5.3 Streaming distill
 
@@ -272,7 +279,7 @@ The key rules:
 
 ### 5.6 Update check
 
-At each load, the engine worker reads the blob first and builds the map. In the background, it reads `latest.jsonl`. If the build number differs from the blob build, it runs phases A and B again, writes the new blob, and sends a new `Map` message. A same-build answer sends no more traffic. Native keeps its current behavior.
+At each load, the engine worker reads the blob first and builds the map. In the background, it reads `latest.jsonl`. If the build number differs from the blob build, it runs the download and the distill again in the background, writes the new blob, and sends `Blob` and a new `Map` message. The app stays usable on the old map until then. A same-build answer sends no more traffic. Native keeps its current behavior.
 
 ---
 
