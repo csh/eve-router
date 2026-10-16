@@ -79,7 +79,7 @@ pub fn convert(sigs: &[Signature], known: impl Fn(u32) -> bool, types: &Wormhole
             report.unknown.extend(unknown);
             continue;
         }
-        let expiry = s.expires_at.as_deref().and_then(parse_utc).map(|at| Expiry { at, exact: true });
+        let expiry = s.expires_at.as_deref().and_then(parse_utc).map(|at| Expiry { at });
         if expiry.is_some_and(|e| e.at <= fetched_at) {
             report.expired += 1;
             continue;
@@ -214,7 +214,7 @@ mod tests {
         let j377 = find(&data, TURNUR, 31001232);
         assert_eq!((j377.size, j377.max_jump_kg), (Some(Size::Medium), Some(62_000_000.0)));
         assert_eq!(j377.wh_type.as_deref(), Some("J377"));
-        assert_eq!(j377.expiry, Some(Expiry { at: parse_utc("2026-10-05T19:38:34Z").unwrap(), exact: true }));
+        assert_eq!(j377.expiry, Some(Expiry { at: parse_utc("2026-10-05T19:38:34Z").unwrap() }));
         assert_eq!(j377.mass, None);
         assert_eq!(j377.sources, vec![SourceId::EveScout]);
         // Turnur has the lower ID, so its signature comes first.

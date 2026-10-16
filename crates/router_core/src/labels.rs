@@ -228,7 +228,7 @@ pub fn link_label(uni: &Universe, rules: &BridgeRules, edge: EdgeIndex, now: u64
     }
 }
 
-/// For example "Wormhole · Sig. ABC · Large · Less than 3h 10m remaining · Critical".
+/// For example "Wormhole · Sig. ABC · Large · Expires in 3h 10m · Critical".
 /// "ABC" is the signature in `from`, the system that the jump leaves. With no signature, the
 /// label shows "Sig. Unknown", so the pilot knows to scan. A stable mass shows no text.
 /// The label does not show the type. The hull check uses the type.
@@ -369,15 +369,15 @@ mod tests {
         let w = Wormhole {
             wh_type: Some("K162".into()),
             size: Some(Size::Large),
-            expiry: Some(Expiry { at: now + 3 * 3600 + 600, exact: false }),
+            expiry: Some(Expiry { at: now + 3 * 3600 + 600 }),
             mass: Some(MassStatus::Critical),
             ..hole(1, 2)
         };
-        assert_eq!(wormhole_label(&w, 1, now), "Wormhole · Sig. Unknown · Large · Less than 3h 10m remaining · Critical");
+        assert_eq!(wormhole_label(&w, 1, now), "Wormhole · Sig. Unknown · Large · Expires in 3h 10m · Critical");
         // The signature in the system that the jump leaves: "ABC" from system 1, "DEF" from system 2.
         let signed = Wormhole { sig_a: Some("ABC-123".into()), sig_b: Some("def".into()), ..w.clone() };
-        assert_eq!(wormhole_label(&signed, 1, now), "Wormhole · Sig. ABC · Large · Less than 3h 10m remaining · Critical");
-        assert_eq!(wormhole_label(&signed, 2, now), "Wormhole · Sig. DEF · Large · Less than 3h 10m remaining · Critical");
+        assert_eq!(wormhole_label(&signed, 1, now), "Wormhole · Sig. ABC · Large · Expires in 3h 10m · Critical");
+        assert_eq!(wormhole_label(&signed, 2, now), "Wormhole · Sig. DEF · Large · Expires in 3h 10m · Critical");
         // A stable mass shows no text. The label never shows the type: the hull check uses it.
         let stable = Wormhole { mass: Some(MassStatus::Stable), size: Some(Size::XLarge), ..hole(1, 2) };
         assert_eq!(wormhole_label(&stable, 1, now), "Wormhole · Sig. Unknown · XL");

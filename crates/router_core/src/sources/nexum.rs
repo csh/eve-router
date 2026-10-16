@@ -257,21 +257,17 @@ fn expiry(c: &NexumConnection, ends: [u32; 2], types: &WormholeTypes, fetched_at
         parsed
     };
     let base = if let Some(at) = time(&c.lifetime_expires_at) {
-        Some(Expiry { at, exact: true })
+        Some(Expiry { at })
     } else if let Some(eol) = time(&c.eol_at) {
-        Some(Expiry { at: eol.saturating_add(4 * HOUR), exact: false })
+        Some(Expiry { at: eol.saturating_add(4 * HOUR) })
     } else {
         match c.wh_type.as_deref().and_then(|t| types.life_hours(t, ends)) {
-            Some(hours) => time(&c.created_at).map(|created| Expiry { at: created.saturating_add((hours * 3600.0) as u64), exact: false }),
+            Some(hours) => time(&c.created_at).map(|created| Expiry { at: created.saturating_add((hours * 3600.0) as u64) }),
             None => None,
         }
     };
     // The server text gives any number, so the math saturates.
-    let status = c
-        .time_status
-        .as_deref()
-        .and_then(status_hours)
-        .map(|h| Expiry { at: fetched_at.saturating_add(h.saturating_mul(HOUR)), exact: false });
+    let status = c.time_status.as_deref().and_then(status_hours).map(|h| Expiry { at: fetched_at.saturating_add(h.saturating_mul(HOUR)) });
     earlier(base, status)
 }
 
@@ -597,7 +593,7 @@ mod tests {
         assert_eq!(typed.mass, Some(MassStatus::Stable));
         assert_eq!(typed.wh_type.as_deref(), Some("B274"));
         // createdAt 02:00 + 24 h is before the time status limit (12:00 + 24 h).
-        assert_eq!(typed.expiry, Some(Expiry { at: FETCHED - 10 * HOUR + 24 * HOUR, exact: false }));
+        assert_eq!(typed.expiry, Some(Expiry { at: FETCHED - 10 * HOUR + 24 * HOUR }));
         assert_eq!(typed.sources, vec![SourceId::Nexum]);
         assert_eq!((typed.sig_a.as_deref(), typed.sig_b.as_deref()), (None, None));
     }
@@ -610,7 +606,7 @@ mod tests {
         assert_eq!(k162.max_jump_kg, None);
         assert_eq!(k162.mass, Some(MassStatus::Destabilized));
         // createdAt + 48 h is later than the time status limit (12:00 + 4 h).
-        assert_eq!(k162.expiry, Some(Expiry { at: FETCHED + 4 * HOUR, exact: false }));
+        assert_eq!(k162.expiry, Some(Expiry { at: FETCHED + 4 * HOUR }));
     }
 
     #[test]
@@ -619,11 +615,11 @@ mod tests {
         let critical = find(&data, 30002510, 31002230);
         assert_eq!(critical.mass, Some(MassStatus::Critical));
         assert_eq!(critical.size, Some(Size::Small));
-        assert_eq!(critical.expiry, Some(Expiry { at: FETCHED + 8 * HOUR + 1800, exact: true }));
+        assert_eq!(critical.expiry, Some(Expiry { at: FETCHED + 8 * HOUR + 1800 }));
         let eol = find(&data, 30002659, 31000005);
         assert_eq!(eol.size, Some(Size::XLarge));
         assert_eq!(eol.mass, None);
-        assert_eq!(eol.expiry, Some(Expiry { at: FETCHED - HOUR + 4 * HOUR, exact: false }));
+        assert_eq!(eol.expiry, Some(Expiry { at: FETCHED - HOUR + 4 * HOUR }));
         // A bad time and no type: no expiry.
         let bad = find(&data, 30000144, 31000005);
         assert_eq!(bad.size, Some(Size::Large));
@@ -660,16 +656,16 @@ mod tests {
         .unwrap();
         let mut report = NexumReport::default();
         let drifter = expiry(&c, [30002481, 31000002], &WormholeTypes::default(), FETCHED, &mut report);
-        assert_eq!(drifter, Some(Expiry { at: created + 16 * HOUR, exact: false }));
-        assert_eq!(crate::wormhole::expiry_text(drifter.unwrap(), FETCHED), "Less than 12h 41m remaining");
+        assert_eq!(drifter, Some(Expiry { at: created + 16 * HOUR }));
+        assert_eq!(crate::wormhole::expiry_text(drifter.unwrap(), FETCHED), "Expires in 12h 41m");
         // A K162 with no Drifter end keeps the 48 h limit.
         let other = expiry(&c, [30002481, 31002230], &WormholeTypes::default(), FETCHED, &mut report);
-        assert_eq!(other, Some(Expiry { at: created + 48 * HOUR, exact: false }));
+        assert_eq!(other, Some(Expiry { at: created + 48 * HOUR }));
         // A manual time wins over the K162 life.
         let mut manual = c.clone();
         manual.lifetime_expires_at = Some(chrono::DateTime::from_timestamp((FETCHED + 20 * HOUR) as i64, 0).unwrap().to_rfc3339());
         let manual = expiry(&manual, [30002481, 31000002], &WormholeTypes::default(), FETCHED, &mut report);
-        assert_eq!(manual, Some(Expiry { at: FETCHED + 20 * HOUR, exact: true }));
+        assert_eq!(manual, Some(Expiry { at: FETCHED + 20 * HOUR }));
     }
 
     /// Both sources name the same classes. Nexum has no "capital" name, so a Nexum "xl" hole is the

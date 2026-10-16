@@ -717,7 +717,7 @@ mod tests {
             Wormhole { size: Some(Size::Medium), ..hole(id("Jita"), id("Amarr")) },
             Wormhole { size: Some(Size::Small), ..hole(id("Dodixie"), id("Hek")) },
             Wormhole { mass: Some(MassStatus::Critical), ..hole(id("Rens"), id("Amarr")) },
-            Wormhole { expiry: Some(Expiry { at: ENDS, exact: true }), ..hole(id("Hek"), id("Perimeter")) },
+            Wormhole { expiry: Some(Expiry { at: ENDS }), ..hole(id("Hek"), id("Perimeter")) },
             // Ashab to Pator through Thera, and Turnur to Oursulaert.
             hole(id("Ashab"), THERA),
             hole(THERA, id("Pator")),

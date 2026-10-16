@@ -102,10 +102,8 @@ impl MassStatus {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Expiry {
-    /// Unix seconds.
+    /// Unix seconds. A source can give an upper limit, for example from "less than 4 hours".
     pub at: u64,
-    /// True: an exact expiry time. False: an upper limit, for example from "less than 4 hours".
-    pub exact: bool,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -307,7 +305,7 @@ pub fn expiry_text(e: Expiry, now: u64) -> String {
         return "Expired".into();
     }
     let left = duration_text(e.at - now);
-    if e.exact { format!("Expires in {left}") } else { format!("Less than {left} remaining") }
+    format!("Expires in {left}")
 }
 
 /// The age of the data, for example "2 min ago".
@@ -390,10 +388,10 @@ pub mod tests {
     #[test]
     fn time_text() {
         let now = 1_000_000;
-        assert_eq!(expiry_text(Expiry { at: now + 2 * HOUR + 600, exact: true }, now), "Expires in 2h 10m");
-        assert_eq!(expiry_text(Expiry { at: now + 3 * HOUR + 600, exact: false }, now), "Less than 3h 10m remaining");
-        assert_eq!(expiry_text(Expiry { at: now + 300, exact: false }, now), "Less than 5m remaining");
-        assert_eq!(expiry_text(Expiry { at: now, exact: true }, now), "Expired");
+        assert_eq!(expiry_text(Expiry { at: now + 2 * HOUR + 600 }, now), "Expires in 2h 10m");
+        assert_eq!(expiry_text(Expiry { at: now + 3 * HOUR + 600 }, now), "Expires in 3h 10m");
+        assert_eq!(expiry_text(Expiry { at: now + 300 }, now), "Expires in 5m");
+        assert_eq!(expiry_text(Expiry { at: now }, now), "Expired");
         assert_eq!(age_text(now - 30, now), "just now");
         assert_eq!(age_text(now - 120, now), "2 min ago");
         assert_eq!(age_text(now - 3 * HOUR, now), "3 h ago");
@@ -425,7 +423,7 @@ pub mod tests {
         assert!(!critical.usable(now, None));
         let destabilized = Wormhole { mass: Some(MassStatus::Destabilized), ..hole(1, 2) };
         assert!(destabilized.usable(now, None));
-        let ends = Wormhole { expiry: Some(Expiry { at: now, exact: true }), ..hole(1, 2) };
+        let ends = Wormhole { expiry: Some(Expiry { at: now }), ..hole(1, 2) };
         assert!(!ends.usable(now, None));
         assert!(ends.usable(now - 1, None));
     }
@@ -436,8 +434,8 @@ pub mod tests {
 
     #[test]
     fn merge_drops_expired() {
-        let gone = Wormhole { expiry: Some(Expiry { at: 100, exact: true }), ..hole(1, 2) };
-        let open = Wormhole { expiry: Some(Expiry { at: 101, exact: true }), ..hole(3, 4) };
+        let gone = Wormhole { expiry: Some(Expiry { at: 100 }), ..hole(1, 2) };
+        let open = Wormhole { expiry: Some(Expiry { at: 101 }), ..hole(3, 4) };
         let merged = merge(&[data(SourceId::Nexum, vec![gone, open.clone()])], 100);
         assert_eq!(merged, vec![open]);
     }
@@ -454,7 +452,7 @@ pub mod tests {
             size: Some(Size::Large),
             max_jump_kg: Some(410_000_000.0),
             mass: Some(MassStatus::Destabilized),
-            expiry: Some(Expiry { at: 500, exact: false }),
+            expiry: Some(Expiry { at: 500 }),
             wh_type: None,
             ..hole(1, 2)
         };
@@ -462,7 +460,7 @@ pub mod tests {
             size: Some(Size::Medium),
             max_jump_kg: None,
             mass: Some(MassStatus::Stable),
-            expiry: Some(Expiry { at: 400, exact: true }),
+            expiry: Some(Expiry { at: 400 }),
             wh_type: Some("K162".into()),
             sig_a: Some("ABC-123".into()),
             sig_b: Some("DEF-456".into()),
@@ -475,7 +473,7 @@ pub mod tests {
         assert_eq!(m.size, Some(Size::Medium));
         assert_eq!(m.max_jump_kg, Some(410_000_000.0));
         assert_eq!(m.mass, Some(MassStatus::Destabilized));
-        assert_eq!(m.expiry, Some(Expiry { at: 400, exact: true }));
+        assert_eq!(m.expiry, Some(Expiry { at: 400 }));
         assert_eq!(m.wh_type.as_deref(), Some("K162"));
         assert_eq!((m.sig_a.as_deref(), m.sig_b.as_deref()), (Some("ABC-123"), Some("DEF-456")));
         assert_eq!(m.sources, vec![SourceId::Nexum, SourceId::EveScout]);

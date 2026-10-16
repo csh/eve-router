@@ -111,5 +111,5 @@ Step	Stop	System	Sec	Region	Via
 
 Step	Stop	System	Sec	Region	Via
 0	Start	Jita	0.9	The Forge	
-1	Destination	J134702	-1.0	E-R00028	Wormhole · Sig. Unknown · Large · Less than 14h 0m remaining
+1	Destination	J134702	-1.0	E-R00028	Wormhole · Sig. Unknown · Large · Expires in 14h 0m
 
