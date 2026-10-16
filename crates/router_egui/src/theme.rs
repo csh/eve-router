@@ -167,7 +167,7 @@ pub fn bold() -> FontFamily {
 /// The text size of the body text.
 const BODY_SIZE: f32 = 14.0;
 
-/// Oxanium (SIL Open Font License) for all text. The egui default fonts stay as the fallback,
+/// Oxanium (SIL Open Font License) for all text, and the Phosphor icons (MIT) for the icons. The egui default fonts stay as the fallback,
 /// for the arrows and the icons that Oxanium does not have.
 pub fn set_font(ctx: &egui::Context) {
     const OXANIUM: &[u8] = include_bytes!("../assets/fonts/Oxanium.ttf");
@@ -184,6 +184,11 @@ pub fn set_font(ctx: &egui::Context) {
     fonts.font_data.insert("ui-bold".into(), face(700.0, 0.28));
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
         fonts.families.entry(family).or_default().insert(0, "ui-regular".into());
+    }
+    // Phosphor icons: the regular face is the fallback of all text, so a string can hold an icon.
+    egui_phosphor_icons::add_fonts(&mut fonts);
+    for family in [FontFamily::Proportional, FontFamily::Monospace] {
+        fonts.families.entry(family).or_default().push("phosphor-icons".into());
     }
     let fallback = fonts.families[&FontFamily::Proportional].clone();
     fonts.families.insert(bold(), std::iter::once("ui-bold".to_string()).chain(fallback).collect());

@@ -10,6 +10,7 @@ use egui::{
     TextureHandle, TextureOptions, Ui, vec2,
 };
 use egui_extras::{Column, TableBuilder};
+use egui_phosphor_icons::icons;
 use router_core::esi::active::{ActiveRoute, Hop};
 use router_core::esi::client::{IMAGES_URL, portrait};
 use router_core::esi::pilots::{HullSync, PilotView, Pilots, StartPlan, pilots_by_step};
@@ -733,7 +734,7 @@ impl PilotsUi {
                                 ui.painter().line_segment([l, c], stroke);
                                 ui.painter().line_segment([c, r], stroke);
                             } else if current {
-                                ui.label(RichText::new("▶").color(theme::accent(ui)));
+                                ui.label(RichText::new(icons::CARET_RIGHT.as_str()).color(theme::accent(ui)));
                             }
                         });
                         row.col(|ui| _ = ui.label(RichText::new(i.to_string()).color(theme::TEXT_DIM)));

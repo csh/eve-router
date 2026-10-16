@@ -11,6 +11,7 @@ use crate::theme::{self, panel};
 use crate::widgets::{AppButton, UiExt};
 use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
+use egui_phosphor_icons::icons;
 use petgraph::graph::NodeIndex;
 use router_core::labels::{jumps_label, link_label, on_off, pilot_label, route_summary, route_tsv};
 use router_core::route::{Mode, Stop};
@@ -374,7 +375,7 @@ impl View {
                 ui.painter().layout_no_wrap(text.to_string(), font, Color32::WHITE).size().x + pad + spacing
             };
             let route_part = if locked { 0.0 } else { 120.0 + 18.0 + width(ui, "Route options") + spacing };
-            let inline = route_part + width(ui, &avoid) + width(ui, &characters) + width(ui, "⚙");
+            let inline = route_part + width(ui, &avoid) + width(ui, &characters) + width(ui, icons::GEAR.as_str());
             let inline = inline <= ui.available_width();
             ui.horizontal(|ui| {
                 if !locked {
@@ -391,7 +392,7 @@ impl View {
         }
         ui.horizontal_wrapped(|ui| {
             let hint = "Show or hide the favourites and the pilots";
-            if ui.add(Button::selectable(self.drawer_open, "☰")).on_hover_text(hint).clicked() {
+            if ui.add(Button::selectable(self.drawer_open, icons::LIST.as_str())).on_hover_text(hint).clicked() {
                 self.drawer_open = !self.drawer_open;
             }
             ui.label(RichText::new("EVE ROUTER").family(theme::bold()).size(16.0).color(theme::accent(ui)).extra_letter_spacing(3.0));
@@ -454,7 +455,7 @@ impl View {
         }
         button.on_disabled_hover_text(settings_window::LOCKED);
         self.pilots.characters_button(ui, s);
-        let settings = ui.app_button(if short { "⚙" } else { "⚙ Settings" });
+        let settings = ui.app_button(if short { icons::GEAR.as_str().to_string() } else { format!("{} Settings", icons::GEAR.as_str()) });
         let settings = if short { settings.on_hover_text("Settings") } else { settings };
         if settings.clicked() {
             self.settings = Some(SettingsForm::new(s));
@@ -468,7 +469,7 @@ impl View {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // The right-to-left layout draws the Settings button first, so it sits at the right edge.
-                if ui.app_button("⚙ Settings").clicked() {
+                if ui.app_button(format!("{} Settings", icons::GEAR.as_str())).clicked() {
                     self.settings = Some(SettingsForm::new(s));
                 }
                 let avoid = match s.settings.avoid.len() {
@@ -588,7 +589,7 @@ impl View {
                 return;
             }
             let mut edit = None;
-            let arrow = if open { "⏷" } else { "▶" };
+            let arrow = if open { icons::CARET_DOWN } else { icons::CARET_RIGHT }.as_str();
             let chain = s.waypoints.iter().map(|&n| s.uni.name(n)).collect::<Vec<_>>().join(" » ");
             ui.horizontal(|ui| {
                 let hint = if open { "Hide the waypoint list" } else { "Show the waypoint list, to move or remove a waypoint" };
@@ -622,13 +623,17 @@ impl View {
                                 ui.label(RichText::new(&sys.region).color(theme::TEXT_DIM));
                             }
                             ui.horizontal(|ui| {
-                                if ui.add_enabled(i > 0, Button::new("⏶").small()).on_hover_text("Move up").clicked() {
+                                if ui.add_enabled(i > 0, Button::new(icons::CARET_UP.as_str()).small()).on_hover_text("Move up").clicked() {
                                     edit = Some(Edit::MoveUp(i));
                                 }
-                                if ui.add_enabled(i < last, Button::new("⏷").small()).on_hover_text("Move down").clicked() {
+                                if ui
+                                    .add_enabled(i < last, Button::new(icons::CARET_DOWN.as_str()).small())
+                                    .on_hover_text("Move down")
+                                    .clicked()
+                                {
                                     edit = Some(Edit::MoveDown(i));
                                 }
-                                if ui.add(Button::new("🗙").small()).on_hover_text("Remove").clicked() {
+                                if ui.add(Button::new(icons::X.as_str()).small()).on_hover_text("Remove").clicked() {
                                     edit = Some(Edit::Remove(i));
                                 }
                             });

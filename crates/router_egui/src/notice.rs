@@ -3,6 +3,7 @@
 
 use crate::theme;
 use egui::{Align2, Color32, Direction, Frame, Id, Label, Margin, Response, RichText, Sense, Stroke, Ui};
+use egui_phosphor_icons::icons;
 use egui_toast::{Toast, ToastKind, ToastOptions, Toasts};
 use std::time::Duration;
 
@@ -49,11 +50,12 @@ impl Level {
 
     fn icon(self) -> &'static str {
         match self {
-            Level::Info => "i",
-            Level::Success => "✓",
-            Level::Warning => "!",
-            Level::Error => "×",
+            Level::Info => icons::INFO,
+            Level::Success => icons::CHECK,
+            Level::Warning => icons::WARNING,
+            Level::Error => icons::X,
         }
+        .as_str()
     }
 }
 

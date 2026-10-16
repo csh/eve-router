@@ -6,6 +6,7 @@ use crate::theme;
 use crate::view::View;
 use crate::widgets::{AppButton, UiExt};
 use egui::{Button, Color32, Frame, Id, Key, Margin, Modal, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, vec2};
+use egui_phosphor_icons::icons;
 use router_core::ansiblex::HullClass;
 use router_core::config::{self, ApiKey};
 use router_core::esi::pilots::PilotRow;
@@ -282,7 +283,8 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
                         }
                     }
                     row.col(|ui| {
-                        let remove = if narrow { ui.app_button("🗙").on_hover_text("Remove") } else { ui.app_button("Remove") };
+                        let remove =
+                            if narrow { ui.app_button(icons::X.as_str()).on_hover_text("Remove") } else { ui.app_button("Remove") };
                         if remove.clicked() {
                             act = Some(AvoidAct::Remove(kind));
                         }
@@ -477,13 +479,13 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                 for (i, &fav) in s.settings.favourites.iter().enumerate() {
                     // The name is at the left. The buttons are at the right, in the width of the search box.
                     ui.allocate_ui_with_layout(vec2(field, 22.0), egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                        if ui.add(Button::new("🗙").small()).on_hover_text("Remove").clicked() {
+                        if ui.add(Button::new(icons::X.as_str()).small()).on_hover_text("Remove").clicked() {
                             edit = Some((i, 0));
                         }
-                        if ui.add_enabled(i + 1 < count, Button::new("⏷").small()).clicked() {
+                        if ui.add_enabled(i + 1 < count, Button::new(icons::CARET_DOWN.as_str()).small()).clicked() {
                             edit = Some((i, 1));
                         }
-                        if ui.add_enabled(i > 0, Button::new("⏶").small()).clicked() {
+                        if ui.add_enabled(i > 0, Button::new(icons::CARET_UP.as_str()).small()).clicked() {
                             edit = Some((i, -1));
                         }
                         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {

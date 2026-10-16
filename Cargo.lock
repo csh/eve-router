@@ -1244,6 +1244,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "egui_phosphor_icons"
+version = "0.5.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "d467f933bf6185c309f21d1eb32d329ba3b7b7aa0bfc616956ada1a3d9523870"
+dependencies = [
+ "egui",
+]
+
+[[package]]
 name = "either"
 version = "1.18.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -3340,6 +3349,7 @@ dependencies = [
  "egui",
  "egui-toast",
  "egui_extras",
+ "egui_phosphor_icons",
  "image",
  "mimalloc",
  "petgraph",
