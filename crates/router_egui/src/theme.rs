@@ -1,5 +1,5 @@
 //! The look of the window: the colors, the fonts and the panel frame, in the style of the
-//! EVE Online "Photon" UI. Dark panels, 1 px lines, square corners, one blue accent.
+//! EVE Online "Photon" UI, as the Rift app draws it. Dark panels, 1 px lines, one accent.
 
 use egui::epaint::text::VariationCoords;
 use egui::{
@@ -8,22 +8,22 @@ use egui::{
 };
 use std::sync::Arc;
 
-pub const BG: Color32 = Color32::from_rgb(0x07, 0x09, 0x0C);
-pub const PANEL: Color32 = Color32::from_rgba_premultiplied(0x0D, 0x12, 0x17, 0xEB);
-pub const HEADER: Color32 = Color32::from_rgb(0x14, 0x1C, 0x22);
-pub const LINE: Color32 = Color32::from_rgb(0x26, 0x34, 0x3D);
-pub const TEXT: Color32 = Color32::from_rgb(0xC8, 0xD2, 0xD8);
+pub const BG: Color32 = Color32::from_rgb(0x07, 0x07, 0x07);
+pub const PANEL: Color32 = Color32::from_rgba_premultiplied(0x0D, 0x0D, 0x0D, 0xEB);
+pub const HEADER: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
+pub const LINE: Color32 = Color32::from_rgb(0x2A, 0x2A, 0x2A);
+pub const TEXT: Color32 = Color32::from_rgb(0xC1, 0xC1, 0xC1);
 /// Between `TEXT` and `TEXT_DIM`: the summary of a route in the route list.
-pub const TEXT_SOFT: Color32 = Color32::from_rgb(0x9B, 0xA8, 0xB0);
-pub const TEXT_DIM: Color32 = Color32::from_rgb(0x6E, 0x7E, 0x88);
-pub const OK: Color32 = Color32::from_rgb(0x4C, 0xC0, 0x70);
-pub const WARN: Color32 = Color32::from_rgb(0xE0, 0xA0, 0x30);
-pub const ERROR: Color32 = Color32::from_rgb(0xE0, 0x4A, 0x3A);
+pub const TEXT_SOFT: Color32 = Color32::from_rgb(0xA0, 0xA0, 0xA0);
+pub const TEXT_DIM: Color32 = Color32::from_rgb(0x83, 0x83, 0x83);
+pub const OK: Color32 = Color32::from_rgb(0x8D, 0xC1, 0x69);
+pub const WARN: Color32 = Color32::from_rgb(0xF3, 0x90, 0x58);
+pub const ERROR: Color32 = Color32::from_rgb(0xFF, 0x45, 0x4B);
 pub const WORMHOLE: Color32 = Color32::from_rgb(0xB0, 0x70, 0xE0);
 pub const BRIDGE: Color32 = Color32::from_rgb(0x60, 0xA0, 0xFF);
 
 /// The fill of a stop row in the route table, and of a hovered row.
-pub const ROW_FILL: Color32 = Color32::from_rgb(0x12, 0x1A, 0x20);
+pub const ROW_FILL: Color32 = Color32::from_rgb(0x10, 0x12, 0x13);
 
 /// The Photon UI faction theme presets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -67,16 +67,27 @@ impl FactionTheme {
 
     pub fn accent(self) -> Color32 {
         match self {
-            FactionTheme::Caldari => Color32::from_rgb(0x5A, 0xB4, 0xD2),
+            FactionTheme::Caldari => Color32::from_rgb(0x58, 0xA7, 0xBF),
             FactionTheme::Amarr => Color32::from_rgb(0xE5, 0xA9, 0x3C),
             FactionTheme::Gallente => Color32::from_rgb(0x45, 0xB8, 0x78),
             FactionTheme::Minmatar => Color32::from_rgb(0xE0, 0x58, 0x38),
         }
     }
 
+    /// The accent in a darker shade: the fill of a primary button at rest.
+    #[cfg_attr(not(test), expect(dead_code, reason = "the primary button of step 3 uses it"))]
+    pub fn accent_dark(self) -> Color32 {
+        mix(Color32::BLACK, self.accent(), 0.65)
+    }
+
+    /// The accent in a lighter shade: the line of a focused field and of a hovered primary button.
+    pub fn accent_light(self) -> Color32 {
+        mix(self.accent(), Color32::WHITE, 0.25)
+    }
+
     pub fn selection_bg(self) -> Color32 {
         match self {
-            FactionTheme::Caldari => Color32::from_rgb(0x1C, 0x3A, 0x46),
+            FactionTheme::Caldari => Color32::from_rgb(0x35, 0x58, 0x66),
             FactionTheme::Amarr => Color32::from_rgb(0x3D, 0x2E, 0x15),
             FactionTheme::Gallente => Color32::from_rgb(0x18, 0x38, 0x24),
             FactionTheme::Minmatar => Color32::from_rgb(0x40, 0x1C, 0x15),
@@ -85,7 +96,7 @@ impl FactionTheme {
 
     pub fn hovered_bg(self) -> Color32 {
         match self {
-            FactionTheme::Caldari => Color32::from_rgb(0x18, 0x26, 0x2E),
+            FactionTheme::Caldari => Color32::from_rgb(0x13, 0x1C, 0x1F),
             FactionTheme::Amarr => Color32::from_rgb(0x2A, 0x20, 0x12),
             FactionTheme::Gallente => Color32::from_rgb(0x12, 0x28, 0x1C),
             FactionTheme::Minmatar => Color32::from_rgb(0x2C, 0x16, 0x12),
@@ -94,7 +105,7 @@ impl FactionTheme {
 
     /// The fill of a button at rest: the dark panel color with a trace of the accent.
     pub fn button_bg(self) -> Color32 {
-        mix(Color32::from_rgb(0x0B, 0x10, 0x14), self.accent(), 0.10)
+        mix(Color32::from_rgb(0x0A, 0x0A, 0x0A), self.accent(), 0.10)
     }
 
     /// The 1 px line of a button at rest: a muted accent, as the client draws it.
@@ -113,7 +124,7 @@ impl FactionTheme {
 
     pub fn open_bg(self) -> Color32 {
         match self {
-            FactionTheme::Caldari => Color32::from_rgb(0x14, 0x1C, 0x22),
+            FactionTheme::Caldari => Color32::from_rgb(0x0F, 0x17, 0x1A),
             FactionTheme::Amarr => Color32::from_rgb(0x20, 0x18, 0x10),
             FactionTheme::Gallente => Color32::from_rgb(0x10, 0x1C, 0x14),
             FactionTheme::Minmatar => Color32::from_rgb(0x22, 0x12, 0x10),
@@ -205,15 +216,16 @@ pub fn apply(ctx: &egui::Context, theme: FactionTheme, compact: bool) {
         v.menu_corner_radius = CornerRadius::ZERO;
         v.window_shadow = Shadow::NONE;
         v.popup_shadow = Shadow::NONE;
-        v.extreme_bg_color = Color32::from_rgb(0x05, 0x07, 0x09);
-        v.text_edit_bg_color = Some(Color32::from_rgb(0x05, 0x07, 0x09));
+        v.extreme_bg_color = Color32::from_rgb(0x05, 0x05, 0x05);
+        v.text_edit_bg_color = Some(Color32::from_rgb(0x05, 0x05, 0x05));
         v.faint_bg_color = ROW_FILL;
         v.code_bg_color = HEADER;
         v.hyperlink_color = accent;
+        v.weak_text_color = Some(TEXT_DIM);
         v.warn_fg_color = WARN;
         v.error_fg_color = ERROR;
         v.selection.bg_fill = sel_bg;
-        v.selection.stroke = Stroke::new(1.0, accent);
+        v.selection.stroke = Stroke::new(1.0, theme.accent_light());
         v.window_highlight_topmost = false;
 
         let w = &mut v.widgets;
@@ -339,6 +351,15 @@ mod tests {
                 assert_ne!(a.button_border(), b.button_border());
                 assert_ne!(a.button_bg(), b.button_bg());
             }
+        }
+    }
+
+    #[test]
+    fn caldari_uses_the_rift_cryo_blue() {
+        assert_eq!(FactionTheme::Caldari.accent(), Color32::from_rgb(0x58, 0xA7, 0xBF));
+        for theme in FactionTheme::ALL {
+            assert_ne!(theme.accent_dark(), theme.accent());
+            assert_ne!(theme.accent_light(), theme.accent());
         }
     }
 }
