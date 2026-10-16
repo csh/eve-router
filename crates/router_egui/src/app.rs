@@ -1,5 +1,6 @@
 //! The window state, the startup load and the route search.
 
+use crate::notice::{Level, Notice};
 use crate::theme;
 use crate::view::View;
 use petgraph::graph::NodeIndex;
@@ -147,7 +148,9 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     session.wormhole_data = all;
     session.log = log;
     session.refresher = Some(refresher);
-    session.startup_lines = startup_lines;
+    for line in startup_lines {
+        session.notify(Level::Info, line);
+    }
     // A tracker event or a login result repaints the window.
     session.pilots = Pilots::open(&paths.config, keyring(), client_id(), Arc::new(move || ctx.request_repaint()));
     // The command line can give the start, the midpoints and the destination.
@@ -177,7 +180,12 @@ pub struct Session {
     /// refresh, because the status bar timer does not clear it.
     pub note: String,
     /// The SDE update messages of the startup load.
-    pub startup_lines: Vec<String>,
+    /// The messages for the pilot. The window moves them to the toasts at the next frame.
+    pub notices: Vec<Notice>,
+    /// The reason for the last "Jump bridges off" notice, so a notice shows only when it changes.
+    bridges_reason: Option<String>,
+    /// The fetch warning of the last notice, so a notice shows only when it changes.
+    fetch_warning: Option<String>,
     /// The start, the midpoints and the destination, in route order.
     pub waypoints: Vec<NodeIndex>,
     pub routes: Vec<Route>,
@@ -215,7 +223,9 @@ impl Session {
             refresher: None,
             refreshed_at: None,
             note: String::new(),
-            startup_lines: Vec::new(),
+            notices: Vec::new(),
+            bridges_reason: None,
+            fetch_warning: None,
             waypoints: Vec::new(),
             routes: Vec::new(),
             selected: 0,
@@ -230,14 +240,19 @@ impl Session {
             pilots: Pilots::offline(active_path(&cfg_path)),
         };
         session.recompute();
-        if let Some(warning) = session.shortcuts.warning.clone() {
-            session.append_status(warning);
+        session.fetch_warning = session.shortcuts.warning.clone();
+        if let Some(warning) = session.fetch_warning.clone() {
+            session.notify(Level::Warning, warning);
         }
         session
     }
 
-    fn append_status(&mut self, text: String) {
-        self.status = if self.status.is_empty() { text } else { format!("{} · {text}", self.status) };
+    /// Tell the pilot something. An identical notice that waits already is not added again.
+    pub fn notify(&mut self, level: Level, text: impl Into<String>) {
+        let notice = Notice { level, text: text.into() };
+        if !self.notices.contains(&notice) {
+            self.notices.push(notice);
+        }
     }
 
     pub fn selected_route(&self) -> Option<&Route> {
@@ -330,8 +345,12 @@ impl Session {
         self.selected_step = None;
         self.status.clear();
         self.note.clear();
-        if let Some(reason) = self.settings.rules.blocked_reason() {
-            self.status = format!("Jump bridges off: {reason}");
+        let reason = self.settings.rules.blocked_reason();
+        if reason != self.bridges_reason {
+            if let Some(reason) = &reason {
+                self.notify(Level::Warning, format!("Jump bridges off: {reason}"));
+            }
+            self.bridges_reason = reason;
         }
         let Some(&origin) = self.waypoints.first() else {
             self.hubs.clear();
@@ -358,7 +377,7 @@ impl Session {
             None => {}
             // The route table shows the optimized order, so the status line does not.
             Some(Ok((routes, _))) => self.routes = routes,
-            Some(Err(e)) => self.status = self.settings.explain(&e),
+            Some(Err(e)) => self.notify(Level::Error, self.settings.explain(&e)),
         }
     }
 
@@ -383,12 +402,14 @@ impl Session {
                 self.note = route_note(&old_uni, path, &self.uni, kept.is_some()).unwrap_or_default();
             }
         }
-        // The status line shows a fetch problem, as at startup. While the text shows, a refresh does
-        // not add it again. The status bar clears it after `STATUS_TIME`, so each refresh shows it again.
-        if let Some(warning) = self.shortcuts.warning.clone()
-            && !self.status.contains(&warning)
-        {
-            self.append_status(warning);
+        // A fetch problem gives a notice, as at startup. The same problem on the next refresh
+        // gives no second notice. A problem that goes and comes back gives a new one.
+        let warning = self.shortcuts.warning.clone();
+        if warning != self.fetch_warning {
+            if let Some(warning) = &warning {
+                self.notify(Level::Warning, warning.clone());
+            }
+            self.fetch_warning = warning;
         }
     }
 
@@ -412,7 +433,7 @@ impl Session {
     /// `REFRESH_GAP` send one message.
     pub fn refresh_now(&mut self, now: Instant) {
         let Some(refresher) = &self.refresher else {
-            self.status = REFRESH_STOPPED.into();
+            self.notify(Level::Error, REFRESH_STOPPED);
             return;
         };
         if self.refreshed_at.is_some_and(|at| now.saturating_duration_since(at) < REFRESH_GAP) {
@@ -433,7 +454,7 @@ impl Session {
     /// Add a waypoint at the end. The same system two times in a row is not a waypoint.
     pub fn add_waypoint(&mut self, node: NodeIndex) {
         if self.waypoints.last() == Some(&node) {
-            self.status = format!("{} is already the last waypoint", self.uni.name(node));
+            self.notify(Level::Info, format!("{} is already the last waypoint", self.uni.name(node)));
             return;
         }
         self.waypoints.push(node);
@@ -464,7 +485,7 @@ impl Session {
         if !problems.is_empty() {
             text = format!("{text} · {}", problems.join(" · "));
         }
-        self.append_status(text);
+        self.notify(if problems.is_empty() { Level::Info } else { Level::Warning }, text);
         problems
     }
 
@@ -519,7 +540,7 @@ impl Session {
     /// Add a favourite. Return false if it is already a favourite.
     pub fn add_favourite(&mut self, node: NodeIndex) -> bool {
         if self.settings.favourites.contains(&node) {
-            self.status = format!("{} is already a favourite", self.uni.name(node));
+            self.notify(Level::Info, format!("{} is already a favourite", self.uni.name(node)));
             return false;
         }
         self.settings.favourites.push(node);
@@ -530,32 +551,32 @@ impl Session {
 
     /// Save the config, and show the result on the status line.
     pub fn save(&mut self) {
-        self.status = match self.write_config() {
-            Ok(()) => "Config saved!".into(),
-            Err(e) => e.to_string(),
-        };
+        match self.write_config() {
+            Ok(()) => self.notify(Level::Success, "Config saved!"),
+            Err(e) => self.notify(Level::Error, e.to_string()),
+        }
     }
 
     /// Save the config. Show only an error on the status line.
     pub fn save_quietly(&mut self) {
         if let Err(e) = self.write_config() {
-            self.status = e.to_string();
+            self.notify(Level::Error, e.to_string());
         }
     }
 
     /// Save the config after a change to a Nexum value. The refresh worker loads the new map at once.
     pub fn nexum_saved(&mut self) {
-        self.status = match self.write_config() {
+        match self.write_config() {
             Ok(()) => match &self.refresher {
                 Some(refresher) => {
                     refresher.nexum(self.cfg.nexum.clone());
-                    refresh::NEXUM_LOADING.into()
+                    self.status = refresh::NEXUM_LOADING.into();
                 }
                 // No worker: a test, or a worker that stopped.
-                None => "Nexum settings saved. Restart to load the new map.".into(),
+                None => self.notify(Level::Info, "Nexum settings saved. Restart to load the new map."),
             },
-            Err(e) => e.to_string(),
-        };
+            Err(e) => self.notify(Level::Error, e.to_string()),
+        }
     }
 
     /// The active faction theme.
@@ -639,6 +660,11 @@ mod tests {
         let mut s = Session::new(Arc::new(uni), settings, Config::default(), path, shortcuts);
         s.clock = || FIXTURE_TIME;
         (s, tmp)
+    }
+
+    /// The level and the text of the newest notice.
+    fn last(s: &Session) -> Option<(Level, &str)> {
+        s.notices.last().map(|n| (n.level, n.text.as_str()))
     }
 
     const JITA: u32 = 30000142;
@@ -789,10 +815,59 @@ mod tests {
     }
 
     #[test]
+    fn an_identical_waiting_notice_is_not_added_again() {
+        let (mut s, _tmp) = session();
+        s.notify(Level::Info, "same");
+        s.notify(Level::Info, "same");
+        s.notify(Level::Error, "same");
+        assert_eq!(s.notices.len(), 2, "the level is part of the notice");
+    }
+
+    #[test]
+    fn the_bridge_reason_gives_a_notice_only_when_it_changes() {
+        let (mut s, _tmp) = session();
+        let _ = std::fs::remove_file(&s.cfg_path);
+        s.notices.clear();
+        s.settings.rules.capital = None;
+        s.recompute();
+        assert_eq!(last(&s), Some((Level::Warning, "Jump bridges off: Set a capital to use jump bridges")));
+        // The same reason on the next search gives no second notice.
+        s.notices.clear();
+        s.recompute();
+        assert!(s.notices.is_empty(), "{:?}", s.notices);
+        // A capital clears the reason. Losing it again gives a new notice.
+        s.settings.rules.capital = s.uni.exact("JK-Q77");
+        s.recompute();
+        assert!(s.notices.is_empty());
+        s.settings.rules.capital = None;
+        s.recompute();
+        assert_eq!(s.notices.len(), 1);
+    }
+
+    #[test]
+    fn a_fetch_warning_gives_a_notice_once_per_problem() {
+        let (mut s, _tmp) = session();
+        s.notices.clear();
+        let snapshot = |warning: Option<&str>| {
+            let mut snap = snapshot(Vec::new());
+            snap.shortcuts.warning = warning.map(String::from);
+            snap
+        };
+        s.apply_snapshot(snapshot(Some("Nexum offline")));
+        s.apply_snapshot(snapshot(Some("Nexum offline")));
+        assert_eq!(s.notices.len(), 1, "the same problem shows one time");
+        // The window shows the notice. A problem that goes and comes back shows again.
+        s.notices.clear();
+        s.apply_snapshot(snapshot(None));
+        s.apply_snapshot(snapshot(Some("Nexum offline")));
+        assert_eq!(s.notices.len(), 1);
+    }
+
+    #[test]
     fn refresh_now_without_a_worker_says_so() {
         let (mut s, _tmp) = session();
         s.refresh_now(Instant::now());
-        assert_eq!(s.status, REFRESH_STOPPED);
+        assert_eq!(last(&s), Some((Level::Error, REFRESH_STOPPED)));
     }
 
     #[test]
@@ -855,7 +930,7 @@ mod tests {
         assert!(!s.routes.is_empty(), "prefer still gives a route");
         s.set_avoid_never_system(perimeter, true);
         assert!(s.routes.is_empty());
-        assert_eq!(s.status, "No route from Jita to Perimeter. Your avoid list might be in the way.");
+        assert_eq!(last(&s), Some((Level::Error, "No route from Jita to Perimeter. Your avoid list might be in the way.")));
     }
 
     #[test]
@@ -863,7 +938,7 @@ mod tests {
         let (mut s, _tmp) = session();
         let _ = std::fs::remove_file(&s.cfg_path);
         s.add_list("Jita, Amarr");
-        s.status = "unread".into();
+        s.notices.clear();
         let start = Instant::now();
         s.settings.costs.cap_weight = 1.0;
         s.apply_later(start);
@@ -871,15 +946,15 @@ mod tests {
         s.settings.costs.cap_weight = 2.0;
         s.apply_later(start + Duration::from_millis(300));
         assert_eq!(s.apply_due(start + Duration::from_millis(600)), Some(APPLY_DELAY - Duration::from_millis(300)));
-        assert_eq!(s.status, "unread", "no search yet");
+        assert!(s.notices.is_empty(), "no search yet");
         assert!(!s.cfg_path.exists(), "no write yet");
         assert_eq!(s.apply_due(start + APPLY_DELAY + Duration::from_millis(300)), None);
-        assert_eq!(s.status, "Config saved!");
+        assert_eq!(last(&s), Some((Level::Success, "Config saved!")));
         assert!(std::fs::read_to_string(&s.cfg_path).unwrap().contains("2.0"));
         // Nothing waits now.
-        s.status.clear();
+        s.notices.clear();
         assert_eq!(s.apply_due(start + Duration::from_secs(10)), None);
-        assert_eq!(s.status, "");
+        assert!(s.notices.is_empty());
     }
 
     #[test]
@@ -957,7 +1032,7 @@ mod tests {
         let dodixie = s.uni.exact("Dodixie").unwrap();
         s.add_waypoint(dodixie);
         assert_eq!(names(&s), ["Jita", "Amarr", "Dodixie"]);
-        assert!(s.status.contains("already the last waypoint"), "{}", s.status);
+        assert_eq!(last(&s), Some((Level::Info, "Dodixie is already the last waypoint")));
         assert_eq!(s.stop(1), Stop::Midpoint(1));
         assert_eq!(s.stop(2), Stop::Destination);
 
@@ -988,7 +1063,7 @@ mod tests {
         assert_eq!(names(&s), ["UALX-3", "Jita"]);
         assert_eq!(problems, ["Unknown system \"Nowhere\""]);
         assert_eq!(s.routes.len(), 3);
-        assert!(s.status.contains("Added 2 systems"), "{}", s.status);
+        assert!(last(&s).is_some_and(|(level, text)| level == Level::Warning && text.contains("Added 2 systems")), "{:?}", last(&s));
         // A name that matches more than one system is not added.
         let problems = s.add_list("Ama, Amarr");
         assert_eq!(names(&s), ["UALX-3", "Jita", "Amarr"]);

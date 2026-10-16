@@ -1,6 +1,7 @@
 //! The EVE login, the route start, the active route and the pilot avatars.
 
 use crate::app::Session;
+use crate::notice::Level;
 use crate::theme::{self, panel, panel_with};
 use egui::load::SizedTexture;
 use egui::{
@@ -186,7 +187,7 @@ impl PilotsUi {
             // The active route stays as it is. The pilot chooses when to re-route.
             HullSync::Hull if s.pilots.active.is_some() => {
                 let kind = s.settings.rules.hull.as_ref().map_or("an unknown ship".into(), |h| h.name.clone());
-                s.status = format!("Ship changed to {kind}. The routes update when this route ends.");
+                s.notify(Level::Info, format!("Ship changed to {kind}. The routes update when this route ends."));
                 s.save_quietly();
             }
             HullSync::Hull => {
@@ -194,8 +195,8 @@ impl PilotsUi {
                 s.save_quietly();
             }
         }
-        for notice in std::mem::take(&mut s.pilots.notices) {
-            s.status = notice;
+        for text in std::mem::take(&mut s.pilots.notices) {
+            s.notify(Level::Error, text);
         }
         // The login is done: continue the route start.
         if had_login && s.pilots.login.is_none() {
@@ -234,7 +235,7 @@ impl PilotsUi {
     fn login(&mut self, s: &mut Session) {
         self.paste.clear();
         if let Err(e) = s.pilots.start_login() {
-            s.status = e.to_string();
+            s.notify(Level::Error, e.to_string());
         }
         self.characters_open = true;
     }
@@ -245,7 +246,7 @@ impl PilotsUi {
         let ids: Vec<u64> = s.pilots.senders().into_iter().map(|c| c.id).collect();
         match ids.len() {
             // A waypoint does nothing without the game client, so an offline pilot is not in the list.
-            0 if s.pilots.characters().iter().any(|c| !c.live.expired) => s.status = Pilots::NO_SENDER.into(),
+            0 if s.pilots.characters().iter().any(|c| !c.live.expired) => s.notify(Level::Warning, Pilots::NO_SENDER),
             0 => {
                 self.start_after_login = Some(picked);
                 self.login(s);
@@ -263,7 +264,7 @@ impl PilotsUi {
         let Some(r) = s.routes.get(route) else { return };
         let plan = StartPlan::new(&s.uni, &s.settings, r, route + 1, &pilot, router_core::wormhole::now());
         if let Some(e) = &plan.error {
-            s.status.clone_from(e);
+            s.notify(Level::Error, e.clone());
         }
         self.start = Some(Start::Confirm(Box::new(plan)));
     }
@@ -400,7 +401,7 @@ impl PilotsUi {
             ui.label(RichText::new("Not opened? Copy this URL:").color(theme::TEXT_DIM));
             if ui.small_button("Copy URL").clicked() {
                 ui.ctx().copy_text(url.clone());
-                s.status = "Login URL copied to the clipboard".into();
+                s.notify(Level::Success, "Login URL copied to the clipboard");
             }
         });
         if let Some(e) = listen_error {
@@ -532,7 +533,7 @@ impl PilotsUi {
             s.pilots.sync_hull(&mut s.settings);
             s.recompute();
             s.save_quietly();
-            s.status = format!("Routes planned for the {kind}. Start the route again.");
+            s.notify(Level::Info, format!("Routes planned for the {kind}. Start the route again."));
         }
         if let Some((route, id)) = next {
             self.confirm(s, route, id);
@@ -579,7 +580,7 @@ impl PilotsUi {
         match question(ui, "stop", "Stop route", &text, &[("Stop route", true), ("Keep going", false)]) {
             Some(0) => {
                 s.pilots.stop_route();
-                s.status = "Route stopped. The in-game waypoints stay.".into();
+                s.notify(Level::Warning, "Route stopped. The in-game waypoints stay.");
                 self.stop = false;
             }
             Some(_) => self.stop = false,
@@ -670,7 +671,7 @@ impl PilotsUi {
                 if ui.button("Re-route from here").clicked() {
                     match s.pilots.reroute(&s.uni, &s.settings, router_core::wormhole::now()) {
                         Ok(route) => self.reroute = Some(Box::new(route)),
-                        Err(e) => s.status = e.to_string(),
+                        Err(e) => s.notify(Level::Error, e.to_string()),
                     }
                 }
                 if ui.button("Stop route").clicked() {
@@ -888,7 +889,7 @@ fn ship_row(ui: &mut Ui, pilot: &PilotView, hulls: &router_core::ansiblex::HullT
 fn resolve(s: &mut Session, chosen: &ChosenRoute) -> Option<usize> {
     let route = kept_route(&s.routes, &s.uni, &chosen.uni, &chosen.path);
     if route.is_none() {
-        s.status = ROUTE_GONE.into();
+        s.notify(Level::Warning, ROUTE_GONE);
     }
     route
 }
@@ -994,7 +995,7 @@ mod tests {
         s.routes.truncate(1);
         assert_eq!(ui.pick_index(&mut s), None);
         assert!(ui.start.is_none());
-        assert_eq!(s.status, ROUTE_GONE);
+        assert_eq!(s.notices.last().map(|n| n.text.as_str()), Some(ROUTE_GONE));
     }
 
     #[test]
@@ -1004,6 +1005,6 @@ mod tests {
         s.routes.truncate(1);
         ui.continue_after_login(&mut s);
         assert!(ui.start_after_login.is_none() && ui.start.is_none());
-        assert_eq!(s.status, ROUTE_GONE);
+        assert_eq!(s.notices.last().map(|n| n.text.as_str()), Some(ROUTE_GONE));
     }
 }

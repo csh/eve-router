@@ -5,6 +5,7 @@
 
 mod app;
 mod log_window;
+mod notice;
 mod pilots_view;
 mod search;
 mod settings_window;

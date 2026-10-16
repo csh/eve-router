@@ -2,6 +2,7 @@
 //! the status line.
 
 use crate::app::Session;
+use crate::notice::{Level, Toaster};
 use crate::pilots_view::PilotsUi;
 use crate::search::{Pick, SearchBox};
 use crate::settings_window::{self, Popup, SettingsForm};
@@ -150,6 +151,7 @@ pub struct View {
     /// The Nexum map list fetch, while it runs.
     pub maps: Option<Receiver<Result<Vec<MapInfo>, FetchError>>>,
     status_timer: StatusTimer,
+    toaster: Toaster,
     /// The login, the route start, the active route and the avatars.
     pilots: PilotsUi,
     /// True if the pilot opened the waypoint list, false if the pilot closed it. With `None`, the
@@ -184,6 +186,7 @@ impl View {
             log_open: false,
             maps: None,
             status_timer: StatusTimer::default(),
+            toaster: Toaster::default(),
             pilots: PilotsUi::default(),
             waypoints_open: None,
             tab: Tab::default(),
@@ -198,14 +201,10 @@ impl View {
         if let Some(left) = s.apply_due(Instant::now()) {
             ui.ctx().request_repaint_after(left);
         }
-        // The status text and the startup lines clear after `STATUS_TIME`.
-        let text = std::iter::once(&s.status).chain(&s.startup_lines).filter(|t| !t.is_empty()).cloned().collect::<Vec<_>>().join(" · ");
-        match self.status_timer.update(&text, Instant::now()) {
-            None => {
-                s.status.clear();
-                s.startup_lines.clear();
-            }
-            Some(_) if text.is_empty() => {}
+        // The status text clears after `STATUS_TIME`. A notice shows as a toast.
+        match self.status_timer.update(&s.status, Instant::now()) {
+            None => s.status.clear(),
+            Some(_) if s.status.is_empty() => {}
             Some(left) => ui.ctx().request_repaint_after(left),
         }
         if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F5)) {
@@ -284,6 +283,7 @@ impl View {
         settings_window::show(ui, self, s);
         self.pilots.windows(ui, s);
         crate::log_window::show(ui.ctx(), &mut self.log_open, s);
+        self.toaster.show(ui, &mut s.notices);
     }
 
     /// The planner and the route list. `table_below` keeps room for the route table under them.
@@ -1039,7 +1039,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
     }
     if copy && let Some(route) = s.selected_route() {
         ui.ctx().copy_text(route_tsv(&s.uni, &s.settings.rules, route, s.now));
-        s.status = format!("Route #{} copied to the clipboard", s.selected + 1);
+        s.notify(Level::Success, format!("Route #{} copied to the clipboard", s.selected + 1));
     }
 }
 
@@ -1193,12 +1193,8 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool, compact: bool) 
         sync_status(ui, s, compact);
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
             // The refresh note stays: the status timer clears only the status and the startup lines.
-            let parts: Vec<&str> = std::iter::once(&s.status)
-                .chain(&s.startup_lines)
-                .chain(std::iter::once(&s.note))
-                .map(String::as_str)
-                .filter(|t| !t.is_empty())
-                .collect();
+            let parts: Vec<&str> =
+                std::iter::once(&s.status).chain(std::iter::once(&s.note)).map(String::as_str).filter(|t| !t.is_empty()).collect();
             let (text, color) = match parts.is_empty() {
                 true => ("Ready".to_string(), theme::TEXT_DIM),
                 false => (parts.join(" · "), theme::WARN),
