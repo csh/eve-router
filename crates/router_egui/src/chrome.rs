@@ -12,15 +12,12 @@ use crate::theme;
 
 /// The height of the title bar.
 const TITLE_HEIGHT: f32 = 32.0;
-/// The width of one window button. The icon in it is 10 px wide.
-const BUTTON_WIDTH: f32 = 36.0;
+/// The width of the room of one window button: a 16 px icon box and an 8 px gap.
+const BUTTON_WIDTH: f32 = 24.0;
 /// The width of the zone at a window edge that starts a resize.
 const EDGE: f32 = 4.0;
 /// The length of the zone at a corner that starts a diagonal resize.
 const CORNER: f32 = 10.0;
-/// The fill of the close button under the pointer: the error background of the Rift app.
-const CLOSE_HOVER: Color32 = Color32::from_rgb(0x7F, 0x26, 0x28);
-
 /// The icon of a window button.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Icon {
@@ -58,7 +55,7 @@ pub fn title_bar(ui: &mut Ui, title: &str, detail: &str) {
         }
 
         let button = |from_right: f32| {
-            Rect::from_min_size(Pos2::new(rect.right() - BUTTON_WIDTH * from_right, rect.top()), vec2(BUTTON_WIDTH, TITLE_HEIGHT))
+            Rect::from_min_size(Pos2::new(rect.right() - 8.0 - BUTTON_WIDTH * from_right, rect.top()), vec2(BUTTON_WIDTH, TITLE_HEIGHT))
         };
         if caption_button(ui, button(1.0), "close", Icon::Close) {
             ctx.send_viewport_cmd(ViewportCommand::Close);
@@ -83,32 +80,35 @@ fn paint_logo(painter: &egui::Painter, center: Pos2, accent: Color32) {
     }
 }
 
-/// One window button. Returns true when the pilot clicks it.
+/// One window button: a small icon with no box. Under the pointer the icon turns light and glows,
+/// as the buttons of the Rift app do. Returns true when the pilot clicks it.
 fn caption_button(ui: &mut Ui, rect: Rect, name: &str, icon: Icon) -> bool {
     let response = ui.interact(rect, Id::new(("caption", name)), Sense::click());
     let hovered = response.hovered();
-    let painter = ui.painter_at(rect);
-    if hovered {
-        painter.rect_filled(rect, 0.0, if icon == Icon::Close { CLOSE_HOVER } else { theme::HEADER });
-    }
-    let color = if hovered { Color32::WHITE } else { theme::TEXT_DIM };
-    let stroke = Stroke::new(1.0, color);
+    let painter = ui.painter();
     // Half a pixel off the center puts the 1 px lines on whole pixels.
     let c = Pos2::new(rect.center().x.floor() + 0.5, rect.center().y.floor() + 0.5);
-    match icon {
-        Icon::Minimize => _ = painter.line_segment([c + vec2(-5.0, 0.0), c + vec2(5.0, 0.0)], stroke),
-        Icon::Maximize => _ = painter.rect_stroke(Rect::from_center_size(c, vec2(10.0, 10.0)), 0.0, stroke, StrokeKind::Middle),
+    let draw = |stroke: Stroke| match icon {
+        Icon::Minimize => _ = painter.line_segment([c + vec2(-4.0, 3.0), c + vec2(4.0, 3.0)], stroke),
+        Icon::Maximize => _ = painter.rect_stroke(Rect::from_center_size(c, vec2(8.0, 8.0)), 0.0, stroke, StrokeKind::Middle),
         Icon::Restore => {
-            painter.rect_stroke(Rect::from_center_size(c + vec2(-1.0, 1.0), vec2(8.0, 8.0)), 0.0, stroke, StrokeKind::Middle);
+            painter.rect_stroke(Rect::from_center_size(c + vec2(-1.0, 1.0), vec2(6.0, 6.0)), 0.0, stroke, StrokeKind::Middle);
             // The window behind: the top and the right line only.
-            let back = Rect::from_center_size(c + vec2(1.0, -1.0), vec2(8.0, 8.0));
+            let back = Rect::from_center_size(c + vec2(1.0, -1.0), vec2(6.0, 6.0));
             painter.line_segment([back.left_top() + vec2(2.0, 0.0), back.right_top()], stroke);
             painter.line_segment([back.right_top(), back.right_bottom() - vec2(0.0, 2.0)], stroke);
         }
         Icon::Close => {
-            painter.line_segment([c + vec2(-5.0, -5.0), c + vec2(5.0, 5.0)], stroke);
-            painter.line_segment([c + vec2(-5.0, 5.0), c + vec2(5.0, -5.0)], stroke);
+            painter.line_segment([c + vec2(-4.0, -4.0), c + vec2(4.0, 4.0)], stroke);
+            painter.line_segment([c + vec2(-4.0, 4.0), c + vec2(4.0, -4.0)], stroke);
         }
+    };
+    if hovered {
+        // egui has no blur, so a wide faint copy under the icon stands in for the glow.
+        draw(Stroke::new(4.0, theme::accent(ui).gamma_multiply(0.25)));
+        draw(Stroke::new(1.0, theme::accent_light(ui)));
+    } else {
+        draw(Stroke::new(1.0, theme::TEXT_DIM));
     }
     response.clicked()
 }
