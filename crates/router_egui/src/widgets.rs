@@ -62,16 +62,21 @@ impl Widget for AppButton {
             let (fill, line, text) = if !enabled {
                 (Color32::TRANSPARENT, theme::LINE, theme::TEXT_OFF)
             } else if self.kind == Kind::Primary {
+                // The colors of the primary button of Rift: a dark fill, light under the pointer, white pressed.
                 match (pressed, hovered) {
-                    (true, _) => (accent, theme::accent_light(ui), Color32::WHITE),
-                    (_, true) => (theme::accent_dark(ui).lerp_to_gamma(accent, 0.5), theme::accent_light(ui), Color32::WHITE),
-                    _ => (theme::accent_dark(ui), accent, Color32::WHITE),
+                    (true, _) => (Color32::from_rgb(0xEA, 0xEA, 0xEA), Color32::WHITE, Color32::from_rgb(0x59, 0x59, 0x59)),
+                    (_, true) => (theme::accent_mid(ui), theme::accent_light(ui), Color32::WHITE),
+                    _ => (theme::accent_dark(ui), theme::accent_line(ui), theme::TEXT),
                 }
             } else if self.selected {
                 (ui.visuals().selection.bg_fill, accent, Color32::WHITE)
             } else {
                 (visuals.bg_fill, visuals.bg_stroke.color, visuals.fg_stroke.color)
             };
+            if hovered {
+                // egui has no blur, so a wide faint line around the button stands in for the glow.
+                ui.painter().rect_stroke(rect.expand(1.0), 0.0, Stroke::new(2.0, accent.gamma_multiply(0.3)), StrokeKind::Inside);
+            }
             ui.painter().rect(rect, 0.0, fill, Stroke::new(1.0, line), StrokeKind::Inside);
             let pos = rect.center() - galley.size() / 2.0;
             ui.painter().galley(pos, galley, text);

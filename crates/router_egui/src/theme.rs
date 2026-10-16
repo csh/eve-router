@@ -94,19 +94,14 @@ impl FactionTheme {
         }
     }
 
-    /// The fill of a button at rest: the dark panel color with a trace of the accent.
-    pub fn button_bg(self) -> Color32 {
-        mix(Color32::from_rgb(0x0A, 0x0A, 0x0A), self.accent(), 0.10)
-    }
-
-    /// The 1 px line of a button at rest: a muted accent, as the client draws it.
+    /// The 1 px line of a button at rest: a dark accent. A button has no fill at rest, as in Rift.
     pub fn button_border(self) -> Color32 {
-        mix(LINE, self.accent(), 0.45)
+        mix(Color32::BLACK, self.accent(), 0.35)
     }
 
-    /// The line of a hovered button: the accent at 75%.
+    /// The line of a hovered button: the light accent.
     pub fn button_border_hover(self) -> Color32 {
-        mix(LINE, self.accent(), 0.75)
+        accent_light_of(self.accent())
     }
 
     pub fn active_bg(self) -> Color32 {
@@ -129,9 +124,19 @@ fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     Color32::from_rgb(lerp(a.r(), b.r()), lerp(a.g(), b.g()), lerp(a.b(), b.b()))
 }
 
-/// The accent in a darker shade: the fill of a primary button at rest.
+/// The accent in a dark shade: the fill of a panel header and of a primary button at rest.
 pub fn accent_dark(ui: &Ui) -> Color32 {
-    mix(Color32::BLACK, accent(ui), 0.65)
+    mix(Color32::BLACK, accent(ui), 0.22)
+}
+
+/// The accent in a middle shade: the fill of a primary button under the pointer.
+pub fn accent_mid(ui: &Ui) -> Color32 {
+    mix(Color32::BLACK, accent(ui), 0.5)
+}
+
+/// The accent in a muted shade: the line of a primary button at rest.
+pub fn accent_line(ui: &Ui) -> Color32 {
+    mix(Color32::BLACK, accent(ui), 0.72)
 }
 
 /// The accent in a lighter shade: the line of a focused field and of a hovered primary button.
@@ -241,7 +246,7 @@ pub fn apply(ctx: &egui::Context, theme: FactionTheme, compact: bool) {
         let w = &mut v.widgets;
         for (state, fill, stroke, text) in [
             (&mut w.noninteractive, PANEL, LINE, TEXT),
-            (&mut w.inactive, theme.button_bg(), theme.button_border(), TEXT),
+            (&mut w.inactive, Color32::TRANSPARENT, theme.button_border(), TEXT),
             (&mut w.hovered, hov_bg, theme.button_border_hover(), Color32::WHITE),
             (&mut w.active, act_bg, accent, Color32::WHITE),
             (&mut w.open, opn_bg, accent, TEXT),
@@ -287,6 +292,11 @@ pub fn header_text(text: &str) -> RichText {
     RichText::new(text.to_uppercase()).color(TEXT_DIM).size(11.0).extra_letter_spacing(1.5)
 }
 
+/// The title of a panel: plain text, as the section titles of Rift.
+fn panel_title(text: &str) -> RichText {
+    RichText::new(text).color(TEXT).extra_letter_spacing(0.5)
+}
+
 /// A panel: a header strip with `title` and `info`, then the content. `fill` makes the panel
 /// as high as the space that is left.
 pub fn panel<R>(ui: &mut Ui, title: &str, info: &str, fill: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
@@ -296,14 +306,14 @@ pub fn panel<R>(ui: &mut Ui, title: &str, info: &str, fill: bool, add: impl FnOn
 
 /// A panel with the widgets of `header` at the right of the header strip, from right to left.
 pub fn panel_with<R>(ui: &mut Ui, title: &str, header: impl FnOnce(&mut Ui), fill: bool, add: impl FnOnce(&mut Ui) -> R) -> R {
-    let frame = Frame::new().fill(PANEL).stroke(Stroke::new(1.0, LINE)).inner_margin(Margin::ZERO);
+    let frame = Frame::new().stroke(Stroke::new(1.0, LINE)).inner_margin(Margin::ZERO);
     let response = frame.show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         let header_margin = if is_compact(ui) { Margin::symmetric(6, 2) } else { Margin::symmetric(8, 4) };
-        Frame::new().fill(HEADER).inner_margin(header_margin).show(ui, |ui| {
+        Frame::new().fill(accent_dark(ui)).inner_margin(header_margin).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
-                ui.label(header_text(title));
+                ui.label(panel_title(title));
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), header);
             });
         });
@@ -366,7 +376,6 @@ mod tests {
         for (i, a) in FactionTheme::ALL.iter().enumerate() {
             for b in &FactionTheme::ALL[i + 1..] {
                 assert_ne!(a.button_border(), b.button_border());
-                assert_ne!(a.button_bg(), b.button_bg());
             }
         }
     }
