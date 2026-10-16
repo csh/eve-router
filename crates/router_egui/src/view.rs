@@ -1231,13 +1231,13 @@ fn sync_status(ui: &mut Ui, s: &Session, compact: bool) {
     }
 }
 
-/// The loading screen, or the load error.
-pub fn splash(ui: &mut Ui, error: Option<&str>) {
+/// The loading screen with the current step, or the load error. A download shows a progress bar.
+pub fn splash(ui: &mut Ui, error: Option<&str>, step: Option<&router_core::startup::Progress>) {
     let frame = Frame::new().fill(theme::BG);
     egui::CentralPanel::default().frame(frame).show(ui, |ui| {
         ui.vertical_centered(|ui| {
             ui.add_space((ui.available_height() / 2.0 - 80.0).max(0.0));
-            ui.allocate_ui(vec2(420.0, 160.0), |ui| {
+            ui.allocate_ui(vec2(420.0, 190.0), |ui| {
                 panel(ui, "EVE Router", "", false, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.add_space(8.0);
@@ -1245,7 +1245,12 @@ pub fn splash(ui: &mut Ui, error: Option<&str>) {
                             None => {
                                 ui.add(egui::Spinner::new().size(28.0).color(theme::accent(ui)));
                                 ui.add_space(8.0);
-                                ui.label(RichText::new("Loading the map and the wormhole data…").color(theme::TEXT));
+                                let text = step.map_or_else(|| "Starting…".to_string(), |step| step.text());
+                                ui.label(RichText::new(text).color(theme::TEXT));
+                                if let Some(fraction) = step.and_then(|step| step.fraction()) {
+                                    ui.add_space(6.0);
+                                    ui.add(egui::ProgressBar::new(fraction).fill(theme::accent(ui)).desired_width(300.0));
+                                }
                             }
                             Some(e) => {
                                 ui.label(RichText::new("The load failed").color(theme::ERROR).family(theme::bold()));
@@ -1264,6 +1269,25 @@ pub fn splash(ui: &mut Ui, error: Option<&str>) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_splash_draws_every_step_and_the_error() {
+        use router_core::startup::Progress;
+        let steps = [None, Some(Progress::CheckingSde), Some(Progress::DownloadingSde { done: 5, total: 10 }), Some(Progress::LoadingMap)];
+        // The app registers its fonts and theme first: the splash uses the bold font.
+        let ctx = egui::Context::default();
+        theme::apply_default(&ctx);
+        theme::set_font(&ctx);
+        let draw = |error: Option<&str>, step: Option<&Progress>| {
+            // The frame output holds texture changes. A test with no renderer drops them.
+            let mut output = ctx.run_ui(Default::default(), |ui| splash(ui, error, step));
+            output.textures_delta.clear();
+        };
+        for step in &steps {
+            draw(None, step.as_ref());
+        }
+        draw(Some("Cannot read the config"), None);
+    }
 
     fn route_with_stops(steps: usize, stops: Vec<usize>) -> router_core::route::Route {
         use router_core::route::{Path, Route};

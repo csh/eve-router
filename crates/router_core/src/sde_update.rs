@@ -13,6 +13,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::Duration;
 
 /// The SDE files that the router needs. `_sde.jsonl` comes last, so an interrupted
@@ -23,6 +24,10 @@ pub const FILES: [&str; 4] = ["mapSolarSystems.jsonl", "mapStargates.jsonl", "ma
 pub const SKIP_ENV: &str = "EVE_ROUTER_SKIP_SDE_CHECK";
 
 const BASE_URL: &str = "https://developers.eveonline.com/static-data/tranquility";
+
+/// Receives `(done, total)` in compressed bytes while the download runs. It runs on the threads
+/// of the download, so it must be quick.
+pub type OnBytes<'a> = &'a (dyn Fn(u64, u64) + Sync);
 
 pub enum Outcome {
     Skipped,
@@ -59,7 +64,8 @@ impl Outcome {
 }
 
 /// Make sure that `dir` holds the latest SDE files. With `skip`, do not look at the network.
-pub fn ensure(dir: &Path, skip: bool) -> Result<Outcome, String> {
+/// `on_bytes` reports the progress of a download.
+pub fn ensure(dir: &Path, skip: bool, on_bytes: OnBytes) -> Result<Outcome, String> {
     if skip {
         return Ok(Outcome::Skipped);
     }
@@ -78,14 +84,14 @@ pub fn ensure(dir: &Path, skip: bool) -> Result<Outcome, String> {
         return Ok(Outcome::UpToDate);
     }
     let source = HttpSource { agent, url: format!("{BASE_URL}/eve-online-static-data-{latest}-jsonl.zip") };
-    install(&source, dir, latest)
+    install(&source, dir, latest, on_bytes)
 }
 
 /// Download build `latest` into `dir`. `from` is the local build before the download.
-fn install(src: &dyn RangeSource, dir: &Path, latest: u32) -> Result<Outcome, String> {
+fn install(src: &dyn RangeSource, dir: &Path, latest: u32, on_bytes: OnBytes) -> Result<Outcome, String> {
     // The local build can exist without ships.json or wormholes.json, from a version before these derived tables.
     let from = crate::sde::build_number(dir);
-    let bytes = download(src, dir)?;
+    let bytes = download(src, dir, on_bytes)?;
     Ok(Outcome::Updated { from, to: latest, bytes })
 }
 
@@ -216,8 +222,25 @@ fn read_directory(src: &dyn RangeSource) -> Result<Vec<Entry>, String> {
     Ok(entries)
 }
 
+/// The most bytes in one range request. A big entry then reports its progress in steps.
+const CHUNK: u64 = 1024 * 1024;
+
+/// Read `len` bytes from `start` in requests of at most `CHUNK` bytes. `step` gets the size of each part.
+fn read_chunks(src: &dyn RangeSource, start: u64, len: u64, step: &dyn Fn(u64)) -> Result<Vec<u8>, String> {
+    let mut out = Vec::with_capacity(usize::try_from(len).unwrap_or(0).min(MAX_RESERVE));
+    let mut at = 0;
+    while at < len {
+        let part = CHUNK.min(len - at);
+        out.extend(src.read(start + at, part)?);
+        step(part);
+        at += part;
+    }
+    Ok(out)
+}
+
 /// Fetch and decompress one entry. Make sure that its size and CRC-32 are correct.
-fn extract(src: &dyn RangeSource, entry: &Entry) -> Result<Vec<u8>, String> {
+/// `step` gets the number of compressed bytes after each part of the download.
+fn extract(src: &dyn RangeSource, entry: &Entry, step: &dyn Fn(u64)) -> Result<Vec<u8>, String> {
     let err = |msg: &str| format!("{}: {msg}", entry.name);
     let header = src.read(entry.offset, 30)?;
     if u32_at(&header, 0) != LOCAL_SIG {
@@ -225,7 +248,7 @@ fn extract(src: &dyn RangeSource, entry: &Entry) -> Result<Vec<u8>, String> {
     }
     // The local extra field can differ from the central one, so read its length here.
     let data_start = entry.offset + 30 + u64::from(u16_at(&header, 26)) + u64::from(u16_at(&header, 28));
-    let data = src.read(data_start, entry.compressed)?;
+    let data = read_chunks(src, data_start, entry.compressed, step)?;
     let out = match entry.method {
         0 => data,
         8 => inflate(&data, entry.size).map_err(|e| err(&e.to_string()))?,
@@ -250,17 +273,22 @@ fn inflate(data: &[u8], size: u64) -> std::io::Result<Vec<u8>> {
 }
 
 /// Fetch `FILES` from the zip into `dir`, and make `ships.json` from the ship source files.
-/// The source files are not kept. Return the number of compressed bytes.
-pub(crate) fn download(src: &dyn RangeSource, dir: &Path) -> Result<u64, String> {
+/// The source files are not kept. Return the number of compressed bytes. `on_bytes` gets
+/// `(done, total)` at the start and after each part of the download.
+pub(crate) fn download(src: &dyn RangeSource, dir: &Path, on_bytes: OnBytes) -> Result<u64, String> {
     let entries = read_directory(src)?;
     let names: Vec<&str> = FILES.iter().chain(&ships::SOURCES).copied().collect();
     let wanted: Vec<&Entry> = names
         .iter()
         .map(|&f| entries.iter().find(|e| e.name == f).ok_or(format!("{f} is not in the SDE zip")))
         .collect::<Result<_, _>>()?;
+    let total: u64 = wanted.iter().map(|e| e.compressed).sum();
+    let done = AtomicU64::new(0);
+    on_bytes(0, total);
+    let step = |part: u64| on_bytes(done.fetch_add(part, Ordering::Relaxed) + part, total);
     // The entries are independent, so fetch them at the same time.
     let mut files: HashMap<&str, Vec<u8>> =
-        wanted.par_iter().map(|e| extract(src, e).map(|data| (e.name.as_str(), data))).collect::<Result<_, _>>()?;
+        wanted.par_iter().map(|e| extract(src, e, &step).map(|data| (e.name.as_str(), data))).collect::<Result<_, _>>()?;
 
     let build = files.get("_sde.jsonl").and_then(|d| build_from(d));
     let source = |name| files.get(name).map(Vec::as_slice).unwrap_or_default();
@@ -281,7 +309,7 @@ pub(crate) fn download(src: &dyn RangeSource, dir: &Path) -> Result<u64, String>
         fs::write(&tmp, data).map_err(|e| format!("{}: {e}", tmp.display()))?;
         fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
     }
-    Ok(wanted.iter().map(|e| e.compressed).sum())
+    Ok(total)
 }
 
 /// The build number in the `_sde.jsonl` data.
@@ -313,7 +341,7 @@ mod tests {
     fn downloads_only_wanted_files() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().to_path_buf();
-        download(&FIXTURE.to_vec(), &dir).unwrap();
+        download(&FIXTURE.to_vec(), &dir, &|_, _| {}).unwrap();
         let mut names: Vec<String> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         names.sort();
         assert_eq!(
@@ -334,6 +362,19 @@ mod tests {
         assert_eq!(local_build(&dir), Some(123));
     }
 
+    #[test]
+    fn a_download_reports_its_progress_up_to_the_total() {
+        use std::sync::Mutex;
+        let tmp = tempfile::tempdir().unwrap();
+        let seen = Mutex::new(Vec::new());
+        let total = download(&FIXTURE.to_vec(), tmp.path(), &|done, total| seen.lock().unwrap().push((done, total))).unwrap();
+        let seen = seen.into_inner().unwrap();
+        assert_eq!(seen.first(), Some(&(0, total)), "the first report is the start");
+        assert_eq!(seen.last(), Some(&(total, total)), "the last report is the end");
+        // The files download at the same time, so the reports can come in any order.
+        assert!(seen.iter().all(|&(done, t)| t == total && done <= total));
+    }
+
     /// Make `ships.json` and `wormholes.json` in the repository `sde/` directory again, from the
     /// SDE build in `sde/_sde.jsonl`. It needs the network, so it runs only on request:
     /// `cargo test regenerate_repo_sde -- --ignored`
@@ -343,7 +384,7 @@ mod tests {
         let dir = &crate::test_support::sde_dir();
         let build = crate::sde::build_number(dir).unwrap();
         let source = HttpSource { agent: agent(), url: format!("{BASE_URL}/eve-online-static-data-{build}-jsonl.zip") };
-        download(&source, dir).unwrap();
+        download(&source, dir, &|_, _| {}).unwrap();
     }
 
     #[test]
@@ -353,7 +394,7 @@ mod tests {
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("_sde.jsonl"), "{\"_key\": \"sde\", \"buildNumber\": 100}\n").unwrap();
         // The fixture holds build 123.
-        let Outcome::Updated { from, to, .. } = install(&FIXTURE.to_vec(), &dir, 123).unwrap() else { panic!("not Updated") };
+        let Outcome::Updated { from, to, .. } = install(&FIXTURE.to_vec(), &dir, 123, &|_, _| {}).unwrap() else { panic!("not Updated") };
         assert_eq!((from, to), (Some(100), 123));
     }
 
@@ -398,7 +439,7 @@ mod tests {
         bad[60] ^= 0xff;
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().to_path_buf();
-        assert!(download(&bad, &dir).is_err());
+        assert!(download(&bad, &dir, &|_, _| {}).is_err());
         let _ = fs::remove_dir_all(&dir);
     }
 }

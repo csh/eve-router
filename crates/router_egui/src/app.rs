@@ -21,9 +21,23 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
 
+/// A message from the load thread.
+enum LoadMsg {
+    /// The load starts a new step.
+    Progress(startup::Progress),
+    /// The load ends.
+    Done(Box<Result<Session, String>>),
+}
+
+/// The load thread and the step that it reported last.
+struct Loading {
+    rx: Receiver<LoadMsg>,
+    step: Option<startup::Progress>,
+}
+
 enum State {
     /// The startup load runs on a thread, because it can take up to 35 s.
-    Loading(Receiver<Result<Session, String>>),
+    Loading(Loading),
     Ready(Box<Session>, Box<View>),
     Failed(String),
 }
@@ -57,19 +71,23 @@ impl RouterApp {
         theme::set_font(&ctx);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let _ = tx.send(load(ctx.clone()));
+            let result = load(ctx.clone(), &tx);
+            let _ = tx.send(LoadMsg::Done(Box::new(result)));
             ctx.request_repaint();
         });
-        RouterApp { state: State::Loading(rx), last_frame: None }
+        RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None }
     }
 
     /// Take the load result, if the thread sent it.
     fn poll(&mut self, ctx: &egui::Context) {
-        let State::Loading(rx) = &self.state else { return };
-        let result = match rx.try_recv() {
-            Ok(result) => result,
-            Err(TryRecvError::Empty) => return,
-            Err(TryRecvError::Disconnected) => Err(LOAD_STOPPED.into()),
+        let State::Loading(loading) = &mut self.state else { return };
+        let result = loop {
+            match loading.rx.try_recv() {
+                Ok(LoadMsg::Progress(step)) => loading.step = Some(step),
+                Ok(LoadMsg::Done(result)) => break *result,
+                Err(TryRecvError::Empty) => return,
+                Err(TryRecvError::Disconnected) => break Err(LOAD_STOPPED.into()),
+            }
         };
         self.state = match result {
             Ok(session) => {
@@ -105,13 +123,17 @@ fn client_id() -> Option<String> {
 
 /// The startup load, with the config file and the default SDE directory. The arguments
 /// of the command line are the first waypoints, for example `eve-router-egui Jita "New Caldari"`.
-fn load(ctx: egui::Context) -> Result<Session, String> {
+fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, String> {
     let paths = AppPaths::detect();
     let cfg = Config::load(&paths.config)?;
-    let pending = startup::begin(&cfg, &paths);
-    let mut startup_lines = Vec::new();
-    let startup::Loaded { hulls, snapshot, base, report, types, .. } =
-        startup::finish(pending, env_flag(sde_update::SKIP_ENV), |outcome| startup_lines.extend(outcome.message(&paths.sde)))?;
+    // Each step wakes the window, so the splash screen shows it.
+    let progress = |step| {
+        let _ = tx.send(LoadMsg::Progress(step));
+        ctx.request_repaint();
+    };
+    let startup::Loaded { sde, hulls, snapshot, base, report, types } =
+        startup::load(&cfg, &paths, env_flag(sde_update::SKIP_ENV), progress)?;
+    let startup_lines: Vec<String> = sde.message(&paths.sde).into_iter().collect();
     let Snapshot { uni, shortcuts, all, log } = snapshot;
     let settings = Settings::from_config(&cfg, &uni, hulls)?;
     // The worker gets the wormholes again each 5 minutes, and wakes the window after each refresh.
@@ -584,8 +606,8 @@ impl eframe::App for RouterApp {
             session.poll_refresh();
         }
         match &mut self.state {
-            State::Loading(_) => crate::view::splash(ui, None),
-            State::Failed(e) => crate::view::splash(ui, Some(e)),
+            State::Loading(loading) => crate::view::splash(ui, None, loading.step.as_ref()),
+            State::Failed(e) => crate::view::splash(ui, Some(e), None),
             State::Ready(session, view) => view.show(ui, session),
         }
     }
@@ -887,12 +909,23 @@ mod tests {
 
     #[test]
     fn a_lost_load_thread_shows_an_error() {
-        let (tx, rx) = mpsc::channel::<Result<Session, String>>();
+        let (tx, rx) = mpsc::channel::<LoadMsg>();
         drop(tx);
-        let mut app = RouterApp { state: State::Loading(rx), last_frame: None };
+        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None };
         app.poll(&egui::Context::default());
         let State::Failed(text) = &app.state else { panic!("the state is not Failed") };
         assert_eq!(text, LOAD_STOPPED);
+    }
+
+    #[test]
+    fn the_splash_keeps_the_newest_step() {
+        let (tx, rx) = mpsc::channel::<LoadMsg>();
+        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None };
+        tx.send(LoadMsg::Progress(startup::Progress::CheckingSde)).unwrap();
+        tx.send(LoadMsg::Progress(startup::Progress::DownloadingSde { done: 5, total: 10 })).unwrap();
+        app.poll(&egui::Context::default());
+        let State::Loading(loading) = &app.state else { panic!("the load ended") };
+        assert_eq!(loading.step, Some(startup::Progress::DownloadingSde { done: 5, total: 10 }));
     }
 
     #[test]
