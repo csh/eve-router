@@ -95,6 +95,9 @@ impl RouterApp {
         self.state = match result {
             Ok(session) => {
                 session.apply_theme(ctx);
+                if session.custom_chrome() {
+                    ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
+                }
                 // For example "EVE Router - SDE 3579973".
                 if let Some(build) = session.uni.build {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("EVE Router - SDE {build}")));
@@ -603,6 +606,18 @@ impl Session {
         self.save_quietly();
     }
 
+    /// Whether the app draws its own window frame.
+    pub fn custom_chrome(&self) -> bool {
+        self.cfg.custom_chrome
+    }
+
+    /// Set the window frame: the one of the app, or the one of the OS.
+    pub fn set_custom_chrome(&mut self, on: bool, ctx: &egui::Context) {
+        self.cfg.custom_chrome = on;
+        ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!on));
+        self.save_quietly();
+    }
+
     /// Apply the theme and compact mode from config to the egui context.
     pub fn apply_theme(&self, ctx: &egui::Context) {
         theme::apply(ctx, self.faction_theme(), self.cfg.compact);
@@ -628,10 +643,24 @@ impl eframe::App for RouterApp {
         if let State::Ready(session, _) = &mut self.state {
             session.poll_refresh();
         }
+        // The title bar and the border come only with a loaded config: it holds the setting.
+        let chrome = match &self.state {
+            State::Ready(session, _) if session.custom_chrome() => {
+                Some(session.uni.build.map(|build| format!("SDE {build}")).unwrap_or_default())
+            }
+            _ => None,
+        };
+        if let Some(detail) = &chrome {
+            crate::chrome::title_bar(ui, "EVE Router", detail);
+        }
         match &mut self.state {
             State::Loading(loading) => crate::view::splash(ui, None, loading.step.as_ref()),
             State::Failed(e) => crate::view::splash(ui, Some(e), None),
             State::Ready(session, view) => view.show(ui, session),
+        }
+        if chrome.is_some() {
+            crate::chrome::paint_border(ui.ctx(), theme::accent(ui));
+            crate::chrome::resize_edges(ui.ctx());
         }
     }
 

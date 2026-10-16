@@ -197,6 +197,9 @@ pub struct Config {
     /// Compact UI layout with tighter row heights and padding.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compact: bool,
+    /// Draw the window frame (title bar, border) in the app, in place of the OS frame.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub custom_chrome: bool,
 }
 
 /// Why a value of the config or of a settings field is not valid.
@@ -301,6 +304,7 @@ mod tests {
             eve_scout: Hubs { thera: false, turnur: true },
             theme: None,
             compact: false,
+            custom_chrome: false,
         };
         let text = serde_json::to_string_pretty(&cfg).unwrap();
         crate::assert_snapshot!("config_json", text);
