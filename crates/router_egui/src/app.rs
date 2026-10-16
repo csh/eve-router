@@ -49,6 +49,8 @@ pub struct RouterApp {
     state: State,
     /// The start of the last frame, for the frame cap.
     last_frame: Option<Instant>,
+    /// Whether the app draws its own window frame. The config sets it, once the config is loaded.
+    chrome: bool,
 }
 
 /// The shortest time between two frames: about 60 frames per second at most. eframe draws a frame
@@ -69,7 +71,8 @@ const LOAD_STOPPED: &str = "The startup load stopped with an internal error. Sta
 
 impl RouterApp {
     /// Set the theme and start the load. `ctx` gets a repaint request when the load ends.
-    pub fn new(ctx: egui::Context) -> Self {
+    /// `chrome` tells whether the window has no OS frame, so the splash screen has a title bar.
+    pub fn new(ctx: egui::Context, chrome: bool) -> Self {
         theme::apply_default(&ctx);
         theme::set_font(&ctx);
         let (tx, rx) = mpsc::channel();
@@ -78,7 +81,7 @@ impl RouterApp {
             let _ = tx.send(LoadMsg::Done(Box::new(result)));
             ctx.request_repaint();
         });
-        RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None }
+        RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None, chrome }
     }
 
     /// Take the load result, if the thread sent it.
@@ -95,9 +98,7 @@ impl RouterApp {
         self.state = match result {
             Ok(session) => {
                 session.apply_theme(ctx);
-                if session.custom_chrome() {
-                    ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(false));
-                }
+                self.chrome = session.custom_chrome();
                 // For example "EVE Router - SDE 3579973".
                 if let Some(build) = session.uni.build {
                     ctx.send_viewport_cmd(egui::ViewportCommand::Title(format!("EVE Router - SDE {build}")));
@@ -608,12 +609,12 @@ impl Session {
 
     /// Whether the app draws its own window frame.
     pub fn custom_chrome(&self) -> bool {
-        self.cfg.custom_chrome
+        !self.cfg.os_frame
     }
 
     /// Set the window frame: the one of the app, or the one of the OS.
     pub fn set_custom_chrome(&mut self, on: bool, ctx: &egui::Context) {
-        self.cfg.custom_chrome = on;
+        self.cfg.os_frame = !on;
         ctx.send_viewport_cmd(egui::ViewportCommand::Decorations(!on));
         self.save_quietly();
     }
@@ -642,23 +643,21 @@ impl eframe::App for RouterApp {
         // The refresh worker sends a new map each 5 minutes.
         if let State::Ready(session, _) = &mut self.state {
             session.poll_refresh();
+            self.chrome = session.custom_chrome();
         }
-        // The title bar and the border come only with a loaded config: it holds the setting.
-        let chrome = match &self.state {
-            State::Ready(session, _) if session.custom_chrome() => {
-                Some(session.uni.build.map(|build| format!("SDE {build}")).unwrap_or_default())
-            }
-            _ => None,
-        };
-        if let Some(detail) = &chrome {
-            crate::chrome::title_bar(ui, "EVE Router", detail);
+        if self.chrome {
+            let detail = match &self.state {
+                State::Ready(session, _) => session.uni.build.map(|build| format!("SDE {build}")).unwrap_or_default(),
+                _ => String::new(),
+            };
+            crate::chrome::title_bar(ui, "EVE Router", &detail);
         }
         match &mut self.state {
             State::Loading(loading) => crate::view::splash(ui, None, loading.step.as_ref()),
             State::Failed(e) => crate::view::splash(ui, Some(e), None),
             State::Ready(session, view) => view.show(ui, session),
         }
-        if chrome.is_some() {
+        if self.chrome {
             crate::chrome::paint_border(ui.ctx(), theme::accent(ui));
             crate::chrome::resize_edges(ui.ctx());
         }
@@ -1017,7 +1016,7 @@ mod tests {
     fn a_lost_load_thread_shows_an_error() {
         let (tx, rx) = mpsc::channel::<LoadMsg>();
         drop(tx);
-        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None };
+        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None, chrome: false };
         app.poll(&egui::Context::default());
         let State::Failed(text) = &app.state else { panic!("the state is not Failed") };
         assert_eq!(text, LOAD_STOPPED);
@@ -1026,7 +1025,7 @@ mod tests {
     #[test]
     fn the_splash_keeps_the_newest_step() {
         let (tx, rx) = mpsc::channel::<LoadMsg>();
-        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None };
+        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None, chrome: false };
         tx.send(LoadMsg::Progress(startup::Progress::CheckingSde)).unwrap();
         tx.send(LoadMsg::Progress(startup::Progress::DownloadingSde { done: 5, total: 10 })).unwrap();
         app.poll(&egui::Context::default());

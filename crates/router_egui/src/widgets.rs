@@ -15,8 +15,8 @@ enum Kind {
     Secondary,
 }
 
-/// A button with the bottom right corner cut at 45 degrees. A primary button has an accent fill.
-/// The others have the fill and the line of the egui button.
+/// A button. A primary button has an accent fill and the bottom right corner cut at 45 degrees.
+/// The others have square corners, and the fill and the line of the egui button.
 pub struct CutButton {
     text: WidgetText,
     kind: Kind,
@@ -48,7 +48,11 @@ impl CutButton {
 }
 
 /// The corners of the button shape, clockwise from the top left. The cut is at the bottom right.
+/// A cut of 0 gives a plain rectangle.
 fn outline(rect: egui::Rect, cut: f32) -> Vec<Pos2> {
+    if cut == 0.0 {
+        return vec![rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()];
+    }
     vec![rect.left_top(), rect.right_top(), rect.right_bottom() - vec2(0.0, cut), rect.right_bottom() - vec2(cut, 0.0), rect.left_bottom()]
 }
 
@@ -87,7 +91,8 @@ impl Widget for CutButton {
             };
             // The line runs inside the rect, so a 1 px line covers whole pixels.
             let inner = rect.shrink(0.5);
-            let shape = PathShape::convex_polygon(outline(inner, cut_for(rect.height())), fill, Stroke::new(1.0, line));
+            let cut = if self.kind == Kind::Primary { cut_for(rect.height()) } else { 0.0 };
+            let shape = PathShape::convex_polygon(outline(inner, cut), fill, Stroke::new(1.0, line));
             ui.painter().add(shape);
             let pos = rect.center() - galley.size() / 2.0 - vec2(1.0, 0.0);
             ui.painter().galley(pos, galley, text);
@@ -121,6 +126,12 @@ mod tests {
         assert!(!corners.contains(&rect.right_bottom()));
         assert!(corners.contains(&Pos2::new(100.0, 21.0)));
         assert!(corners.contains(&Pos2::new(91.0, 30.0)));
+    }
+
+    #[test]
+    fn a_zero_cut_gives_a_rectangle() {
+        let rect = Rect::from_min_size(Pos2::ZERO, vec2(100.0, 30.0));
+        assert_eq!(outline(rect, 0.0), [rect.left_top(), rect.right_top(), rect.right_bottom(), rect.left_bottom()]);
     }
 
     #[test]

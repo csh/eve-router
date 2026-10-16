@@ -531,7 +531,7 @@ impl View {
                     }
                 }
                 _ => {
-                    if ui.cut_button("+ Add waypoint").clicked() {
+                    if ui.add(CutButton::new("+ Add waypoint").primary()).clicked() {
                         match self.search.take_highlighted() {
                             Some(node) => s.add_waypoint(node),
                             None => self.search.focus(ui),

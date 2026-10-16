@@ -372,7 +372,7 @@ impl PilotsUi {
             ui.horizontal(|ui| {
                 let blocked = s.pilots.login_blocked();
                 if s.pilots.login.is_none() {
-                    let add = ui.add_enabled(blocked.is_none(), CutButton::new("Add character"));
+                    let add = ui.add_enabled(blocked.is_none(), CutButton::new("Add character").primary());
                     if let Some(reason) = &blocked {
                         add.on_disabled_hover_text(reason);
                     } else if add.clicked() {
@@ -413,7 +413,7 @@ impl PilotsUi {
             let field =
                 ui.add(TextEdit::singleline(&mut self.paste).hint_text("http://localhost:21404/callback?code=…").desired_width(360.0));
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (ui.add_enabled(!busy && !self.paste.trim().is_empty(), CutButton::new("Use URL")).clicked() || enter) && !busy {
+            if (ui.add_enabled(!busy && !self.paste.trim().is_empty(), CutButton::new("Use URL").primary()).clicked() || enter) && !busy {
                 s.pilots.paste(&self.paste);
             }
         });
@@ -462,7 +462,7 @@ impl PilotsUi {
                     }
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.cut_button("Continue").clicked() {
+                        if ui.add(CutButton::new("Continue").primary()).clicked() {
                             next = Some((route, *chosen));
                         }
                         close = ui.cut_button("Cancel").clicked();

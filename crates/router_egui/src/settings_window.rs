@@ -401,7 +401,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                 ui.horizontal_wrapped(|ui| {
                     let response = ui.add(TextEdit::singleline(&mut form.max_cap).hint_text("no limit").desired_width(120.0));
                     let enter = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                    if ui.cut_button("Apply").clicked() || enter {
+                    if ui.add(CutButton::new("Apply").primary()).clicked() || enter {
                         match parse_max_cap(&form.max_cap, &s.settings.hulls) {
                             Ok(max_cap) => {
                                 s.settings.rules.max_cap = max_cap;
@@ -512,7 +512,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             ui.add_enabled_ui(!locked, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.add(TextEdit::singleline(&mut form.url).hint_text("https://nexum.example").desired_width(field));
-                    if ui.cut_button("Save").clicked() {
+                    if ui.add(CutButton::new("Save").primary()).clicked() {
                         match config::parse_nexum_url(&form.url) {
                             Ok(url) => {
                                 s.cfg.nexum.url = url;
@@ -540,7 +540,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                                 .hint_text("paste a key with the read scope")
                                 .desired_width(field),
                         );
-                        if ui.add_enabled(!form.key.trim().is_empty(), CutButton::new("Save")).clicked() {
+                        if ui.add_enabled(!form.key.trim().is_empty(), CutButton::new("Save").primary()).clicked() {
                             s.cfg.nexum.key = Some(ApiKey(form.key.trim().to_string()));
                             form.key.clear();
                             s.nexum_saved();
@@ -665,7 +665,7 @@ fn paste_list(ui: &mut Ui, text: &mut String, problems: &mut Vec<String>, s: &mu
     let mut action = None;
     ui.horizontal(|ui| {
         let empty = text.trim().is_empty();
-        if ui.add_enabled(!empty, CutButton::new("Add to route")).clicked() {
+        if ui.add_enabled(!empty, CutButton::new("Add to route").primary()).clicked() {
             action = Some(false);
         }
         if ui.add_enabled(!empty, CutButton::new("Replace route")).clicked() {
