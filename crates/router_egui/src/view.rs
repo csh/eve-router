@@ -870,16 +870,20 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
     let characters = s.pilots.characters();
     let mut start = false;
     let header = |ui: &mut Ui| {
-        let has_pilot = characters.iter().any(|c| !c.live.expired);
-        let text = match (has_pilot, compact) {
-            (true, true) => "Start".to_string(),
-            (true, false) => format!("Start route #{}", s.selected + 1),
-            (false, true) => "Log in".into(),
-            (false, false) => "Log in to start".into(),
-        };
-        let button = Button::new(RichText::new(text).size(11.0).color(Color32::WHITE)).fill(theme::accent(ui).gamma_multiply(0.35)).small();
-        start = ui.add(button).on_hover_text("Send the waypoints of this route to a character in the game").clicked();
-        ui.add_space(6.0);
+        // Without a client ID the router cannot log in, so the button goes, as the Characters one does.
+        if s.pilots.shows_characters() {
+            let has_pilot = characters.iter().any(|c| !c.live.expired);
+            let text = match (has_pilot, compact) {
+                (true, true) => "Start".to_string(),
+                (true, false) => format!("Start route #{}", s.selected + 1),
+                (false, true) => "Log in".into(),
+                (false, false) => "Log in to start".into(),
+            };
+            let button =
+                Button::new(RichText::new(text).size(11.0).color(Color32::WHITE)).fill(theme::accent(ui).gamma_multiply(0.35)).small();
+            start = ui.add(button).on_hover_text("Send the waypoints of this route to a character in the game").clicked();
+            ui.add_space(6.0);
+        }
         let button = Button::new(RichText::new("Copy route").size(11.0)).small();
         copy = ui.add(button).on_hover_text("Copy the route as tab-separated text, for a Slack table").clicked();
         // In the Sidebar class the summary strip above the tabs has the summary.
