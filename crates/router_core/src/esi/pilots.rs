@@ -5,13 +5,13 @@
 //! The GUI calls `update` often (each frame, or each 250 ms). `update` reads the tracker
 //! events and the login result, and gives the status lines in `notices`.
 
+use super::Character;
 use super::active::{ActiveRoute, Observation, active_path};
 use super::client::{Esi, Location, Ship};
 use super::sso::{Login, LoginError, Sso, Tokens};
-use super::store::Accounts;
+use super::store::{Accounts, TokenStore, characters_path};
 use super::tracker::{Command, Event, Intervals, Live, Tracker};
-use super::{Character, client_id};
-use crate::ansiblex::{HullClass, hull_by_type, hull_rows, same_class, same_hull};
+use crate::ansiblex::{HullClass, HullTable, same_class, same_hull};
 use crate::route::Route;
 use crate::settings::{HullSource, Settings};
 use crate::universe::Universe;
@@ -82,7 +82,7 @@ impl PilotRow {
     pub fn is_current(&self, settings: &Settings) -> bool {
         match (self, settings.hull_source) {
             (PilotRow::Pilot(v), HullSource::Pilot(id)) => v.id == id,
-            (PilotRow::Hull(h), HullSource::Manual) => same_hull(*h, settings.rules.hull),
+            (PilotRow::Hull(h), HullSource::Manual) => same_hull(h.as_ref(), settings.rules.hull.as_ref()),
             _ => false,
         }
     }
@@ -143,14 +143,15 @@ pub struct Pilots {
 }
 
 impl Pilots {
-    /// Open the token store and `characters.json`, start the tracker, and read the active route
-    /// of the last run.
-    pub fn open(cfg_path: &Path, wake: Wake) -> Pilots {
-        let (accounts, keyring_error) = match Accounts::open(cfg_path) {
+    /// Read `characters.json`, start the tracker, and read the active route of the last run.
+    /// `store` is the token store, for example `Keyring::open()`. Its error says why there is no
+    /// store, for the "Session only" prompt.
+    pub fn open(cfg_path: &Path, store: Result<Box<dyn TokenStore>, String>, client_id: Option<String>, wake: Wake) -> Pilots {
+        let accounts = store.and_then(|store| Accounts::with_store(Some(characters_path(cfg_path)), store));
+        let (accounts, keyring_error) = match accounts {
             Ok(accounts) => (Some(accounts), None),
             Err(e) => (None, Some(e)),
         };
-        let client_id = client_id();
         let tracker = client_id.as_deref().map(|id| {
             let api = Live { sso: Sso::new(id), esi: Esi::default() };
             let wake = wake.clone();
@@ -353,11 +354,11 @@ impl Pilots {
         self.characters().into_iter().filter(|c| !c.live.expired && c.live.online != Some(false)).collect()
     }
 
-    /// The Pilot picker rows: the characters whose name contains `filter`, then `hull_rows(filter)`.
-    pub fn pilot_rows(&self, filter: &str) -> Vec<PilotRow> {
+    /// The Pilot picker rows: the characters whose name contains `filter`, then `hulls.rows(filter)`.
+    pub fn pilot_rows(&self, filter: &str, hulls: &HullTable) -> Vec<PilotRow> {
         let lower = filter.to_lowercase();
         let pilots = self.characters().into_iter().filter(|c| c.name.to_lowercase().contains(&lower)).map(PilotRow::Pilot);
-        pilots.chain(hull_rows(filter).into_iter().map(PilotRow::Hull)).collect()
+        pilots.chain(hulls.rows(filter).into_iter().map(PilotRow::Hull)).collect()
     }
 
     /// The character of the last route start, for the preselection in the picker.
@@ -603,8 +604,8 @@ impl StartPlan {
     pub fn new(uni: &Universe, settings: &Settings, route: &Route, number: usize, pilot: &PilotView, now: u64) -> StartPlan {
         let planned = ActiveRoute::new(uni, &settings.rules, route, number, pilot.id, &pilot.name, now);
         let mut plan = StartPlan { planned, from_here: None, here: None, online: pilot.live.online, error: None, flown: None };
-        let flown = pilot.live.ship.as_ref().and_then(|s| hull_by_type(s.ship_type_id));
-        plan.flown = flown.filter(|&f| !settings.rules.hull.is_some_and(|planned| same_class(planned, f)));
+        let flown = pilot.live.ship.as_ref().and_then(|s| settings.hulls.by_type(s.ship_type_id));
+        plan.flown = flown.filter(|f| !settings.rules.hull.as_ref().is_some_and(|planned| same_class(planned, f)));
         let Some(system) = pilot.live.system.filter(|s| !plan.planned.steps.iter().any(|step| step.system == *s)) else { return plan };
         plan.here = Some(system);
         let stops: Vec<u32> = plan.planned.stops.iter().skip(1).map(|&i| plan.planned.steps[i].system).collect();
@@ -633,42 +634,13 @@ impl Pilots {
     }
 }
 
-/// A stored character with a live location, for the tests of the GUI. No tracker runs.
-#[cfg(any(test, feature = "test-support"))]
-impl Pilots {
-    pub fn add_test_pilot(&mut self, id: u64, name: &str, system: u32) {
-        let accounts = self.accounts.get_or_insert_with(Accounts::session_only);
-        let character =
-            Character { id, name: name.into(), scopes: super::SCOPES.iter().map(|s| oauth2::Scope::new(s.to_string())).collect() };
-        let tokens = Tokens {
-            character,
-            access: oauth2::AccessToken::new("a".into()),
-            refresh: oauth2::RefreshToken::new("r".into()),
-            expires_at: u64::MAX,
-        };
-        accounts.store(&tokens).unwrap();
-        self.live.insert(id, PilotState { system: Some(system), online: Some(true), ..PilotState::default() });
-    }
-}
-
-/// `Pilots` with a test `Api` and short poll intervals, for the tests of the GUI.
-#[cfg(any(test, feature = "test-support"))]
-impl Pilots {
-    pub fn for_tests(accounts: Accounts, api: impl super::tracker::Api, active_path: PathBuf) -> Pilots {
-        // Short intervals, so a test sees a change in milliseconds.
-        let ms = std::time::Duration::from_millis;
-        let intervals = Intervals { active_location: ms(20), location: ms(50), ship: ms(1000), online: ms(1000) };
-        let tracker = Tracker::start(api, intervals, || {});
-        Self::with_parts(Some(accounts), Some("test-client".into()), Some(tracker), active_path, Arc::new(|| {}))
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::esi::active::{Hop, Step};
     use crate::esi::store::MemoryStore;
     use crate::esi::tracker::fake::Fake;
+    use crate::test_support::hulls;
     use oauth2::{AccessToken, RefreshToken, Scope};
     use std::time::{Duration, Instant};
 
@@ -681,19 +653,27 @@ mod tests {
         }
     }
 
-    fn pilots(name: &str, fake: &Fake) -> Pilots {
-        let dir = std::env::temp_dir().join(name);
-        let _ = std::fs::remove_dir_all(&dir);
+    /// `Pilots` with one stored character. Keep the directory until the test ends.
+    /// `Pilots` with a test `Api` and short poll intervals, so a test sees a change in milliseconds.
+    fn pilots_with(accounts: Accounts, api: impl crate::esi::tracker::Api, active_path: PathBuf) -> Pilots {
+        let ms = Duration::from_millis;
+        let intervals = Intervals { active_location: ms(20), location: ms(50), ship: ms(1000), online: ms(1000) };
+        let tracker = Tracker::start(api, intervals, || {});
+        Pilots::with_parts(Some(accounts), Some("test-client".into()), Some(tracker), active_path, Arc::new(|| {}))
+    }
+
+    fn pilots(fake: &Fake) -> (Pilots, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
         let mut accounts = Accounts::with_store(None, Box::new(MemoryStore::default())).unwrap();
         accounts.store(&tokens(1, "Alice")).unwrap();
-        Pilots::for_tests(accounts, fake.clone(), dir.join("active-route.json"))
+        (pilots_with(accounts, fake.clone(), tmp.path().join("active-route.json")), tmp)
     }
 
     #[test]
     fn a_stopped_tracker_gives_one_notice() {
         let fake = Fake::default();
         fake.0.lock().unwrap().panic = true;
-        let mut p = pilots("eve-router-test-tracker-stopped", &fake);
+        let (mut p, _tmp) = pilots(&fake);
         let end = Instant::now() + Duration::from_secs(5);
         while !p.notices.iter().any(|n| n == Pilots::TRACKER_STOPPED) {
             assert!(Instant::now() < end, "no notice");
@@ -740,12 +720,13 @@ mod tests {
 
     #[test]
     fn characters_show_with_a_client_id_or_a_character() {
-        let dir = std::env::temp_dir().join("eve-router-test-pilots-show");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         // No client ID and no token store: nothing to show.
         assert!(!Pilots::offline(dir.join("active-route.json")).shows_characters());
-        // `for_tests` sets a client ID.
+        // `pilots_with` sets a client ID.
         let fake = Fake::default();
-        assert!(pilots("eve-router-test-pilots-show-2", &fake).shows_characters());
+        assert!(pilots(&fake).0.shows_characters());
     }
 
     #[test]
@@ -754,14 +735,14 @@ mod tests {
         use crate::test_support::{overlay_universe, settings};
         let uni = overlay_universe();
         let fake = Fake::default();
-        let mut p = pilots("eve-router-test-pilots-sync", &fake);
+        let (mut p, _tmp) = pilots(&fake);
         let mut s = settings(&uni, Some("black-ops"));
         // Before the first ship poll, nothing changes.
         s.hull_source = HullSource::Pilot(1);
         assert_eq!(p.sync_hull(&mut s), HullSync::None);
         until(&mut p, |p| p.live.get(&1).is_some_and(|l| l.ship.is_some()));
         assert_eq!(p.sync_hull(&mut s), HullSync::Hull);
-        assert_eq!(s.rules.hull.unwrap().name, "Capsule");
+        assert_eq!(s.rules.hull.as_ref().unwrap().name, "Capsule");
         assert_eq!(p.sync_hull(&mut s), HullSync::None);
     }
 
@@ -771,7 +752,7 @@ mod tests {
         use crate::test_support::{overlay_universe, settings};
         let uni = overlay_universe();
         let fake = Fake::default();
-        let mut p = pilots("eve-router-test-pilots-sync-active", &fake);
+        let (mut p, _tmp) = pilots(&fake);
         until(&mut p, |p| p.live.get(&1).is_some_and(|l| l.ship.is_some()));
         let mut s = settings(&uni, Some("Sin"));
         s.hull_source = HullSource::Pilot(1);
@@ -790,19 +771,19 @@ mod tests {
         use crate::settings::HullSource;
         use crate::test_support::{overlay_universe, settings};
         let uni = overlay_universe();
-        let dir = std::env::temp_dir().join("eve-router-test-pilots-sync-removed");
-        let _ = std::fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         std::fs::create_dir_all(&dir).unwrap();
         // A store with a list file, as with a keyring.
         let mut accounts = Accounts::with_store(Some(dir.join("characters.json")), Box::new(MemoryStore::default())).unwrap();
         accounts.store(&tokens(1, "Alice")).unwrap();
-        let mut p = Pilots::for_tests(accounts, Fake::default(), dir.join("active-route.json"));
+        let mut p = pilots_with(accounts, Fake::default(), dir.join("active-route.json"));
         let mut s = settings(&uni, Some("Sin"));
         // A character that is not stored: the source becomes manual, and the hull stays.
         s.hull_source = HullSource::Pilot(99);
         assert_eq!(p.sync_hull(&mut s), HullSync::Source);
         assert_eq!(s.hull_source, HullSource::Manual);
-        assert_eq!(s.rules.hull.unwrap().name, "Sin");
+        assert_eq!(s.rules.hull.as_ref().unwrap().name, "Sin");
     }
 
     #[test]
@@ -810,7 +791,8 @@ mod tests {
         use crate::settings::HullSource;
         use crate::test_support::{overlay_universe, settings};
         let uni = overlay_universe();
-        let mut p = Pilots::offline(std::env::temp_dir().join("eve-router-test-pilots-sync-off").join("active-route.json"));
+        let tmp = tempfile::tempdir().unwrap();
+        let mut p = Pilots::offline(tmp.path().join("active-route.json"));
         let mut s = settings(&uni, Some("Sin"));
         s.hull_source = HullSource::Pilot(1);
         assert_eq!(p.sync_hull(&mut s), HullSync::None);
@@ -822,7 +804,8 @@ mod tests {
         use crate::settings::HullSource;
         use crate::test_support::{overlay_universe, settings};
         let uni = overlay_universe();
-        let mut p = Pilots::offline(std::env::temp_dir().join("eve-router-test-pilots-sync-session").join("active-route.json"));
+        let tmp = tempfile::tempdir().unwrap();
+        let mut p = Pilots::offline(tmp.path().join("active-route.json"));
         p.use_session_only();
         let mut s = settings(&uni, Some("Sin"));
         s.hull_source = HullSource::Pilot(1);
@@ -833,31 +816,31 @@ mod tests {
     #[test]
     fn pilot_rows_list_the_characters_then_the_hulls() {
         let fake = Fake::default();
-        let p = pilots("eve-router-test-pilots-rows", &fake);
-        let rows = p.pilot_rows("");
+        let (p, _tmp) = pilots(&fake);
+        let rows = p.pilot_rows("", &hulls());
         assert!(matches!(&rows[0], PilotRow::Pilot(v) if v.name == "Alice"));
         assert!(matches!(rows[1], PilotRow::Hull(None)));
         assert!(matches!(rows[2], PilotRow::Hull(Some(_))));
         // The filter applies to the names and the hulls.
-        let rows = p.pilot_rows("ali");
+        let rows = p.pilot_rows("ali", &hulls());
         assert!(matches!(&rows[0], PilotRow::Pilot(_)));
         assert!(rows.iter().skip(1).all(|r| matches!(r, PilotRow::Hull(_))));
-        let rows = p.pilot_rows("rorqual");
+        let rows = p.pilot_rows("rorqual", &hulls());
         assert!(matches!(rows[0], PilotRow::Hull(None)));
-        assert!(matches!(rows[1], PilotRow::Hull(Some(h)) if h.name == "Rorqual"));
+        assert!(matches!(rows[1], PilotRow::Hull(Some(ref h)) if h.name == "Rorqual"));
     }
 
     #[test]
     fn pilot_row_marks_the_current_source() {
-        use crate::ansiblex::find_hull;
         use crate::settings::HullSource;
+        use crate::test_support::hulls;
         use crate::test_support::{overlay_universe, settings};
         let uni = overlay_universe();
         let fake = Fake::default();
-        let p = pilots("eve-router-test-pilots-current", &fake);
+        let (p, _tmp) = pilots(&fake);
         let mut s = settings(&uni, Some("Sin"));
-        let alice = p.pilot_rows("").into_iter().next().unwrap();
-        let sin = PilotRow::Hull(find_hull("Sin"));
+        let alice = p.pilot_rows("", &hulls()).into_iter().next().unwrap();
+        let sin = PilotRow::Hull(hulls().find("Sin"));
         assert!(sin.is_current(&s) && !alice.is_current(&s));
         // With a pilot source, the hull row of the same hull is not current.
         s.hull_source = HullSource::Pilot(1);
@@ -869,7 +852,7 @@ mod tests {
     fn start_route_becomes_active_after_the_send() {
         let fake = Fake::default();
         fake.0.lock().unwrap().system = 10;
-        let mut p = pilots("eve-router-test-pilots-start", &fake);
+        let (mut p, _tmp) = pilots(&fake);
         until(&mut p, |p| p.live.get(&1).and_then(|l| l.system) == Some(10));
         p.start_route(route(&[10, 20, 30], None));
         assert!(p.active.is_none() && p.pending.is_some());
@@ -886,7 +869,7 @@ mod tests {
     fn failed_send_keeps_the_route_pending() {
         let fake = Fake::default();
         fake.0.lock().unwrap().fail_waypoint_at = Some(1);
-        let mut p = pilots("eve-router-test-pilots-fail", &fake);
+        let (mut p, _tmp) = pilots(&fake);
         p.start_route(route(&[10, 20, 30], None));
         until(&mut p, |p| p.send.as_ref().is_some_and(|s| s.failed.is_some()));
         assert!(p.active.is_none());
@@ -902,7 +885,7 @@ mod tests {
     fn manual_hop_sends_the_next_segment() {
         let fake = Fake::default();
         fake.0.lock().unwrap().system = 10;
-        let mut p = pilots("eve-router-test-pilots-segment", &fake);
+        let (mut p, _tmp) = pilots(&fake);
         p.start_route(route(&[10, 20, 30, 40], Some(30)));
         until(&mut p, |p| p.active.is_some());
         assert_eq!(fake.0.lock().unwrap().waypoints, [(20, true)]);
@@ -918,7 +901,7 @@ mod tests {
     fn expired_login_gives_a_notice() {
         let fake = Fake::default();
         fake.0.lock().unwrap().refresh_rejected = true;
-        let mut p = pilots("eve-router-test-pilots-expired", &fake);
+        let (mut p, _tmp) = pilots(&fake);
         until(&mut p, |p| p.live.get(&1).is_some_and(|l| l.expired));
         assert_eq!(p.notices, ["Tracking paused — Alice's login expired. Log in again."]);
     }
@@ -926,7 +909,7 @@ mod tests {
     #[test]
     fn resume_and_discard() {
         let fake = Fake::default();
-        let mut p = pilots("eve-router-test-pilots-resume", &fake);
+        let (mut p, _tmp) = pilots(&fake);
         let r = route(&[10, 20], None);
         r.save(&p.active_path).unwrap();
         p.resume = ActiveRoute::load(&p.active_path);
@@ -963,7 +946,7 @@ mod tests {
 
     #[test]
     fn start_plan_compares_the_flown_hull() {
-        use crate::ansiblex::find_hull;
+        use crate::test_support::hulls;
         use crate::test_support::{FIXTURE_TIME, overlay_universe, settings};
         let uni = overlay_universe();
         let s = settings(&uni, Some("black-ops"));
@@ -971,7 +954,7 @@ mod tests {
         let route = &s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).unwrap()[0];
         let mut pilot = PilotView { id: 7, name: "Alice".into(), live: PilotState::default(), needs_reauth: false, active: false };
         let flies = |pilot: &mut PilotView, name: &str| {
-            let type_id = find_hull(name).unwrap().type_id.unwrap();
+            let type_id = hulls().find(name).unwrap().type_id.unwrap();
             pilot.live.ship = Some(Ship { ship_type_id: type_id, ship_item_id: 1, ship_name: String::new() });
         };
         // The ship is not known: no check.
@@ -987,7 +970,7 @@ mod tests {
     #[test]
     fn senders_leave_out_offline_pilots() {
         let fake = Fake::default();
-        let mut p = pilots("eve-router-test-pilots-senders", &fake);
+        let (mut p, _tmp) = pilots(&fake);
         // The online state is not known yet: the pilot stays in the list.
         assert_eq!(p.senders().len(), 1);
         until(&mut p, |p| p.live.get(&1).is_some_and(|l| l.online == Some(true)));
@@ -1024,7 +1007,7 @@ mod tests {
     #[test]
     fn remove_stops_the_route_of_that_pilot() {
         let fake = Fake::default();
-        let mut p = pilots("eve-router-test-pilots-remove", &fake);
+        let (mut p, _tmp) = pilots(&fake);
         p.active = Some(route(&[10, 20], None));
         p.remove(1);
         assert!(p.active.is_none());

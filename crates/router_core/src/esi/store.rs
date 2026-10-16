@@ -119,11 +119,6 @@ pub struct Accounts {
 }
 
 impl Accounts {
-    /// The OS keyring and `characters.json`. An error means no keyring, or a bad list file.
-    pub fn open(cfg_path: &Path) -> Result<Accounts, String> {
-        Self::with_store(Some(characters_path(cfg_path)), Box::new(Keyring::open()?))
-    }
-
     /// Tokens in memory only. Nothing goes to disk.
     pub fn session_only() -> Accounts {
         Accounts { characters: Vec::new(), path: None, secrets: Box::new(MemoryStore::default()) }
@@ -228,15 +223,14 @@ mod tests {
         result.unwrap().map(|t| t.secret().clone())
     }
 
-    fn dir(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(name);
-        let _ = fs::remove_dir_all(&dir);
-        dir
+    fn dir() -> tempfile::TempDir {
+        tempfile::tempdir().unwrap()
     }
 
     #[test]
     fn store_refresh_and_remove() {
-        let path = dir("eve-router-test-accounts").join("characters.json");
+        let tmp = dir();
+        let path = tmp.path().join("characters.json");
         let mut accounts = Accounts::with_store(Some(path.clone()), Box::new(MemoryStore::default())).unwrap();
         accounts.store(&tokens(1, "Alice", "r1")).unwrap();
         accounts.store(&tokens(2, "Bob", "r2")).unwrap();
@@ -287,7 +281,8 @@ mod tests {
 
     #[test]
     fn missing_file_is_an_empty_list_and_a_bad_file_is_an_error() {
-        let dir = dir("eve-router-test-accounts-bad");
+        let tmp = dir();
+        let dir = tmp.path().to_path_buf();
         assert_eq!(load(&dir.join("characters.json")).unwrap(), []);
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("characters.json"), "not json").unwrap();

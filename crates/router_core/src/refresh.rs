@@ -1,7 +1,7 @@
 //! The live refresh of the wormhole sources. Each refresh builds a full new map from the base
 //! map. Thus a route of the old map keeps correct edge indices until the app swaps the map.
 
-use crate::config::NexumConfig;
+use crate::config::{AppPaths, NexumConfig};
 use crate::labels::Shortcuts;
 use crate::log::LogEntry;
 use crate::overlay::OverlayReport;
@@ -138,17 +138,17 @@ pub struct Setup {
 }
 
 impl Setup {
-    /// The setup of an app: the public EVE-Scout feed, the cache files of the config at
-    /// `cfg_path`, and a refresh each `INTERVAL`.
-    pub fn new(base: Arc<Universe>, report: OverlayReport, types: WormholeTypes, nexum: NexumConfig, cfg_path: &std::path::Path) -> Setup {
+    /// The setup of an app: the public EVE-Scout feed, the cache files in `paths.cache`, and a
+    /// refresh each `INTERVAL`.
+    pub fn new(base: Arc<Universe>, report: OverlayReport, types: WormholeTypes, nexum: NexumConfig, paths: &AppPaths) -> Setup {
         Setup {
             base,
             report,
             types,
             nexum,
-            nexum_cache: sources::cache_path(SourceId::Nexum, cfg_path),
+            nexum_cache: paths.cache_file(SourceId::Nexum),
             scout_url: evescout::URL.into(),
-            scout_cache: sources::cache_path(SourceId::EveScout, cfg_path),
+            scout_cache: paths.cache_file(SourceId::EveScout),
             interval: INTERVAL,
             last: Vec::new(),
         }
@@ -180,13 +180,10 @@ impl Refresher {
         Refresher { control, snapshots }
     }
 
-    /// A handle with no worker, for the tests of the apps. The test sends the snapshots, and
-    /// reads the control messages. A dropped sender acts as a stopped worker.
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn fake() -> (Refresher, Sender<Snapshot>, Receiver<Control>) {
-        let (control, control_rx) = mpsc::channel();
-        let (snapshot_tx, snapshots) = mpsc::channel();
-        (Refresher { control, snapshots }, snapshot_tx, control_rx)
+    /// A handle on channels of the caller, with no worker thread. The caller sends the snapshots
+    /// and reads the control messages. A dropped sender acts as a stopped worker.
+    pub fn from_channels(control: Sender<Control>, snapshots: Receiver<Snapshot>) -> Refresher {
+        Refresher { control, snapshots }
     }
 
     /// Use new Nexum settings, and refresh at once. A stopped worker ignores the message.
@@ -414,10 +411,10 @@ mod tests {
     }
 
     /// A setup with no Nexum settings, and the cache files in a new temporary directory.
-    fn setup(name: &str, scout_url: String, interval: Duration) -> Setup {
-        let dir = std::env::temp_dir().join(name);
-        let _ = std::fs::remove_dir_all(&dir);
-        Setup {
+    fn setup(scout_url: String, interval: Duration) -> (Setup, tempfile::TempDir) {
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
+        let setup = Setup {
             base: shared_universe(),
             report: OverlayReport::default(),
             types: WormholeTypes::default(),
@@ -427,7 +424,8 @@ mod tests {
             scout_cache: dir.join("eve-scout.json"),
             interval,
             last: Vec::new(),
-        }
+        };
+        (setup, tmp)
     }
 
     /// A clock that moves 5 minutes ahead at each call, so a cache is never fresh.
@@ -456,7 +454,7 @@ mod tests {
     fn a_changed_feed_gives_the_new_wormhole() {
         let routes = Arc::new(Mutex::new(HashMap::from([("/scout".to_string(), feed(JITA))])));
         let (url, _) = serve_live(routes.clone());
-        let setup = setup("eve-router-test-refresh-feed", format!("{url}/scout"), Duration::from_millis(50));
+        let (setup, _tmp) = setup(format!("{url}/scout"), Duration::from_millis(50));
         let r = Refresher::start(setup, moving_clock(), || {});
         let first = wait_for(&r, |s| has_hole(&s.uni, THERA, JITA));
         assert_eq!(first.shortcuts.thera, 1);
@@ -470,7 +468,7 @@ mod tests {
     fn a_failed_fetch_keeps_the_last_good_data() {
         let routes = Arc::new(Mutex::new(HashMap::from([("/scout".to_string(), feed(JITA))])));
         let (url, _) = serve_live(routes.clone());
-        let setup = setup("eve-router-test-refresh-500", format!("{url}/scout"), Duration::from_millis(50));
+        let (setup, _tmp) = setup(format!("{url}/scout"), Duration::from_millis(50));
         let cache = setup.scout_cache.clone();
         let r = Refresher::start(setup, moving_clock(), || {});
         wait_for(&r, |s| has_hole(&s.uni, THERA, JITA));
@@ -491,7 +489,7 @@ mod tests {
         let map = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
         let (url, _) = serve_routes(HashMap::from([("/api/v1/maps/m1".to_string(), map)]));
         // One hour: a snapshot in this test comes from the message, not from the interval.
-        let setup = setup("eve-router-test-refresh-nexum", format!("{url}/scout"), Duration::from_secs(3600));
+        let (setup, _tmp) = setup(format!("{url}/scout"), Duration::from_secs(3600));
         let cfg = NexumConfig { url: Some(url.clone()), key: Some(ApiKey("nxm_test".into())), map_id: Some("m1".into()) };
         // A fresh cache of the same map, with no wormholes. A normal start uses it.
         let cached = SourceData {
@@ -515,7 +513,7 @@ mod tests {
         let (url, _) = serve_routes(HashMap::from([("/scout".to_string(), feed(JITA))]));
         let scout_url = format!("{url}/scout");
         // One hour: a snapshot in this test comes from the message, not from the interval.
-        let setup = setup("eve-router-test-refresh-now", scout_url.clone(), Duration::from_secs(3600));
+        let (setup, _tmp) = setup(scout_url.clone(), Duration::from_secs(3600));
         // A fresh cache of the same feed, with no wormholes. A normal start uses it.
         let cached = SourceData {
             source: SourceId::EveScout,
@@ -541,7 +539,7 @@ mod tests {
         let wake = move || {
             let _ = alive.send(());
         };
-        let setup = setup("eve-router-test-refresh-drop", format!("{url}/scout"), Duration::from_millis(50));
+        let (setup, _tmp) = setup(format!("{url}/scout"), Duration::from_millis(50));
         let r = Refresher::start(setup, moving_clock(), wake);
         stopped.recv_timeout(Duration::from_secs(10)).expect("no first refresh");
         drop(r);
@@ -560,7 +558,8 @@ mod tests {
     fn kept_data_of_another_nexum_map_is_not_used() {
         // The server has no routes, so each fetch gets a 500, and no cache file exists.
         let (url, _) = serve_routes(HashMap::new());
-        let mut worker = Worker::new(setup("eve-router-test-refresh-other-map", format!("{url}/scout"), INTERVAL));
+        let (setup, _tmp) = setup(format!("{url}/scout"), INTERVAL);
+        let mut worker = Worker::new(setup);
         worker.setup.nexum = NexumConfig { url: Some(url.clone()), key: Some(ApiKey("nxm_test".into())), map_id: Some("m1".into()) };
         let kept = |map: &str| SourceData {
             source: SourceId::Nexum,
@@ -586,7 +585,7 @@ mod tests {
     fn a_failed_first_refresh_keeps_the_startup_data() {
         // The server has no routes, so the fetch gets a 500, and no cache file exists.
         let (url, _) = serve_routes(HashMap::new());
-        let mut setup = setup("eve-router-test-refresh-startup", format!("{url}/scout"), Duration::from_millis(50));
+        let (mut setup, _tmp) = setup(format!("{url}/scout"), Duration::from_millis(50));
         setup.last = vec![scout_load().data.unwrap()];
         let r = Refresher::start(setup, moving_clock(), || {});
         let snap = r.recv_timeout(Duration::from_secs(10)).expect("no first refresh");
@@ -597,7 +596,7 @@ mod tests {
     /// Review focus: several snapshots wait while the app is busy.
     #[test]
     fn try_recv_gives_the_newest_snapshot() {
-        let (r, snapshots, _control) = Refresher::fake();
+        let (r, snapshots, _control) = crate::test_support::fake_refresher();
         assert!(matches!(r.try_recv(), Err(TryRecvError::Empty)));
         snapshots.send(build(universe(), &OverlayReport::default(), &nexum::Load::default(), &evescout::Load::default(), 0).0).unwrap();
         snapshots.send(build(universe(), &OverlayReport::default(), &nexum::Load::default(), &scout_load(), 0).0).unwrap();
@@ -618,7 +617,8 @@ mod tests {
         let wake = move || {
             let _ = alive.send(());
         };
-        let r = Refresher::start(setup("eve-router-test-refresh-slow", url, Duration::from_millis(10)), moving_clock(), wake);
+        let (setup, _tmp) = setup(url, Duration::from_millis(10));
+        let r = Refresher::start(setup, moving_clock(), wake);
         // The server has the request, so the first refresh is in its fetch.
         request.recv_timeout(Duration::from_secs(10)).expect("no request");
         let started = Instant::now();
@@ -634,11 +634,11 @@ mod tests {
 
     #[test]
     fn the_app_setup_uses_the_public_feed_and_a_5_minute_interval() {
-        let cfg_path = std::path::Path::new("eve-router.json");
-        let s = Setup::new(shared_universe(), OverlayReport::default(), WormholeTypes::default(), NexumConfig::default(), cfg_path);
+        let paths = AppPaths::in_dir(std::path::Path::new("app"));
+        let s = Setup::new(shared_universe(), OverlayReport::default(), WormholeTypes::default(), NexumConfig::default(), &paths);
         assert_eq!(s.interval, Duration::from_secs(CACHE_FRESH_SECS));
         assert_eq!(s.scout_url, evescout::URL);
-        assert_eq!(s.nexum_cache, sources::cache_path(SourceId::Nexum, cfg_path));
-        assert_eq!(s.scout_cache, sources::cache_path(SourceId::EveScout, cfg_path));
+        assert_eq!(s.nexum_cache, paths.cache.join("nexum.json"));
+        assert_eq!(s.scout_cache, paths.cache.join("eve-scout.json"));
     }
 }

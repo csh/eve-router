@@ -443,8 +443,8 @@ mod tests {
 
     #[test]
     fn save_and_load() {
-        let dir = std::env::temp_dir().join("eve-router-test-active");
-        let _ = fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let path = active_path(&dir.join("eve-router.json"));
         let mut r = route(&[1, 2, 3], &[(3, Hop::Wormhole)]);
         r.observe(&at(2));
@@ -457,8 +457,8 @@ mod tests {
 
     #[test]
     fn load_rejects_an_index_past_the_steps() {
-        let dir = std::env::temp_dir().join("eve-router-test-active-bad");
-        let _ = fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let path = active_path(&dir.join("eve-router.json"));
         route(&[1, 2, 3], &[]).save(&path).unwrap();
         let edit = |key: &str, value: serde_json::Value| {
@@ -473,7 +473,6 @@ mod tests {
         assert_eq!(ActiveRoute::load(&path), None);
         edit("stops", serde_json::json!([0, 2]));
         assert!(ActiveRoute::load(&path).is_some());
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]

@@ -185,7 +185,7 @@ impl PilotsUi {
             HullSync::Source => s.save_quietly(),
             // The active route stays as it is. The pilot chooses when to re-route.
             HullSync::Hull if s.pilots.active.is_some() => {
-                let kind = s.settings.rules.hull.map_or("an unknown ship".into(), |h| h.name.clone());
+                let kind = s.settings.rules.hull.as_ref().map_or("an unknown ship".into(), |h| h.name.clone());
                 s.status = format!("Ship changed to {kind}. The routes update when this route ends.");
                 s.save_quietly();
             }
@@ -334,7 +334,7 @@ impl PilotsUi {
                     ui.vertical(|ui| {
                         ui.label(RichText::new(&row.name).family(theme::bold()).color(Color32::WHITE));
                         status_text(ui, s, row);
-                        ship_row(ui, row);
+                        ship_row(ui, row, &s.settings.hulls);
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                         if ui.button("Remove").clicked() {
@@ -452,7 +452,7 @@ impl PilotsUi {
                             ui.vertical(|ui| {
                                 ui.label(RichText::new(&pilot.name).color(Color32::WHITE));
                                 status_text(ui, s, &pilot);
-                                ship_row(ui, &pilot);
+                                ship_row(ui, &pilot, &s.settings.hulls);
                             });
                         });
                     }
@@ -484,8 +484,8 @@ impl PilotsUi {
                         let text = format!("{name} appears offline. Waypoints need the game client running.");
                         ui.label(RichText::new(text).color(theme::WARN));
                     }
-                    if let Some(flown) = plan.flown {
-                        let planned = s.settings.rules.hull.map_or("no hull".into(), hull_label);
+                    if let Some(flown) = &plan.flown {
+                        let planned = s.settings.rules.hull.as_deref().map_or("no hull".into(), hull_label);
                         ui.label(RichText::new(format!("Planned for {planned}. {name} flies a {}.", flown.name)).color(theme::WARN));
                         if ui.button(format!("Plan for {}", flown.name)).clicked() {
                             plan_for = Some((plan.planned.character, flown.name.clone()));
@@ -802,7 +802,11 @@ impl PilotsUi {
                         ui.label(RichText::new(&sys.name).color(theme::sec_color(sys.security)));
                     });
                 }
-                let ship = pilot.live.ship.as_ref().map_or("ship unknown".to_string(), |sh| ship_text(sh, &pilot.name).to_string());
+                let ship = pilot
+                    .live
+                    .ship
+                    .as_ref()
+                    .map_or("ship unknown".to_string(), |sh| ship_text(sh, &pilot.name, &s.settings.hulls).to_string());
                 let region = node.map_or("location unknown".to_string(), |n| s.uni.system(n).region.clone());
                 let mut hover = format!("{ship} · {region}");
                 if let Some(node) = node.filter(|_| s.pilots.active.is_none()) {
@@ -863,9 +867,9 @@ fn status_text(ui: &mut Ui, s: &Session, pilot: &PilotView) {
 }
 
 /// `Apocalypse · "apoc"` under the status line. The type is bright, the name is dim.
-fn ship_row(ui: &mut Ui, pilot: &PilotView) {
+fn ship_row(ui: &mut Ui, pilot: &PilotView, hulls: &router_core::ansiblex::HullTable) {
     let Some(ship) = &pilot.live.ship else { return };
-    let text = ship_text(ship, &pilot.name);
+    let text = ship_text(ship, &pilot.name, hulls);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
         ui.label(RichText::new(&text.kind).color(theme::TEXT).small());
@@ -941,20 +945,21 @@ mod tests {
         assert_eq!(initials("bob"), "B");
     }
 
-    fn session_with_routes() -> Session {
+    fn session_with_routes() -> (Session, tempfile::TempDir) {
         let uni = overlay_universe();
         let settings = settings(&uni, Some("black-ops"));
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
-        let path = std::env::temp_dir().join("eve-router-egui-test-pilots-view.json");
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("eve-router.json");
         let mut s = Session::new(Arc::new(uni), settings, Config::default(), path, shortcuts);
         s.add_list("Jita, Amarr");
         assert!(s.routes.len() >= 2, "{}", s.status);
-        s
+        (s, tmp)
     }
 
     #[test]
     fn a_moved_route_is_still_the_one_sent() {
-        let mut s = session_with_routes();
+        let (mut s, _tmp) = session_with_routes();
         let path = s.routes[1].path.clone();
         let mut ui = PilotsUi { start: Some(Start::Pick { route: ChosenRoute::new(&s, 1).unwrap(), chosen: 1 }), ..Default::default() };
         s.routes.swap(0, 1);
@@ -967,7 +972,7 @@ mod tests {
     #[test]
     fn the_pick_of_a_parallel_route_stays_on_that_route() {
         let hole_route = || Wormhole { sig_a: Some("ABC-123".into()), ..hole(JITA, PERIMETER) };
-        let mut s = session_with_routes();
+        let (mut s, _tmp) = session_with_routes();
         s.uni = snapshot(vec![hole_route()]).uni;
         s.replace_list("Jita, Perimeter");
         assert_eq!(s.routes[0].path.nodes, s.routes[1].path.nodes);
@@ -982,7 +987,7 @@ mod tests {
 
     #[test]
     fn a_gone_route_closes_the_pick() {
-        let mut s = session_with_routes();
+        let (mut s, _tmp) = session_with_routes();
         let mut ui = PilotsUi { start: Some(Start::Pick { route: ChosenRoute::new(&s, 1).unwrap(), chosen: 1 }), ..Default::default() };
         s.routes.truncate(1);
         assert_eq!(ui.pick_index(&mut s), None);
@@ -992,7 +997,7 @@ mod tests {
 
     #[test]
     fn a_gone_route_drops_the_start_after_login() {
-        let mut s = session_with_routes();
+        let (mut s, _tmp) = session_with_routes();
         let mut ui = PilotsUi { start_after_login: ChosenRoute::new(&s, 1), ..Default::default() };
         s.routes.truncate(1);
         ui.continue_after_login(&mut s);

@@ -3,18 +3,19 @@
 use crate::theme;
 use crate::view::View;
 use petgraph::graph::NodeIndex;
-use router_core::config::{self, Config};
-use router_core::esi::active::active_path;
+use router_core::config::{AppPaths, Config};
 use router_core::esi::pilots::Pilots;
+use router_core::esi::store::{Keyring, TokenStore};
+use router_core::esi::{self, active::active_path};
 use router_core::labels::Shortcuts;
 use router_core::log::{self, LogEntry};
 use router_core::refresh::{self, Refresher, Setup, Snapshot, kept_route, route_note};
 use router_core::route::{Route, Stop};
 use router_core::settings::{Settings, split_systems};
 use router_core::sources::nexum::{self, MapInfo};
-use router_core::startup;
 use router_core::universe::Universe;
 use router_core::wormhole::SourceData;
+use router_core::{sde_update, startup};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
@@ -85,30 +86,46 @@ impl RouterApp {
     }
 }
 
+/// The OS keyring as the token store, or the reason why there is none.
+fn keyring() -> Result<Box<dyn TokenStore>, String> {
+    Keyring::open().map(|keyring| Box::new(keyring) as Box<dyn TokenStore>)
+}
+
+/// True if the env var is "1".
+fn env_flag(name: &str) -> bool {
+    std::env::var(name).as_deref() == Ok("1")
+}
+
+/// The client ID of the EVE developer app. The env var at run time wins over the value at build
+/// time. The repository holds no client ID. Without one, the router cannot log in.
+fn client_id() -> Option<String> {
+    let runtime = std::env::var(esi::CLIENT_ID_VAR).ok();
+    runtime.or_else(|| option_env!("EVE_ROUTER_CLIENT_ID").map(str::to_owned)).map(|id| id.trim().to_owned()).filter(|id| !id.is_empty())
+}
+
 /// The startup load, with the config file and the default SDE directory. The arguments
 /// of the command line are the first waypoints, for example `eve-router-egui Jita "New Caldari"`.
 fn load(ctx: egui::Context) -> Result<Session, String> {
-    let cfg_path = config::default_path();
-    let cfg = Config::load(&cfg_path)?;
-    let pending = startup::begin(&cfg, &cfg_path);
-    let sde_dir = config::default_sde_dir();
+    let paths = AppPaths::detect();
+    let cfg = Config::load(&paths.config)?;
+    let pending = startup::begin(&cfg, &paths);
     let mut startup_lines = Vec::new();
-    let startup::Loaded { snapshot, base, report, types, .. } =
-        startup::finish(pending, &sde_dir, |outcome| startup_lines.extend(outcome.message(&sde_dir)))?;
+    let startup::Loaded { hulls, snapshot, base, report, types, .. } =
+        startup::finish(pending, env_flag(sde_update::SKIP_ENV), |outcome| startup_lines.extend(outcome.message(&paths.sde)))?;
     let Snapshot { uni, shortcuts, all, log } = snapshot;
-    let settings = Settings::from_config(&cfg, &uni)?;
+    let settings = Settings::from_config(&cfg, &uni, hulls)?;
     // The worker gets the wormholes again each 5 minutes, and wakes the window after each refresh.
     let wake = ctx.clone();
-    let mut setup = Setup::new(base, report, types, cfg.nexum.clone(), &cfg_path);
+    let mut setup = Setup::new(base, report, types, cfg.nexum.clone(), &paths);
     setup.last = all.clone();
     let refresher = Refresher::start(setup, router_core::wormhole::now, move || wake.request_repaint());
-    let mut session = Session::new(uni, settings, cfg, cfg_path.clone(), shortcuts);
+    let mut session = Session::new(uni, settings, cfg, paths.config.clone(), shortcuts);
     session.wormhole_data = all;
     session.log = log;
     session.refresher = Some(refresher);
     session.startup_lines = startup_lines;
     // A tracker event or a login result repaints the window.
-    session.pilots = Pilots::open(&cfg_path, Arc::new(move || ctx.request_repaint()));
+    session.pilots = Pilots::open(&paths.config, keyring(), client_id(), Arc::new(move || ctx.request_repaint()));
     // The command line can give the start, the midpoints and the destination.
     let systems: Vec<String> = std::env::args().skip(1).collect();
     if !systems.is_empty() {
@@ -584,18 +601,20 @@ mod tests {
     use router_core::config::NexumConfig;
     use router_core::labels::{jumps_label, route_extras};
     use router_core::log::LogEntry;
-    use router_core::refresh::{Control, NEXUM_LOADING, Refresher, STOPPED};
-    use router_core::test_support::{FIXTURE_TIME, hole, overlay_universe, settings, snapshot};
+    use router_core::refresh::{Control, NEXUM_LOADING, STOPPED};
+    use router_core::test_support::{FIXTURE_TIME, fake_refresher, hole, overlay_universe, settings, snapshot};
     use router_core::wormhole::{SourceData, SourceId, Wormhole};
 
-    fn session(name: &str) -> Session {
+    /// A session that writes its config to a new temporary directory. Keep the directory until the test ends.
+    fn session() -> (Session, tempfile::TempDir) {
         let uni = overlay_universe();
         let settings = settings(&uni, Some("black-ops"));
         let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
-        let path = std::env::temp_dir().join(format!("eve-router-egui-test-{name}.json"));
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("eve-router.json");
         let mut s = Session::new(Arc::new(uni), settings, Config::default(), path, shortcuts);
         s.clock = || FIXTURE_TIME;
-        s
+        (s, tmp)
     }
 
     const JITA: u32 = 30000142;
@@ -609,7 +628,7 @@ mod tests {
 
     #[test]
     fn a_refresh_keeps_the_same_path_and_step() {
-        let mut s = session("refresh-keep");
+        let (mut s, _tmp) = session();
         s.uni = snapshot(Vec::new()).uni;
         s.add_list("Jita, Amarr");
         assert!(s.routes.len() >= 2, "{}", s.status);
@@ -624,7 +643,7 @@ mod tests {
 
     #[test]
     fn a_refresh_selects_the_new_index_of_the_kept_path() {
-        let mut s = session("refresh-moved");
+        let (mut s, _tmp) = session();
         s.uni = snapshot(Vec::new()).uni;
         s.add_list("Jita, Amarr");
         s.selected_step = Some(2);
@@ -641,7 +660,7 @@ mod tests {
     #[test]
     fn a_refresh_keeps_the_selected_parallel_route() {
         let perimeter = || Wormhole { sig_a: Some("ABC-123".into()), ..hole(JITA, PERIMETER) };
-        let mut s = session("refresh-parallel");
+        let (mut s, _tmp) = session();
         s.uni = snapshot(vec![perimeter()]).uni;
         s.add_list("Jita, Perimeter");
         assert_eq!((s.routes[0].wormholes, s.routes[1].wormholes), (0, 1), "{}", s.status);
@@ -653,7 +672,7 @@ mod tests {
 
     #[test]
     fn a_closed_wormhole_gives_a_note_until_the_next_search() {
-        let mut s = session("refresh-closed");
+        let (mut s, _tmp) = session();
         s.settings.top = 1;
         s.uni = snapshot(vec![jita_amarr()]).uni;
         s.add_list("Jita, Amarr");
@@ -669,7 +688,7 @@ mod tests {
 
     #[test]
     fn a_new_first_route_gives_a_note() {
-        let mut s = session("refresh-new");
+        let (mut s, _tmp) = session();
         s.settings.top = 1;
         s.uni = snapshot(Vec::new()).uni;
         s.add_list("Jita, Amarr");
@@ -681,7 +700,7 @@ mod tests {
 
     #[test]
     fn a_refresh_with_no_waypoints_only_swaps_the_map() {
-        let mut s = session("refresh-none");
+        let (mut s, _tmp) = session();
         s.status = "keep".into();
         s.apply_snapshot(snapshot(vec![jita_amarr()]));
         assert_eq!((s.shortcuts.wormholes, s.wormhole_data.len()), (1, 1));
@@ -691,8 +710,8 @@ mod tests {
 
     #[test]
     fn the_poll_applies_a_snapshot_and_reports_a_stopped_worker() {
-        let (refresher, snapshots, _control) = Refresher::fake();
-        let mut s = session("poll-refresh");
+        let (refresher, snapshots, _control) = fake_refresher();
+        let (mut s, _tmp) = session();
         s.refresher = Some(refresher);
         snapshots.send(snapshot(vec![jita_amarr()])).unwrap();
         s.poll_refresh();
@@ -705,7 +724,7 @@ mod tests {
 
     #[test]
     fn a_refresh_adds_its_rows_to_the_log() {
-        let mut s = session("log-rows");
+        let (mut s, _tmp) = session();
         let row = |time| LogEntry { time, op: "nexum.fetch", ok: true, reason: "Loaded 1 wormhole connection".into() };
         let mut snap = snapshot(Vec::new());
         snap.log = vec![row(1)];
@@ -718,8 +737,8 @@ mod tests {
 
     #[test]
     fn a_stopped_worker_gives_a_log_row() {
-        let (refresher, snapshots, _control) = Refresher::fake();
-        let mut s = session("log-stopped");
+        let (refresher, snapshots, _control) = fake_refresher();
+        let (mut s, _tmp) = session();
         s.refresher = Some(refresher);
         drop(snapshots);
         s.poll_refresh();
@@ -729,8 +748,8 @@ mod tests {
 
     #[test]
     fn refresh_now_asks_the_worker_and_waits_between_two_calls() {
-        let (refresher, _snapshots, control) = Refresher::fake();
-        let mut s = session("refresh-now");
+        let (refresher, _snapshots, control) = fake_refresher();
+        let (mut s, _tmp) = session();
         s.refresher = Some(refresher);
         let start = Instant::now();
         s.refresh_now(start);
@@ -747,15 +766,15 @@ mod tests {
 
     #[test]
     fn refresh_now_without_a_worker_says_so() {
-        let mut s = session("refresh-none-worker");
+        let (mut s, _tmp) = session();
         s.refresh_now(Instant::now());
         assert_eq!(s.status, REFRESH_STOPPED);
     }
 
     #[test]
     fn a_nexum_change_asks_the_worker_for_the_new_map() {
-        let (refresher, _snapshots, control) = Refresher::fake();
-        let mut s = session("nexum-refresh");
+        let (refresher, _snapshots, control) = fake_refresher();
+        let (mut s, _tmp) = session();
         s.refresher = Some(refresher);
         s.cfg.nexum.url = Some("https://nexum.example".into());
         s.nexum_saved();
@@ -766,7 +785,7 @@ mod tests {
 
     #[test]
     fn map_name_uses_the_name_in_the_wormhole_data() {
-        let mut s = session("map-name-data");
+        let (mut s, _tmp) = session();
         s.cfg.nexum = NexumConfig { url: Some("https://nexum.example".into()), key: None, map_id: Some("m1".into()) };
         assert_eq!(s.map_name(), "m1");
         let origin = router_core::sources::nexum::map_url(&s.cfg.nexum);
@@ -776,7 +795,7 @@ mod tests {
 
     #[test]
     fn avoiding_a_system_or_region_searches_again_and_saves() {
-        let mut s = session("avoid");
+        let (mut s, _tmp) = session();
         let _ = std::fs::remove_file(&s.cfg_path);
         s.add_list("Jita, Dodixie");
         let first = s.routes[0].path.nodes.clone();
@@ -804,7 +823,7 @@ mod tests {
 
     #[test]
     fn a_never_destination_says_the_avoid_list_is_in_the_way() {
-        let mut s = session("avoid-no-route");
+        let (mut s, _tmp) = session();
         let _ = std::fs::remove_file(&s.cfg_path);
         s.add_list("Jita, Perimeter");
         let perimeter = *s.waypoints.last().unwrap();
@@ -817,7 +836,7 @@ mod tests {
 
     #[test]
     fn a_dragged_value_applies_once_after_the_quiet_time() {
-        let mut s = session("apply-later");
+        let (mut s, _tmp) = session();
         let _ = std::fs::remove_file(&s.cfg_path);
         s.add_list("Jita, Amarr");
         s.status = "unread".into();
@@ -841,7 +860,7 @@ mod tests {
 
     #[test]
     fn closing_a_window_applies_a_waiting_change_at_once() {
-        let mut s = session("apply-flush");
+        let (mut s, _tmp) = session();
         let _ = std::fs::remove_file(&s.cfg_path);
         s.flush_apply();
         assert!(!s.cfg_path.exists(), "nothing waited");
@@ -858,7 +877,7 @@ mod tests {
 
     #[test]
     fn replace_with_no_good_name_clears_the_routes() {
-        let mut s = session("replace");
+        let (mut s, _tmp) = session();
         s.add_list("Jita, Amarr");
         assert!(!s.routes.is_empty(), "{}", s.status);
         let problems = s.replace_list("Nowhere");
@@ -878,7 +897,7 @@ mod tests {
 
     #[test]
     fn waypoints_give_the_routes() {
-        let mut s = session("routes");
+        let (mut s, _tmp) = session();
         let jita = s.uni.exact("Jita").unwrap();
         let ualx = s.uni.exact("UALX-3").unwrap();
         s.add_waypoint(jita);
@@ -894,7 +913,7 @@ mod tests {
 
     #[test]
     fn waypoint_operations() {
-        let mut s = session("ops");
+        let (mut s, _tmp) = session();
         for name in ["Jita", "Amarr", "Dodixie"] {
             let node = s.uni.exact(name).unwrap();
             s.add_waypoint(node);
@@ -929,7 +948,7 @@ mod tests {
 
     #[test]
     fn pasted_list_adds_waypoints() {
-        let mut s = session("list");
+        let (mut s, _tmp) = session();
         let problems = s.add_list("UALX-3\r\nUALX-3\nNowhere\n\njita\n");
         assert_eq!(names(&s), ["UALX-3", "Jita"]);
         assert_eq!(problems, ["Unknown system \"Nowhere\""]);
@@ -946,11 +965,11 @@ mod tests {
 
     #[test]
     fn jove_list_with_line_breaks_and_commas() {
-        let mut s = session("jove");
+        let (mut s, _tmp) = session();
         assert_eq!(s.add_list(JOVE), Vec::<String>::new(), "{}", s.status);
         assert_eq!(s.waypoints.len(), 19);
         assert!(!s.routes.is_empty(), "{}", s.status);
-        let mut csv = session("jove-csv");
+        let (mut csv, _tmp_csv) = session();
         csv.add_list(&JOVE.trim().replace('\n', ", "));
         assert_eq!(csv.waypoints, s.waypoints);
         // 17 midpoints: "Optimize order" changes their order and keeps the start and the destination.
@@ -964,7 +983,7 @@ mod tests {
 
     #[test]
     fn favourites_save_the_config() {
-        let mut s = session("favourites");
+        let (mut s, _tmp) = session();
         let _ = std::fs::remove_file(&s.cfg_path);
         let rens = s.uni.exact("Rens").unwrap();
         assert!(s.add_favourite(rens));

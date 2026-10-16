@@ -1,12 +1,13 @@
 //! The route settings, and the system names of the user input.
 
-use crate::ansiblex::{BridgeRules, find_hull, hull_by_type, same_hull, table};
+use crate::ansiblex::{BridgeRules, HullTable, same_hull};
 use crate::config::{self, AvoidName, Config};
 use crate::route::{DEFAULT_CAP_WEIGHT, DEFAULT_UNKNOWN_SIG_PENALTY, JUMP, Mode, PENALTY, Router, RouterOptions};
 use crate::universe::Universe;
 use crate::wormhole;
 use petgraph::graph::NodeIndex;
 use std::collections::HashSet;
+use std::sync::Arc;
 
 /// Where the hull comes from.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -158,6 +159,8 @@ impl Avoid {
 
 /// The settings that a user interface can change.
 pub struct Settings {
+    /// The ships and the groups. `follow` and the hull picker read it.
+    pub hulls: Arc<HullTable>,
     pub mode: Mode,
     /// Visit each system one time, in the cheapest order. See `Router::optimize`.
     pub optimize: bool,
@@ -179,16 +182,17 @@ pub struct Settings {
 
 impl Settings {
     /// The settings from the config.
-    pub fn from_config(cfg: &Config, uni: &Universe) -> Result<Settings, String> {
+    pub fn from_config(cfg: &Config, uni: &Universe, hulls: Arc<HullTable>) -> Result<Settings, String> {
         let capital = match &cfg.capital {
             Some(name) => Some(resolve_all(uni, std::slice::from_ref(name))?[0]),
             None => None,
         };
         let hull = match &cfg.hull {
-            Some(name) => Some(find_hull(name).ok_or_else(|| format!("Unknown hull \"{name}\""))?),
+            Some(name) => Some(hulls.find(name).ok_or_else(|| format!("Unknown hull \"{name}\""))?),
             None => None,
         };
         Ok(Settings {
+            hulls,
             mode: cfg.mode.unwrap_or(Mode::Shortest),
             optimize: cfg.optimize,
             top: cfg.top.unwrap_or(5).max(1),
@@ -212,7 +216,7 @@ impl Settings {
             wormholes: self.wormholes,
             hubs: self.hubs,
             bridges,
-            rules: self.rules,
+            rules: self.rules.clone(),
             cap_weight: RouteCosts::milli(self.costs.cap_weight),
             unknown_sig_penalty: RouteCosts::milli(self.costs.unknown_sig_penalty),
             unknown_sig_broken: self.costs.unknown_sig_broken,
@@ -231,8 +235,8 @@ impl Settings {
     /// True if the hull changed.
     pub fn follow(&mut self, ship_type: Option<u32>) -> bool {
         let (HullSource::Pilot(_), Some(type_id)) = (self.hull_source, ship_type) else { return false };
-        let hull = hull_by_type(type_id);
-        let changed = !same_hull(hull, self.rules.hull);
+        let hull = self.hulls.by_type(type_id);
+        let changed = !same_hull(hull.as_ref(), self.rules.hull.as_ref());
         self.rules.hull = hull;
         changed
     }
@@ -240,7 +244,7 @@ impl Settings {
     /// Copy the settings to `cfg`, for `Config::save`. The other fields of `cfg` stay.
     pub fn store(&self, uni: &Universe, cfg: &mut Config) {
         cfg.capital = self.rules.capital.map(|n| uni.name(n).to_string());
-        cfg.hull = self.rules.hull.map(|h| h.name.clone());
+        cfg.hull = self.rules.hull.as_ref().map(|h| h.name.clone());
         cfg.pilot = match self.hull_source {
             HullSource::Pilot(id) => Some(id),
             HullSource::Manual => None,
@@ -286,12 +290,12 @@ pub fn split_systems(input: &str) -> Vec<String> {
 }
 
 /// The max TJ for one bridge jump, from a text field. An empty text gives no limit.
-pub fn parse_max_cap(text: &str) -> Result<Option<f32>, String> {
+pub fn parse_max_cap(text: &str, hulls: &HullTable) -> Result<Option<f32>, String> {
     let value = text.trim();
     if value.is_empty() {
         return Ok(None);
     }
-    let max = table().gate_capacitor_tj;
+    let max = hulls.gate_capacitor_tj;
     match value.parse::<f32>() {
         Ok(tj) if (0.0..=max).contains(&tj) => Ok(Some(tj)),
         _ => Err(format!("\"{value}\" is not a TJ value. Give a number from 0 to {max}, or leave it empty for no limit.")),
@@ -338,7 +342,7 @@ fn favourite_names(cfg: &Config) -> Vec<String> {
 mod tests {
     use super::*;
     use crate::route::WORMHOLE_TIE;
-    use crate::test_support::{FIXTURE_TIME, overlay_universe, settings};
+    use crate::test_support::{FIXTURE_TIME, hulls, overlay_universe, settings};
 
     #[test]
     fn overlay_reaches_jspace() {
@@ -366,18 +370,18 @@ mod tests {
     #[test]
     fn follow_sets_the_hull_from_the_ship() {
         let uni = overlay_universe();
-        let sin = find_hull("Sin").unwrap();
+        let sin = hulls().find("Sin").unwrap();
         let sin_type = sin.type_id;
         let mut s = settings(&uni, Some("Rorqual"));
         // The manual source ignores the ship.
         assert!(!s.follow(sin_type));
-        assert_eq!(s.rules.hull.unwrap().name, "Rorqual");
+        assert_eq!(s.rules.hull.as_ref().unwrap().name, "Rorqual");
         s.hull_source = HullSource::Pilot(1);
         // The ship is not known yet: the hull stays.
         assert!(!s.follow(None));
-        assert_eq!(s.rules.hull.unwrap().name, "Rorqual");
+        assert_eq!(s.rules.hull.as_ref().unwrap().name, "Rorqual");
         assert!(s.follow(sin_type));
-        assert!(std::ptr::eq(s.rules.hull.unwrap(), sin));
+        assert!(same_hull(s.rules.hull.as_ref(), Some(&sin)));
         // The same ship again is no change.
         assert!(!s.follow(sin_type));
         // A type that is not in ships.json gives no hull.
@@ -395,7 +399,7 @@ mod tests {
         assert_eq!(cfg.pilot, Some(42));
         // The last known hull stays in the file for the next startup.
         assert_eq!(cfg.hull.as_deref(), Some("Sin"));
-        let back = Settings::from_config(&cfg, &uni).unwrap();
+        let back = Settings::from_config(&cfg, &uni, hulls()).unwrap();
         assert_eq!(back.hull_source, HullSource::Pilot(42));
         s.hull_source = HullSource::Manual;
         s.store(&uni, &mut cfg);
@@ -411,14 +415,14 @@ mod tests {
         s.costs = RouteCosts { cap_weight: 1.5, unknown_sig_penalty: 2.0, unknown_sig_broken: true };
         let mut cfg = Config::default();
         s.store(&uni, &mut cfg);
-        assert_eq!(Settings::from_config(&cfg, &uni).unwrap().costs, s.costs);
+        assert_eq!(Settings::from_config(&cfg, &uni, hulls()).unwrap().costs, s.costs);
         // A value that is negative, too large or not a number gives the default.
         cfg.cap_weight = Some(-1.0);
         cfg.unknown_sig_penalty = Some(f32::NAN);
-        let costs = Settings::from_config(&cfg, &uni).unwrap().costs;
+        let costs = Settings::from_config(&cfg, &uni, hulls()).unwrap().costs;
         assert_eq!((costs.cap_weight, costs.unknown_sig_penalty), (0.6, 4.0));
         cfg.cap_weight = Some(RouteCosts::MAX + 1.0);
-        assert_eq!(Settings::from_config(&cfg, &uni).unwrap().costs.cap_weight, 0.6);
+        assert_eq!(Settings::from_config(&cfg, &uni, hulls()).unwrap().costs.cap_weight, 0.6);
     }
 
     #[test]
@@ -574,21 +578,21 @@ mod tests {
             (cfg.avoid_systems.as_slice(), cfg.avoid_regions.as_slice()),
             (&[AvoidName::new("Rens", true)][..], &[AvoidName::new("Lonetrek", false)][..])
         );
-        let back = Settings::from_config(&cfg, &uni).unwrap();
+        let back = Settings::from_config(&cfg, &uni, hulls()).unwrap();
         assert_eq!(back.avoid, s.avoid);
         // A name that the SDE does not know is dropped, and the other entries stay.
         cfg.avoid_systems.push(AvoidName::new("Nowhere", false));
         cfg.avoid_regions.push(AvoidName::new("Nowhere", false));
-        let back = Settings::from_config(&cfg, &uni).unwrap();
+        let back = Settings::from_config(&cfg, &uni, hulls()).unwrap();
         assert_eq!((back.avoid.systems.len(), back.avoid.regions.len()), (1, 1));
     }
 
     #[test]
     fn max_cap_text() {
-        assert_eq!(parse_max_cap(" "), Ok(None));
-        assert_eq!(parse_max_cap("36.5"), Ok(Some(36.5)));
-        assert!(parse_max_cap("-1").unwrap_err().contains("is not a TJ value"));
-        assert!(parse_max_cap("lots").is_err());
+        assert_eq!(parse_max_cap(" ", &hulls()), Ok(None));
+        assert_eq!(parse_max_cap("36.5", &hulls()), Ok(Some(36.5)));
+        assert!(parse_max_cap("-1", &hulls()).unwrap_err().contains("is not a TJ value"));
+        assert!(parse_max_cap("lots", &hulls()).is_err());
     }
 
     #[test]

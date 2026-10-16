@@ -156,7 +156,7 @@ fn reuse_cost(reuse: &[u64], edge: EdgeIndex) -> u64 {
 }
 
 /// What a `Router` needs to price the links of a universe.
-#[derive(Clone, Copy)]
+#[derive(Clone)]
 pub struct RouterOptions {
     pub mode: Mode,
     pub wormholes: bool,
@@ -239,7 +239,7 @@ impl<'a> Router<'a> {
                 if unwanted { JUMP + PENALTY } else { JUMP }
             })
             .collect();
-        let hull_kg = rules.hull.and_then(|h| h.mass_kg);
+        let hull_kg = rules.hull.as_ref().and_then(|h| h.mass_kg);
         let edge_ok = graph
             .raw_edges()
             .par_iter()
@@ -663,7 +663,7 @@ impl<'a> Router<'a> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{hole, sde_dir, universe};
+    use crate::test_support::{hole, universe};
 
     #[test]
     fn the_legs_run_from_stop_to_stop() {
@@ -687,33 +687,29 @@ mod tests {
         Router::new(universe(), RouterOptions { mode, ..Default::default() })
     }
 
-    use crate::ansiblex::find_hull;
+    use crate::test_support::hulls;
     use crate::wormhole::{Expiry, Hubs, MassStatus, Size, THERA, TURNUR, Wormhole};
-    use std::sync::OnceLock;
 
     /// The expiry of the Hek-Perimeter wormhole.
     const ENDS: u64 = 2_000_000_000;
 
     /// The SDE, plus one test wormhole for each rule. Each pair is many gate jumps apart,
     /// so a route of 1 jump uses the wormhole.
-    fn holes_universe() -> &'static Universe {
-        static UNI: OnceLock<Universe> = OnceLock::new();
-        UNI.get_or_init(|| {
-            let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
-            let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
-            let holes = [
-                Wormhole { size: Some(Size::Medium), ..hole(id("Jita"), id("Amarr")) },
-                Wormhole { size: Some(Size::Small), ..hole(id("Dodixie"), id("Hek")) },
-                Wormhole { mass: Some(MassStatus::Critical), ..hole(id("Rens"), id("Amarr")) },
-                Wormhole { expiry: Some(Expiry { at: ENDS, exact: true }), ..hole(id("Hek"), id("Perimeter")) },
-                // Ashab to Pator through Thera, and Turnur to Oursulaert.
-                hole(id("Ashab"), THERA),
-                hole(THERA, id("Pator")),
-                hole(TURNUR, id("Oursulaert")),
-            ];
-            assert_eq!(uni.add_wormholes(&holes), 7);
-            uni
-        })
+    fn holes_universe() -> Universe {
+        let mut uni = universe().clone();
+        let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
+        let holes = [
+            Wormhole { size: Some(Size::Medium), ..hole(id("Jita"), id("Amarr")) },
+            Wormhole { size: Some(Size::Small), ..hole(id("Dodixie"), id("Hek")) },
+            Wormhole { mass: Some(MassStatus::Critical), ..hole(id("Rens"), id("Amarr")) },
+            Wormhole { expiry: Some(Expiry { at: ENDS, exact: true }), ..hole(id("Hek"), id("Perimeter")) },
+            // Ashab to Pator through Thera, and Turnur to Oursulaert.
+            hole(id("Ashab"), THERA),
+            hole(THERA, id("Pator")),
+            hole(TURNUR, id("Oursulaert")),
+        ];
+        assert_eq!(uni.add_wormholes(&holes), 7);
+        uni
     }
 
     fn jumps(hull: Option<&str>, from: &str, to: &str, now: u64) -> usize {
@@ -722,8 +718,8 @@ mod tests {
 
     fn hub_jumps(hubs: Hubs, hull: Option<&str>, from: &str, to: &str, now: u64) -> usize {
         let uni = holes_universe();
-        let rules = BridgeRules { capital: None, hull: hull.map(|h| find_hull(h).unwrap()), max_cap: None };
-        let router = Router::new(uni, RouterOptions { hubs, bridges: false, rules, now, ..Default::default() });
+        let rules = BridgeRules { capital: None, hull: hull.map(|h| hulls().find(h).unwrap()), max_cap: None };
+        let router = Router::new(&uni, RouterOptions { hubs, bridges: false, rules, now, ..Default::default() });
         let nodes = [uni.exact(from).unwrap(), uni.exact(to).unwrap()];
         router.routes(&nodes, 1).unwrap()[0].jumps
     }
@@ -754,7 +750,7 @@ mod tests {
     #[test]
     fn wormholes_off() {
         let uni = holes_universe();
-        let router = Router::new(uni, RouterOptions { wormholes: false, bridges: false, ..Default::default() });
+        let router = Router::new(&uni, RouterOptions { wormholes: false, bridges: false, ..Default::default() });
         let nodes = [uni.exact("Dodixie").unwrap(), uni.exact("Hek").unwrap()];
         assert!(router.routes(&nodes, 1).unwrap()[0].jumps > 1);
     }
@@ -938,15 +934,12 @@ mod tests {
     }
 
     /// The SDE, plus a wormhole between Jita and Perimeter, which also share a stargate.
-    fn parallel_universe() -> &'static Universe {
-        static UNI: OnceLock<Universe> = OnceLock::new();
-        UNI.get_or_init(|| {
-            let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
-            let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
-            let holes = [hole(id("Jita"), id("Perimeter"))];
-            assert_eq!(uni.add_wormholes(&holes), 1);
-            uni
-        })
+    fn parallel_universe() -> Universe {
+        let mut uni = universe().clone();
+        let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
+        let holes = [hole(id("Jita"), id("Perimeter"))];
+        assert_eq!(uni.add_wormholes(&holes), 1);
+        uni
     }
 
     /// The edge from Jita to Perimeter of each link kind: (stargate, wormhole).
@@ -960,7 +953,7 @@ mod tests {
     fn a_dearer_edge_loses_to_a_parallel_edge() {
         let uni = parallel_universe();
         // The test wormhole has no signature, so the penalty for it is off.
-        let mut r = Router::new(uni, RouterOptions { unknown_sig_penalty: 0, ..Default::default() });
+        let mut r = Router::new(&uni, RouterOptions { unknown_sig_penalty: 0, ..Default::default() });
         let (gate, hole) = parallel_edges(&r);
         let (jita, perimeter) = (uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap());
 
@@ -980,22 +973,19 @@ mod tests {
     /// The SDE, plus a wormhole between Jita and Unpas, which share no stargate. Jita to Urlen then has
     /// two routes of two jumps: over Perimeter by stargate, and over Unpas by the wormhole. The
     /// wormhole route comes first by node order, so only the cost can put the stargate route first.
-    fn tie_universe() -> &'static Universe {
-        static UNI: OnceLock<Universe> = OnceLock::new();
-        UNI.get_or_init(|| {
-            let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
-            let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
-            let holes = [hole(id("Jita"), id("Unpas"))];
-            assert_eq!(uni.add_wormholes(&holes), 1);
-            uni
-        })
+    fn tie_universe() -> Universe {
+        let mut uni = universe().clone();
+        let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
+        let holes = [hole(id("Jita"), id("Unpas"))];
+        assert_eq!(uni.add_wormholes(&holes), 1);
+        uni
     }
 
     #[test]
     fn on_a_tie_the_route_with_fewer_wormholes_comes_first() {
         let uni = tie_universe();
         // The test wormhole has no signature, so the penalty for it is off.
-        let r = Router::new(uni, RouterOptions { unknown_sig_penalty: 0, ..Default::default() });
+        let r = Router::new(&uni, RouterOptions { unknown_sig_penalty: 0, ..Default::default() });
         let (jita, urlen) = (uni.exact("Jita").unwrap(), uni.exact("Urlen").unwrap());
         let routes = r.routes(&[jita, urlen], 2).unwrap();
         assert_eq!(routes.iter().map(|r| (r.jumps, r.wormholes)).collect::<Vec<_>>(), [(2, 0), (2, 1)]);
@@ -1004,7 +994,7 @@ mod tests {
     #[test]
     fn a_route_counts_the_avoided_systems() {
         let uni = parallel_universe();
-        let mut r = Router::new(uni, RouterOptions::default());
+        let mut r = Router::new(&uni, RouterOptions::default());
         let nodes = [uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap()];
         assert_eq!(r.routes(&nodes, 1).unwrap()[0].avoided, 0);
         let mut danger = vec![0; uni.graph.node_count()];
@@ -1018,7 +1008,7 @@ mod tests {
     #[test]
     fn an_extra_cost_changes_the_order_of_routes() {
         let uni = parallel_universe();
-        let mut r = Router::new(uni, RouterOptions::default());
+        let mut r = Router::new(&uni, RouterOptions::default());
         let (_, hole) = parallel_edges(&r);
         r.edge_extra[hole.index()] = JUMP / 2;
         let routes = r.routes(&[uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap()], 2).unwrap();
@@ -1028,7 +1018,7 @@ mod tests {
     #[test]
     fn jumps_to_counts_jumps_of_the_cheapest_route() {
         let uni = parallel_universe();
-        let mut r = Router::new(uni, RouterOptions::default());
+        let mut r = Router::new(&uni, RouterOptions::default());
         let (jita, perimeter) = (uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap());
         let targets = [jita, perimeter];
         // Both edges cost one jump, whatever the extra cost of a dear edge is.
@@ -1044,13 +1034,13 @@ mod tests {
     #[test]
     fn a_bridge_costs_by_the_share_of_the_gate_capacitor() {
         let uni = crate::test_support::overlay_universe();
-        let rules = BridgeRules { capital: uni.exact("JK-Q77"), hull: find_hull("Battleship"), max_cap: None };
+        let rules = BridgeRules { capital: uni.exact("JK-Q77"), hull: hulls().find("Battleship"), max_cap: None };
         let (from, to) = (uni.exact("QLU-P0").unwrap(), uni.exact("Q5KZ-W").unwrap());
         // QLU-P0 is in zone 2, so a Battleship uses 33 TJ of 1250 TJ.
         let pct = rules.cost(&uni, from).unwrap().cap_pct.unwrap();
         assert!(pct > 0.0);
         let route = |cap_weight| {
-            let r = Router::new(&uni, RouterOptions { rules, cap_weight, ..Default::default() });
+            let r = Router::new(&uni, RouterOptions { rules: rules.clone(), cap_weight, ..Default::default() });
             r.routes(&[from, to], 1).unwrap().remove(0)
         };
 
@@ -1075,7 +1065,7 @@ mod tests {
     /// The Jita-Amarr wormhole of the test universe has no signature. The gate route is 10 jumps or more.
     fn jita_amarr(options: RouterOptions) -> Route {
         let uni = holes_universe();
-        let r = Router::new(uni, options);
+        let r = Router::new(&uni, options);
         r.routes(&[uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()], 1).unwrap().remove(0)
     }
 
@@ -1108,7 +1098,7 @@ mod tests {
         let uni = parallel_universe();
         let nodes = [uni.exact("Jita").unwrap(), uni.exact("Perimeter").unwrap()];
         let ranked = |options: RouterOptions| -> Vec<(usize, usize)> {
-            let routes = Router::new(uni, options).routes(&nodes, 6).unwrap();
+            let routes = Router::new(&uni, options).routes(&nodes, 6).unwrap();
             routes.iter().map(|r| (r.jumps, r.wormholes)).collect()
         };
 
@@ -1128,7 +1118,7 @@ mod tests {
     fn a_danger_cost_steers_the_route() {
         let uni = holes_universe();
         let nodes = [uni.exact("Jita").unwrap(), uni.exact("Dodixie").unwrap()];
-        let mut r = Router::new(uni, RouterOptions { wormholes: false, ..Default::default() });
+        let mut r = Router::new(&uni, RouterOptions { wormholes: false, ..Default::default() });
         let best = r.routes(&nodes, 1).unwrap().remove(0);
         let middle = best.path.nodes[best.jumps / 2];
         let mut danger = vec![0; uni.graph.node_count()];

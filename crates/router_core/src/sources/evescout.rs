@@ -247,16 +247,17 @@ mod tests {
         assert_eq!(report.incomplete, 2);
     }
 
-    fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(name);
-        let _ = std::fs::remove_dir_all(&dir);
-        dir.join("eve-scout.json")
+    /// A cache file path in a new temporary directory. Keep the directory until the test ends.
+    fn temp() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("eve-scout.json");
+        (tmp, path)
     }
 
     #[test]
     fn fetch_sends_no_key_and_writes_the_cache() {
         let (url, request) = serve("200 OK", &fixture_text(), Duration::ZERO);
-        let path = temp("eve-router-test-scout-fetch");
+        let (_tmp, path) = temp();
         let load = finish(start(&url, path.clone(), FETCHED), |_| true, &types());
         let request = request.recv().unwrap();
         assert!(request.starts_with("GET / HTTP/1.1"), "{request}");
@@ -270,7 +271,7 @@ mod tests {
 
     #[test]
     fn fresh_cache_stops_the_fetch() {
-        let path = temp("eve-router-test-scout-fresh");
+        let (_tmp, path) = temp();
         // Port 9 has no server, so a fetch would fail.
         let url = "http://127.0.0.1:9";
         let cached =
@@ -282,7 +283,7 @@ mod tests {
     #[test]
     fn failed_fetch_uses_an_old_cache() {
         let (url, _) = serve("503 Service Unavailable", "{}", Duration::ZERO);
-        let path = temp("eve-router-test-scout-stale");
+        let (_tmp, path) = temp();
         let old =
             SourceData { source: SourceId::EveScout, fetched_at: FETCHED - 3600, origin: Some(url.clone()), name: None, holes: Vec::new() };
         sources::write_cache(&path, &old).unwrap();
@@ -295,12 +296,14 @@ mod tests {
     #[test]
     fn the_log_records_each_fetch() {
         let (url, _) = serve("503 Service Unavailable", "{}", Duration::ZERO);
-        let load = finish(start(&url, temp("eve-router-test-scout-log-bad"), FETCHED), |_| true, &types());
+        let (_tmp, path) = temp();
+        let load = finish(start(&url, path, FETCHED), |_| true, &types());
         assert_eq!((load.log.len(), load.log[0].op, load.log[0].ok, load.log[0].time), (1, "evescout.fetch", false, FETCHED));
         assert!(load.log[0].reason.contains("503"), "{}", load.log[0].reason);
 
         let (url, _) = serve("200 OK", &fixture_text(), Duration::ZERO);
-        let load = finish(start(&url, temp("eve-router-test-scout-log-ok"), FETCHED), |_| true, &types());
+        let (_tmp, path) = temp();
+        let load = finish(start(&url, path, FETCHED), |_| true, &types());
         let holes = load.data.as_ref().unwrap().holes.len();
         assert_eq!(load.log, [LogEntry { time: FETCHED, op: "evescout.fetch", ok: true, reason: log::loaded(holes) }]);
     }
@@ -308,7 +311,8 @@ mod tests {
     #[test]
     fn bad_json_counts_as_offline() {
         let (url, _) = serve("200 OK", "<html>", Duration::ZERO);
-        let load = finish(start(&url, temp("eve-router-test-scout-bad"), FETCHED), |_| true, &types());
+        let (_tmp, path) = temp();
+        let load = finish(start(&url, path, FETCHED), |_| true, &types());
         assert_eq!(load.data, None);
         assert_eq!(load.warning.as_deref(), Some("EVE-Scout offline"));
     }

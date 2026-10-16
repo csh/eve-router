@@ -58,9 +58,9 @@ impl Outcome {
     }
 }
 
-/// Make sure that `dir` holds the latest SDE files.
-pub fn ensure(dir: &Path) -> Result<Outcome, String> {
-    if std::env::var(SKIP_ENV).as_deref() == Ok("1") {
+/// Make sure that `dir` holds the latest SDE files. With `skip`, do not look at the network.
+pub fn ensure(dir: &Path, skip: bool) -> Result<Outcome, String> {
+    if skip {
         return Ok(Outcome::Skipped);
     }
     let local = local_build(dir);
@@ -311,8 +311,8 @@ mod tests {
 
     #[test]
     fn downloads_only_wanted_files() {
-        let dir = std::env::temp_dir().join("eve-router-test-sde-update");
-        let _ = fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         download(&FIXTURE.to_vec(), &dir).unwrap();
         let mut names: Vec<String> = fs::read_dir(&dir).unwrap().map(|e| e.unwrap().file_name().into_string().unwrap()).collect();
         names.sort();
@@ -332,7 +332,6 @@ mod tests {
         assert!(ships.ships.iter().all(|s| s.name != "Drone"));
         assert_eq!(crate::sde::build_number(&dir), Some(123));
         assert_eq!(local_build(&dir), Some(123));
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     /// Make `ships.json` and `wormholes.json` in the repository `sde/` directory again, from the
@@ -349,14 +348,13 @@ mod tests {
 
     #[test]
     fn install_reports_the_build_before_the_download() {
-        let dir = std::env::temp_dir().join("eve-router-test-sde-install");
-        let _ = fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join("_sde.jsonl"), "{\"_key\": \"sde\", \"buildNumber\": 100}\n").unwrap();
         // The fixture holds build 123.
         let Outcome::Updated { from, to, .. } = install(&FIXTURE.to_vec(), &dir, 123).unwrap() else { panic!("not Updated") };
         assert_eq!((from, to), (Some(100), 123));
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -398,7 +396,8 @@ mod tests {
         let mut bad = FIXTURE.to_vec();
         // Change one byte inside the first entry data. It starts at byte 51.
         bad[60] ^= 0xff;
-        let dir = std::env::temp_dir().join("eve-router-test-sde-corrupt");
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         assert!(download(&bad, &dir).is_err());
         let _ = fs::remove_dir_all(&dir);
     }

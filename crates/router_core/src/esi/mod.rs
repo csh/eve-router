@@ -13,15 +13,9 @@ use oauth2::Scope;
 pub const SCOPES: [&str; 4] =
     ["esi-ui.write_waypoint.v1", "esi-location.read_location.v1", "esi-location.read_ship_type.v1", "esi-location.read_online.v1"];
 
-/// The env var that gives the client ID of the EVE developer app.
+/// The env var that gives the client ID of the EVE developer app. The app reads it, and passes
+/// the value to `Pilots::open`. The repository holds no client ID. Without one, the router cannot log in.
 pub const CLIENT_ID_VAR: &str = "EVE_ROUTER_CLIENT_ID";
-
-/// The client ID of the EVE developer app. The env var at run time wins over the value at build
-/// time. The repository holds no client ID. Without one, the router cannot log in.
-pub fn client_id() -> Option<String> {
-    let runtime = std::env::var(CLIENT_ID_VAR).ok();
-    runtime.or_else(|| option_env!("EVE_ROUTER_CLIENT_ID").map(str::to_owned)).map(|id| id.trim().to_owned()).filter(|id| !id.is_empty())
-}
 
 /// A character from the SSO token.
 #[derive(Clone, Debug, PartialEq, Eq)]

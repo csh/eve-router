@@ -710,22 +710,24 @@ mod tests {
     /// The map URL of `cfg("http://127.0.0.1:9")`.
     const MAP1: &str = "http://127.0.0.1:9/api/v1/maps/m1";
 
-    fn temp(name: &str) -> PathBuf {
-        let dir = std::env::temp_dir().join(name);
-        let _ = std::fs::remove_dir_all(&dir);
-        dir.join("nexum.json")
+    /// A cache file path in a new temporary directory. Keep the directory until the test ends.
+    fn temp() -> (tempfile::TempDir, PathBuf) {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("nexum.json");
+        (tmp, path)
     }
 
     #[test]
     fn partial_settings_do_not_fetch() {
         let mut partial = cfg("http://127.0.0.1:9");
         partial.key = None;
-        assert!(matches!(start(&partial, temp("eve-router-test-partial"), FETCHED), Pending::None));
+        let (_tmp, path) = temp();
+        assert!(matches!(start(&partial, path, FETCHED), Pending::None));
     }
 
     #[test]
     fn fresh_cache_stops_the_fetch() {
-        let path = temp("eve-router-test-fresh");
+        let (_tmp, path) = temp();
         let cached =
             SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 60, origin: Some(MAP1.into()), name: None, holes: Vec::new() };
         crate::sources::write_cache(&path, &cached).unwrap();
@@ -740,7 +742,7 @@ mod tests {
     fn fetch_converts_and_writes_the_cache() {
         let body = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
         let (url, request) = serve("200 OK", &body, Duration::ZERO);
-        let path = temp("eve-router-test-fetch");
+        let (_tmp, path) = temp();
         let load = finish(start(&cfg(&url), path.clone(), FETCHED), |id| id != 39_999_999, &types());
         assert!(request.recv().unwrap().starts_with("GET /api/v1/maps/m1 HTTP/1.1"));
         let data = load.data.unwrap();
@@ -753,7 +755,7 @@ mod tests {
     #[test]
     fn failed_fetch_uses_an_old_cache() {
         let (url, _) = serve("401 Unauthorized", "{}", Duration::ZERO);
-        let path = temp("eve-router-test-stale");
+        let (_tmp, path) = temp();
         let old = SourceData {
             source: SourceId::Nexum,
             fetched_at: FETCHED - 3600,
@@ -771,7 +773,7 @@ mod tests {
     fn cache_of_another_map_starts_a_fetch() {
         let body = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
         let (url, request) = serve("200 OK", &body, Duration::ZERO);
-        let path = temp("eve-router-test-other-map");
+        let (_tmp, path) = temp();
         // A fresh cache, but for map m2.
         let other = SourceData {
             source: SourceId::Nexum,
@@ -793,7 +795,7 @@ mod tests {
     #[test]
     fn failed_fetch_ignores_a_cache_of_another_map() {
         let (url, _) = serve("404 Not Found", "{}", Duration::ZERO);
-        let path = temp("eve-router-test-other-map-fail");
+        let (_tmp, path) = temp();
         let other = SourceData {
             source: SourceId::Nexum,
             fetched_at: FETCHED - 3600,
@@ -810,7 +812,7 @@ mod tests {
     #[test]
     fn cache_without_origin_is_not_used() {
         let (url, request) = serve("404 Not Found", "{}", Duration::ZERO);
-        let path = temp("eve-router-test-no-origin");
+        let (_tmp, path) = temp();
         std::fs::create_dir_all(path.parent().unwrap()).unwrap();
         let old = format!(r#"{{"source":"Nexum","fetched_at":{},"holes":[]}}"#, FETCHED - 60);
         std::fs::write(&path, old).unwrap();
@@ -839,7 +841,7 @@ mod tests {
     #[test]
     fn fetch_gets_the_signatures() {
         let (url, requests) = crate::test_support::serve_routes(sig_routes());
-        let path = temp("eve-router-test-sigs");
+        let (_tmp, path) = temp();
         let load = finish(start(&cfg(&url), path.clone(), FETCHED), |id| id != 39_999_999, &types());
         // One map request, and one signature request for each of the 9 wormhole ends.
         // All are GET requests with the key.
@@ -861,7 +863,8 @@ mod tests {
     #[test]
     fn the_log_records_the_fetch_and_the_failed_signatures() {
         let (url, _) = crate::test_support::serve_routes(sig_routes());
-        let load = finish(start(&cfg(&url), temp("eve-router-test-log-ok"), FETCHED), |id| id != 39_999_999, &types());
+        let (_tmp, path) = temp();
+        let load = finish(start(&cfg(&url), path, FETCHED), |id| id != 39_999_999, &types());
         let holes = load.data.as_ref().unwrap().holes.len();
         let row = |op, ok, reason: &str| LogEntry { time: FETCHED, op, ok, reason: reason.into() };
         assert_eq!(load.log, [row("nexum.fetch", true, &log::loaded(holes)), row("nexum.signatures", false, "1 system not loaded")]);
@@ -870,14 +873,15 @@ mod tests {
     #[test]
     fn the_log_gives_the_reason_of_a_failed_fetch() {
         let (url, _) = serve("401 Unauthorized", "{}", Duration::ZERO);
-        let load = finish(start(&cfg(&url), temp("eve-router-test-log-auth"), FETCHED), |_| true, &types());
+        let (_tmp, path) = temp();
+        let load = finish(start(&cfg(&url), path, FETCHED), |_| true, &types());
         let reason = "bad API key or no access to the map";
         assert_eq!(load.log, [LogEntry { time: FETCHED, op: "nexum.fetch", ok: false, reason: reason.into() }]);
     }
 
     #[test]
     fn the_log_notes_a_fresh_cache() {
-        let path = temp("eve-router-test-log-cache");
+        let (_tmp, path) = temp();
         let url = "http://127.0.0.1:9";
         let cached = SourceData {
             source: SourceId::Nexum,
@@ -897,7 +901,8 @@ mod tests {
     #[test]
     fn bad_json_counts_as_offline() {
         let (url, _) = serve("200 OK", "<html>", Duration::ZERO);
-        let load = finish(start(&cfg(&url), temp("eve-router-test-badjson"), FETCHED), |_| true, &types());
+        let (_tmp, path) = temp();
+        let load = finish(start(&cfg(&url), path, FETCHED), |_| true, &types());
         assert_eq!(load.data, None);
         assert_eq!(load.warning.as_deref(), Some("Nexum offline"));
     }
@@ -939,7 +944,7 @@ mod tests {
         let body = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
         // A server that stays open: each signature request gets a 500 at once, not a refused connection.
         let (url, request) = crate::test_support::serve_routes(HashMap::from([("/api/v1/maps/m1".to_string(), body)]));
-        let path = temp("eve-router-test-start-fetch");
+        let (_tmp, path) = temp();
         let cached = SourceData {
             source: SourceId::Nexum,
             fetched_at: FETCHED - 60,

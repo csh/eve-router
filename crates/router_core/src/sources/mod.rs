@@ -6,7 +6,7 @@ pub mod nexum;
 
 use crate::wormhole::{SourceData, SourceId, local_time};
 use std::fs;
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Duration;
 
 /// The timeout of one request.
@@ -83,14 +83,6 @@ pub fn get_with(agent: &ureq::Agent, url: &str, key: Option<&str>) -> Result<Str
         Err(ureq::Error::StatusCode(404)) => Err(FetchError::NotFound),
         Err(e) => Err(FetchError::Offline(e.to_string())),
     }
-}
-
-/// The cache file of a source: `nexum.json` in the platform cache directory, for example
-/// `%LOCALAPPDATA%\com.smrkn.eve-router\nexum.json` on Windows. If the platform gives no
-/// cache directory, use a `cache` directory next to the config file.
-pub fn cache_path(source: SourceId, cfg_path: &Path) -> PathBuf {
-    let name = format!("{}.json", source.file_stem());
-    dirs::cache_dir().map_or_else(|| cfg_path.with_file_name("cache").join(&name), |dir| dir.join(crate::config::APP_DIR).join(&name))
 }
 
 /// Read a cache file. A missing, corrupt or old-format file gives `None`.
@@ -219,8 +211,8 @@ mod tests {
 
     #[test]
     fn cache_round_trip_and_age() {
-        let dir = std::env::temp_dir().join("eve-router-test-cache");
-        let _ = fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let path = dir.join("nexum.json");
         assert_eq!(read_cache(&path), None);
         write_cache(&path, &sample(1000)).unwrap();
@@ -232,13 +224,12 @@ mod tests {
         // A corrupt or old-format file counts as no cache.
         fs::write(&path, "{\"holes\": 3}").unwrap();
         assert_eq!(read_cache(&path), None);
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn choose_uses_the_cache_on_failure() {
-        let dir = std::env::temp_dir().join("eve-router-test-choose");
-        let _ = fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let path = dir.join("nexum.json");
         // A success writes the cache.
         let chosen = choose(SourceId::Nexum, Ok(sample(5000)), None, &path);
@@ -253,13 +244,12 @@ mod tests {
         let chosen = choose(SourceId::Nexum, Err(FetchError::Offline("timeout".into())), None, &path);
         assert_eq!(chosen.data, None);
         assert_eq!(chosen.warning.as_deref(), Some("Nexum offline"));
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn an_old_cache_with_no_name_loads() {
-        let dir = std::env::temp_dir().join("eve-router-test-cache-no-name");
-        let _ = fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         fs::create_dir_all(&dir).unwrap();
         let path = dir.join("nexum.json");
         // A cache file from before the name field.
@@ -267,6 +257,5 @@ mod tests {
         fs::write(&path, old).unwrap();
         let data = read_cache(&path).unwrap();
         assert_eq!((data.name, data.fetched_at), (None, 1000));
-        fs::remove_dir_all(&dir).unwrap();
     }
 }

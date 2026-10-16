@@ -1,6 +1,6 @@
 //! The text of the route summaries, the route steps and the Shortcuts box, for each user interface.
 
-use crate::ansiblex::{BridgeRules, HullClass, hull_by_type};
+use crate::ansiblex::{BridgeRules, Hull, HullTable};
 use crate::esi::active::ActiveRoute;
 use crate::esi::client::Ship;
 use crate::esi::pilots::Pilots;
@@ -76,7 +76,7 @@ pub fn on_off(on: bool) -> &'static str {
 }
 
 /// A ship shows its group, for example "Sin (Black Ops)". A group shows only its name.
-pub fn hull_label(h: HullClass) -> String {
+pub fn hull_label(h: &Hull) -> String {
     match h.type_id {
         Some(_) => format!("{} ({})", h.name, h.group),
         None => h.name.clone(),
@@ -94,8 +94,8 @@ pub struct ShipText {
     pub no_bridges: bool,
 }
 
-pub fn ship_text(ship: &Ship, character: &str) -> ShipText {
-    let Some(hull) = hull_by_type(ship.ship_type_id) else {
+pub fn ship_text(ship: &Ship, character: &str, hulls: &HullTable) -> ShipText {
+    let Some(hull) = hulls.by_type(ship.ship_type_id) else {
         return ShipText { kind: ship.ship_name.clone(), name: None, no_bridges: false };
     };
     let name = ship.ship_name.trim().to_lowercase();
@@ -123,10 +123,10 @@ pub fn pilot_label(settings: &Settings, pilots: &Pilots) -> String {
     match settings.hull_source {
         HullSource::Pilot(id) => {
             let name = pilots.characters().into_iter().find(|c| c.id == id).map_or_else(|| id.to_string(), |c| c.name);
-            let kind = settings.rules.hull.map_or("ship unknown".into(), |h| h.name.clone());
+            let kind = settings.rules.hull.as_ref().map_or("ship unknown".into(), |h| h.name.clone());
             format!("{name} · {kind}")
         }
-        HullSource::Manual => format!("Hull: {}", settings.rules.hull.map_or("none".into(), hull_label)),
+        HullSource::Manual => format!("Hull: {}", settings.rules.hull.as_deref().map_or("none".into(), hull_label)),
     }
 }
 
@@ -311,7 +311,8 @@ mod tests {
         use crate::settings::HullSource;
         use crate::test_support::{overlay_universe, settings};
         let uni = overlay_universe();
-        let pilots = Pilots::offline(std::env::temp_dir().join("eve-router-test-pilot-label").join("active-route.json"));
+        let tmp = tempfile::tempdir().unwrap();
+        let pilots = Pilots::offline(tmp.path().join("active-route.json"));
         let mut s = settings(&uni, Some("Sin"));
         assert_eq!(pilot_label(&s, &pilots), "Hull: Sin (Black Ops)");
         // A character that is not in the list shows its ID.
@@ -341,21 +342,21 @@ mod tests {
 
     #[test]
     fn ship_text_shows_the_type_first() {
-        use crate::ansiblex::find_hull;
         use crate::esi::client::Ship;
+        use crate::test_support::hulls;
         let ship = |name: &str, type_id: u32| Ship { ship_type_id: type_id, ship_item_id: 1, ship_name: name.into() };
-        let apoc = find_hull("Apocalypse").unwrap().type_id.unwrap();
+        let apoc = hulls().find("Apocalypse").unwrap().type_id.unwrap();
         // A name from the player shows after the type.
-        assert_eq!(ship_text(&ship("apoc", apoc), "smrkn").to_string(), "Apocalypse · \"apoc\"");
+        assert_eq!(ship_text(&ship("apoc", apoc), "smrkn", &hulls()).to_string(), "Apocalypse · \"apoc\"");
         // A default name does not show. EVE uses both forms.
-        assert_eq!(ship_text(&ship("Capsule - Cyrene Hawthorne", 670), "Cyrene Hawthorne").to_string(), "Capsule");
-        assert_eq!(ship_text(&ship("smrkn's Apocalypse", apoc), "smrkn").to_string(), "Apocalypse");
-        assert_eq!(ship_text(&ship("Apocalypse", apoc), "smrkn").to_string(), "Apocalypse");
+        assert_eq!(ship_text(&ship("Capsule - Cyrene Hawthorne", 670), "Cyrene Hawthorne", &hulls()).to_string(), "Capsule");
+        assert_eq!(ship_text(&ship("smrkn's Apocalypse", apoc), "smrkn", &hulls()).to_string(), "Apocalypse");
+        assert_eq!(ship_text(&ship("Apocalypse", apoc), "smrkn", &hulls()).to_string(), "Apocalypse");
         // A ship that cannot use bridges says so.
-        let avatar = find_hull("Avatar").unwrap().type_id.unwrap();
-        assert_eq!(ship_text(&ship("Big", avatar), "smrkn").to_string(), "Avatar · \"Big\" · no bridges");
+        let avatar = hulls().find("Avatar").unwrap().type_id.unwrap();
+        assert_eq!(ship_text(&ship("Big", avatar), "smrkn", &hulls()).to_string(), "Avatar · \"Big\" · no bridges");
         // A type that is not in ships.json shows the ship name only.
-        let unknown = ship_text(&ship("New hull", u32::MAX), "smrkn");
+        let unknown = ship_text(&ship("New hull", u32::MAX), "smrkn", &hulls());
         assert_eq!(unknown.to_string(), "New hull");
         assert!(!unknown.no_bridges);
     }

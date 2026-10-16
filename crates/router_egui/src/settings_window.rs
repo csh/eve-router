@@ -401,7 +401,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                     let response = ui.add(TextEdit::singleline(&mut form.max_cap).hint_text("no limit").desired_width(120.0));
                     let enter = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
                     if ui.button("Apply").clicked() || enter {
-                        match parse_max_cap(&form.max_cap) {
+                        match parse_max_cap(&form.max_cap, &s.settings.hulls) {
                             Ok(max_cap) => {
                                 s.settings.rules.max_cap = max_cap;
                                 form.error = None;
@@ -691,7 +691,7 @@ enum Picked {
 /// The characters and the hulls, with one filter. Return true when a row is picked.
 fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
     ui.set_width(crate::theme::modal_width(ui, 560.0));
-    let rows = s.pilots.pilot_rows(filter);
+    let rows = s.pilots.pilot_rows(filter, &s.settings.hulls);
     title(ui, "Pilot or hull");
     let response = ui.add(TextEdit::singleline(filter).hint_text("Filter by character, ship or group…").desired_width(f32::INFINITY));
     if !response.has_focus() && filter.is_empty() {
@@ -703,7 +703,7 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
     if enter {
         picked = rows.iter().find(|r| !matches!(r, PilotRow::Hull(None))).map(|r| match r {
             PilotRow::Pilot(v) => Picked::Pilot(v.id),
-            PilotRow::Hull(h) => Picked::Hull(*h),
+            PilotRow::Hull(h) => Picked::Hull(h.clone()),
         });
     }
     ui.add_space(6.0);
@@ -722,7 +722,8 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
             match row {
                 PilotRow::Pilot(v) => {
                     p.text(left, egui::Align2::LEFT_CENTER, &v.name, font.clone(), Color32::WHITE);
-                    let ship = v.live.ship.as_ref().map_or("ship unknown".into(), |sh| ship_text(sh, &v.name).to_string());
+                    let ship =
+                        v.live.ship.as_ref().map_or("ship unknown".into(), |sh| ship_text(sh, &v.name, &s.settings.hulls).to_string());
                     p.text(left + vec2(200.0, 0.0), egui::Align2::LEFT_CENTER, ship, font, theme::TEXT_DIM);
                 }
                 PilotRow::Hull(None) => _ = p.text(left, egui::Align2::LEFT_CENTER, "none", font, theme::TEXT),
@@ -737,7 +738,7 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
             if click.clicked() {
                 picked = Some(match row {
                     PilotRow::Pilot(v) => Picked::Pilot(v.id),
-                    PilotRow::Hull(h) => Picked::Hull(*h),
+                    PilotRow::Hull(h) => Picked::Hull(h.clone()),
                 });
             }
         }

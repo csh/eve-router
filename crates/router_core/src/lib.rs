@@ -15,6 +15,8 @@ pub mod settings;
 pub mod ships;
 pub mod sources;
 pub mod startup;
+/// Fixtures and fakes for tests. The feature `test-support` turns it on for other crates. No
+/// other code in this crate depends on the feature.
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_support;
 pub mod universe;

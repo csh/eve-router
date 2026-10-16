@@ -544,6 +544,20 @@ mod tests {
         panic!("no matching event");
     }
 
+    /// Wait until the calls of the fake satisfy `done`. A poll that has run is the proof, so the
+    /// test needs no guess about the time.
+    fn wait_calls(fake: &Fake, done: impl Fn(&[String]) -> bool) {
+        let end = Instant::now() + Duration::from_secs(5);
+        while !done(&fake.0.lock().unwrap().calls) {
+            assert!(Instant::now() < end, "the calls did not come");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+    }
+
+    /// The time to wait before a check that something did NOT happen: several polls of the
+    /// slowest idle interval. A wrong pass is possible only if the tracker stalls for longer.
+    const SETTLE: Duration = Duration::from_millis(400);
+
     fn start(fake: &Fake) -> Tracker {
         let tracker = Tracker::start(fake.clone(), fast(), || {});
         tracker.send(Command::Add { id: 1, refresh: RefreshToken::new("r".into()) });
@@ -581,7 +595,8 @@ mod tests {
         let tracker = start(&fake);
         tracker.send(Command::SetActive(Some(1)));
         wait_for(&tracker, |e| matches!(e, Event::Location { system: 1, .. }).then_some(()));
-        std::thread::sleep(Duration::from_millis(100));
+        // Wait for polls with no change, then change the system.
+        wait_calls(&fake, |calls| calls.iter().filter(|c| *c == "location 1").count() >= 3);
         fake.0.lock().unwrap().system = 2;
         // Polls between the two changes give no event.
         let mut seen = vec![];
@@ -603,7 +618,7 @@ mod tests {
         fake.0.lock().unwrap().refresh_rejected = true;
         let tracker = start(&fake);
         assert_eq!(wait_for(&tracker, |e| if let Event::LoginExpired(id) = e { Some(id) } else { None }), 1);
-        std::thread::sleep(Duration::from_millis(100));
+        std::thread::sleep(SETTLE);
         let calls = fake.0.lock().unwrap().calls.clone();
         assert_eq!(calls, ["refresh r"], "no polls after the refusal");
     }
@@ -652,7 +667,7 @@ mod tests {
         let tracker = start(&fake);
         tracker.send(Command::SetActive(Some(1)));
         wait_for(&tracker, |e| matches!(e, Event::Limited(true)).then_some(()));
-        std::thread::sleep(Duration::from_millis(150));
+        std::thread::sleep(SETTLE);
         let locations = fake.0.lock().unwrap().calls.iter().filter(|c| c.starts_with("location")).count();
         assert_eq!(locations, 1, "no call while blocked");
     }

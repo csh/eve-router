@@ -7,7 +7,8 @@ authors.workspace = true
 publish = false
 
 [features]
-# The test helpers, for the tests of the other crates.
+# The `test_support` module: fixtures, test servers and snapshot checks, for the tests and the
+# bench of the other crates. It adds no code to the router itself, and a release build leaves it off.
 test-support = []
 
 [[bench]]
@@ -33,3 +34,4 @@ webbrowser = "1.2.4"
 
 [dev-dependencies]
 criterion = { version = "0.8.2", default-features = false, features = ["rayon", "cargo_bench_support"] }
+tempfile = "3.27.0"

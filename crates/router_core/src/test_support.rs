@@ -1,6 +1,6 @@
 //! Helpers for the tests.
 
-use crate::ansiblex::{BridgeRules, find_hull};
+use crate::ansiblex::{BridgeRules, HullTable};
 use crate::route::Mode;
 use crate::settings::{HullSource, Settings};
 use crate::sources::nexum;
@@ -10,7 +10,7 @@ use crate::{overlay, sde, wormhole_types};
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::sync::mpsc::{self, Receiver};
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::sync::{Arc, Mutex, OnceLock};
 use std::time::Duration;
 
@@ -38,6 +38,19 @@ pub fn universe() -> &'static Universe {
     shared()
 }
 
+/// A refresh handle with no worker. The test sends the snapshots, and reads the control messages.
+pub fn fake_refresher() -> (crate::refresh::Refresher, Sender<crate::refresh::Snapshot>, Receiver<crate::refresh::Control>) {
+    let (control, control_rx) = mpsc::channel();
+    let (snapshot_tx, snapshots) = mpsc::channel();
+    (crate::refresh::Refresher::from_channels(control, snapshots), snapshot_tx, control_rx)
+}
+
+/// The hull table of the real SDE, loaded one time for all tests.
+pub fn hulls() -> Arc<HullTable> {
+    static HULLS: OnceLock<Arc<HullTable>> = OnceLock::new();
+    Arc::clone(HULLS.get_or_init(|| HullTable::load(&sde_dir()).unwrap()))
+}
+
 /// The real SDE as a shared map, for an app or a refresh worker.
 pub fn shared_universe() -> Arc<Universe> {
     Arc::clone(shared())
@@ -61,13 +74,14 @@ pub fn overlay_universe() -> Universe {
 /// Shortest routes, the top 3, all overlays on, the capital JK-Q77, and no favourites.
 pub fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
     Settings {
+        hulls: hulls(),
         mode: Mode::Shortest,
         optimize: false,
         top: 3,
         wormholes: true,
         hubs: Default::default(),
         bridges: true,
-        rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| find_hull(h).unwrap()), max_cap: None },
+        rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| hulls().find(h).unwrap()), max_cap: None },
         hull_source: HullSource::Manual,
         min_life: 0,
         costs: Default::default(),

@@ -22,3 +22,4 @@ router_core.workspace = true
 
 [dev-dependencies]
 router_core = { workspace = true, features = ["test-support"] }
+tempfile = "3.27.0"

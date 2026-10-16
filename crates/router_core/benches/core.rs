@@ -29,10 +29,10 @@ fn node(uni: &Universe, n: &str) -> NodeIndex {
 }
 
 fn bench(c: &mut Criterion) {
-    ansiblex::init(&sde_dir()).unwrap();
+    let hulls = ansiblex::HullTable::load(&sde_dir()).unwrap();
     let uni = with_overlays();
-    let rules = BridgeRules { capital: uni.exact("JK-Q77"), hull: ansiblex::find_hull("Sin"), max_cap: None };
-    let router = |mode| Router::new(&uni, RouterOptions { mode, rules, ..Default::default() });
+    let rules = BridgeRules { capital: uni.exact("JK-Q77"), hull: hulls.find("Sin"), max_cap: None };
+    let router = |mode| Router::new(&uni, RouterOptions { mode, rules: rules.clone(), ..Default::default() });
 
     let mut g = c.benchmark_group("load");
     g.sample_size(20);

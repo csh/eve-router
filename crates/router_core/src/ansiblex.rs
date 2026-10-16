@@ -6,7 +6,8 @@ use crate::ships::ShipData;
 use crate::universe::Universe;
 use petgraph::graph::NodeIndex;
 use std::collections::BTreeMap;
-use std::sync::OnceLock;
+use std::path::Path;
+use std::sync::Arc;
 
 /// A ship, or a ship group that stands for all of its ships.
 pub struct Hull {
@@ -16,6 +17,8 @@ pub struct Hull {
     pub group: String,
     /// The base cost of one jump in TJ. `None` means the hull cannot use a bridge.
     pub base_tj: Option<f32>,
+    /// The share of the gate capacitor that one base jump uses, in percent. `None` with `base_tj`.
+    pub base_cap_pct: Option<f32>,
     /// Why the hull cannot use a bridge.
     pub ban: Option<String>,
     /// The mass in kg, for the wormhole size check. A group has the mass of its heaviest ship.
@@ -29,19 +32,17 @@ impl Hull {
     }
 }
 
-/// A `&'static Hull` lets the later ESI step map a ship type to a hull.
-pub type HullClass = &'static Hull;
+/// A shared table entry. Compare two entries with `same_hull`, not with `==`.
+pub type HullClass = Arc<Hull>;
 
 /// The hulls and the Ansiblex values from the SDE (`ships.json`).
 pub struct HullTable {
     /// Sorted by group, then name.
-    pub ships: Vec<Hull>,
-    pub groups: Vec<Hull>,
+    pub ships: Vec<HullClass>,
+    pub groups: Vec<HullClass>,
     /// The capacitor of one Ansiblex gate.
     pub gate_capacitor_tj: f32,
 }
-
-static TABLE: OnceLock<HullTable> = OnceLock::new();
 
 /// GJ in one TJ. The SDE gives capacitor values in GJ.
 const GJ_PER_TJ: f64 = 1000.0;
@@ -49,6 +50,19 @@ const GJ_PER_TJ: f64 = 1000.0;
 impl HullTable {
     fn new(data: ShipData) -> Self {
         let max_mass = data.ansiblex.max_jump_mass_kg;
+        let gate_capacitor_tj = (data.ansiblex.capacitor_gj / GJ_PER_TJ) as f32;
+        let hull = |type_id: Option<u32>, name: String, group: String, result: Result<f32, String>, mass_kg: Option<f64>| {
+            let base_tj = result.as_ref().ok().copied();
+            Arc::new(Hull {
+                type_id,
+                name,
+                group,
+                base_tj,
+                base_cap_pct: base_tj.map(|tj| tj / gate_capacitor_tj * 100.0),
+                ban: result.err(),
+                mass_kg,
+            })
+        };
         // A ship needs a bridge cost, and its mass must not be more than the gate limit.
         let check = |cost_gj: Option<f64>, mass: Option<f64>| match (cost_gj, mass) {
             (None, _) => Err("has no Ansiblex activation cost".to_string()),
@@ -67,80 +81,61 @@ impl HullTable {
                     (Some(a), Some(b)) => Some(a.max(b)),
                     (a, b) => a.or(b),
                 };
-                let result = check(s.bridge_cost_gj, s.mass_kg);
-                Hull {
-                    type_id: Some(s.type_id),
-                    name: s.name,
-                    group: s.group,
-                    base_tj: result.clone().ok(),
-                    ban: result.err(),
-                    mass_kg: s.mass_kg,
-                }
+                hull(Some(s.type_id), s.name, s.group, check(s.bridge_cost_gj, s.mass_kg), s.mass_kg)
             })
             .collect();
-        let groups = groups
-            .into_iter()
-            .map(|(name, (cost, mass))| {
-                let result = check(cost, mass);
-                Hull { type_id: None, group: name.clone(), name, base_tj: result.clone().ok(), ban: result.err(), mass_kg: mass }
-            })
-            .collect();
-        HullTable { ships, groups, gate_capacitor_tj: (data.ansiblex.capacitor_gj / GJ_PER_TJ) as f32 }
+        let groups = groups.into_iter().map(|(name, (cost, mass))| hull(None, name.clone(), name, check(cost, mass), mass)).collect();
+        HullTable { ships, groups, gate_capacitor_tj }
     }
 }
 
-/// Load the hull table from `ships.json` in the SDE directory. Later calls return the first table.
-pub fn init(sde_dir: &std::path::Path) -> Result<&'static HullTable, String> {
-    if let Some(table) = TABLE.get() {
-        return Ok(table);
+impl HullTable {
+    /// Load the hull table from `ships.json` in the SDE directory.
+    pub fn load(sde_dir: &Path) -> Result<Arc<HullTable>, String> {
+        Ok(Arc::new(HullTable::new(crate::ships::load(sde_dir)?)))
     }
-    let data = crate::ships::load(sde_dir)?;
-    Ok(TABLE.get_or_init(|| HullTable::new(data)))
-}
 
-pub fn table() -> &'static HullTable {
-    // The tests, also the tests of the other crates, read the repository SDE.
-    #[cfg(any(test, feature = "test-support"))]
-    init(&crate::test_support::sde_dir()).unwrap();
-    TABLE.get().expect("ansiblex::init must run before ansiblex::table")
-}
+    /// Find a ship by its name, else a group by its name or key, case-insensitive.
+    pub fn find(&self, name: &str) -> Option<HullClass> {
+        let name = name.trim();
+        self.ships
+            .iter()
+            .find(|h| h.name.eq_ignore_ascii_case(name))
+            .or_else(|| self.groups.iter().find(|h| h.name.eq_ignore_ascii_case(name) || h.key().eq_ignore_ascii_case(name)))
+            .cloned()
+    }
 
-/// Find a ship by its name, else a group by its name or key, case-insensitive.
-pub fn find_hull(name: &str) -> Option<HullClass> {
-    let name = name.trim();
-    let t = table();
-    t.ships
-        .iter()
-        .find(|h| h.name.eq_ignore_ascii_case(name))
-        .or_else(|| t.groups.iter().find(|h| h.name.eq_ignore_ascii_case(name) || h.key().eq_ignore_ascii_case(name)))
-}
+    /// The ship with this type ID. `None` for a type that is not in `ships.json`.
+    pub fn by_type(&self, type_id: u32) -> Option<HullClass> {
+        self.ships.iter().find(|h| h.type_id == Some(type_id)).cloned()
+    }
 
-/// The ship with this type ID. `None` for a type that is not in `ships.json`.
-pub fn hull_by_type(type_id: u32) -> Option<HullClass> {
-    table().ships.iter().find(|h| h.type_id == Some(type_id))
+    /// The hull picker rows: "none", then each ship whose name or group contains `filter`.
+    pub fn rows(&self, filter: &str) -> Vec<Option<HullClass>> {
+        let filter = filter.to_lowercase();
+        std::iter::once(None)
+            .chain(
+                self.ships
+                    .iter()
+                    .filter(|h| h.name.to_lowercase().contains(&filter) || h.group.to_lowercase().contains(&filter))
+                    .cloned()
+                    .map(Some),
+            )
+            .collect()
+    }
 }
 
 /// True if `a` and `b` are the same table entry, or both are "none".
-pub fn same_hull(a: Option<HullClass>, b: Option<HullClass>) -> bool {
+pub fn same_hull(a: Option<&HullClass>, b: Option<&HullClass>) -> bool {
     match (a, b) {
-        (Some(a), Some(b)) => std::ptr::eq(a, b),
+        (Some(a), Some(b)) => Arc::ptr_eq(a, b),
         (a, b) => a.is_none() && b.is_none(),
     }
 }
 
 /// True if a route for `planned` suits `ship`: the same ship, or `planned` is the group of `ship`.
-pub fn same_class(planned: HullClass, ship: HullClass) -> bool {
-    std::ptr::eq(planned, ship) || (planned.type_id.is_none() && planned.group == ship.group)
-}
-
-/// The hull picker rows: "none", then each ship whose name or group contains `filter`.
-pub fn hull_rows(filter: &str) -> Vec<Option<HullClass>> {
-    let filter = filter.to_lowercase();
-    std::iter::once(None)
-        .chain(
-            table().ships.iter().filter(|h| h.name.to_lowercase().contains(&filter) || h.group.to_lowercase().contains(&filter)).map(Some),
-        )
-        .collect()
+pub fn same_class(planned: &HullClass, ship: &HullClass) -> bool {
+    Arc::ptr_eq(planned, ship) || (planned.type_id.is_none() && planned.group == ship.group)
 }
 
 /// The zone and the cost multiplier for a distance from the capital.
@@ -164,7 +159,7 @@ pub struct BridgeCost {
     pub cap_pct: Option<f32>,
 }
 
-#[derive(Clone, Copy, Default)]
+#[derive(Clone, Default)]
 pub struct BridgeRules {
     pub capital: Option<NodeIndex>,
     pub hull: Option<HullClass>,
@@ -176,15 +171,15 @@ impl BridgeRules {
     pub fn cost(&self, uni: &Universe, from: NodeIndex) -> Option<BridgeCost> {
         let capital = self.capital?;
         let (zone, multiplier) = zone(uni.distance_ly(capital, from));
-        let tj = self.hull.and_then(|h| h.base_tj).map(|base| base * multiplier);
-        let cap_pct = tj.map(|tj| tj / table().gate_capacitor_tj * 100.0);
+        let tj = self.hull.as_ref().and_then(|h| h.base_tj).map(|base| base * multiplier);
+        let cap_pct = self.hull.as_ref().and_then(|h| h.base_cap_pct).map(|pct| pct * multiplier);
         Some(BridgeCost { zone, multiplier, tj, cap_pct })
     }
 
     /// A bridge jump needs a capital and a hull that can use bridges.
     /// With a cap limit, the jump cost must not be more than the limit.
     pub fn allowed(&self, uni: &Universe, from: NodeIndex) -> bool {
-        if self.hull.is_some_and(|h| h.base_tj.is_none()) {
+        if self.hull.as_ref().is_some_and(|h| h.base_tj.is_none()) {
             return false;
         }
         let Some(cost) = self.cost(uni, from) else {
@@ -201,7 +196,7 @@ impl BridgeRules {
         if self.capital.is_none() {
             return Some("Set a capital to use jump bridges".into());
         }
-        let hull = self.hull?;
+        let hull = self.hull.as_ref()?;
         hull.ban.as_ref().map(|ban| format!("The {} {ban}", hull.name))
     }
 }
@@ -209,11 +204,11 @@ impl BridgeRules {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::universe;
+    use crate::test_support::{hulls, universe};
 
     fn rules(hull: Option<&str>, max_cap: Option<f32>) -> BridgeRules {
         let uni = universe();
-        BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| find_hull(h).unwrap()), max_cap }
+        BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| hulls().find(h).unwrap()), max_cap }
     }
 
     #[test]
@@ -298,57 +293,58 @@ mod tests {
     #[test]
     fn sde_costs_match_blog() {
         for &(group, tj) in BLOG {
-            let hull = find_hull(group).unwrap_or_else(|| panic!("no group {group}"));
+            let hull = hulls().find(group).unwrap_or_else(|| panic!("no group {group}"));
             assert_eq!(hull.base_tj, Some(tj), "{group}");
         }
-        assert_eq!(table().gate_capacitor_tj, 1250.0);
+        assert_eq!(hulls().gate_capacitor_tj, 1250.0);
     }
 
     #[test]
     fn sde_bans() {
-        let mut banned: Vec<&str> = table().groups.iter().filter(|h| h.base_tj.is_none()).map(|h| h.name.as_str()).collect();
+        let table = hulls();
+        let mut banned: Vec<&str> = table.groups.iter().filter(|h| h.base_tj.is_none()).map(|h| h.name.as_str()).collect();
         banned.sort();
         assert_eq!(banned, ["Carrier", "Command Carrier", "Dreadnought", "Force Auxiliary", "Lancer Dreadnought", "Supercarrier", "Titan"]);
         // The Rorqual can use a bridge, but the Avatar cannot.
-        assert_eq!(find_hull("Rorqual").unwrap().base_tj, Some(19.0));
-        assert!(find_hull("Avatar").unwrap().ban.is_some());
+        assert_eq!(hulls().find("Rorqual").unwrap().base_tj, Some(19.0));
+        assert!(hulls().find("Avatar").unwrap().ban.is_some());
         // A ship name and a group key both work.
-        assert_eq!(find_hull("sin").unwrap().base_tj, Some(18.0));
-        assert_eq!(find_hull("heavy-assault-cruiser").unwrap().base_tj, Some(11.5));
+        assert_eq!(hulls().find("sin").unwrap().base_tj, Some(18.0));
+        assert_eq!(hulls().find("heavy-assault-cruiser").unwrap().base_tj, Some(11.5));
     }
 
     #[test]
     fn hull_by_type_id() {
-        let sin = find_hull("Sin").unwrap();
-        assert!(std::ptr::eq(hull_by_type(sin.type_id.unwrap()).unwrap(), sin));
-        assert_eq!(hull_by_type(670).unwrap().name, "Capsule");
-        assert!(hull_by_type(u32::MAX).is_none());
+        let sin = hulls().find("Sin").unwrap();
+        assert!(same_hull(hulls().by_type(sin.type_id.unwrap()).as_ref(), Some(&sin)));
+        assert_eq!(hulls().by_type(670).unwrap().name, "Capsule");
+        assert!(hulls().by_type(u32::MAX).is_none());
     }
 
     #[test]
     fn hull_compare() {
-        let sin = find_hull("Sin").unwrap();
-        let black_ops = find_hull("black-ops").unwrap();
-        let rorqual = find_hull("Rorqual").unwrap();
-        assert!(same_hull(Some(sin), Some(sin)));
+        let sin = hulls().find("Sin").unwrap();
+        let black_ops = hulls().find("black-ops").unwrap();
+        let rorqual = hulls().find("Rorqual").unwrap();
+        assert!(same_hull(Some(&sin), Some(&sin)));
         assert!(same_hull(None, None));
-        assert!(!same_hull(Some(sin), None));
-        assert!(!same_hull(Some(black_ops), Some(sin)));
+        assert!(!same_hull(Some(&sin), None));
+        assert!(!same_hull(Some(&black_ops), Some(&sin)));
         // A planned group covers each ship of the group.
-        assert!(same_class(black_ops, sin));
-        assert!(same_class(sin, sin));
-        assert!(!same_class(rorqual, sin));
-        assert!(!same_class(sin, black_ops));
+        assert!(same_class(&black_ops, &sin));
+        assert!(same_class(&sin, &sin));
+        assert!(!same_class(&rorqual, &sin));
+        assert!(!same_class(&sin, &black_ops));
     }
 
     #[test]
     fn hull_mass() {
-        assert_eq!(find_hull("Sin").unwrap().mass_kg, Some(106_300_000.0));
-        assert_eq!(find_hull("Rifter").unwrap().mass_kg, Some(1_067_000.0));
+        assert_eq!(hulls().find("Sin").unwrap().mass_kg, Some(106_300_000.0));
+        assert_eq!(hulls().find("Rifter").unwrap().mass_kg, Some(1_067_000.0));
         // A group has the mass of its heaviest ship.
-        let group = find_hull("black-ops").unwrap().mass_kg.unwrap();
+        let group = hulls().find("black-ops").unwrap().mass_kg.unwrap();
         assert!(group >= 106_300_000.0);
-        let heaviest = table().ships.iter().filter(|h| h.group == "Black Ops").filter_map(|h| h.mass_kg).fold(0.0, f64::max);
+        let heaviest = hulls().ships.iter().filter(|h| h.group == "Black Ops").filter_map(|h| h.mass_kg).fold(0.0, f64::max);
         assert_eq!(group, heaviest);
     }
 }

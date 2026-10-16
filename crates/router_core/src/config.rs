@@ -2,6 +2,7 @@
 
 use crate::route::Mode;
 use crate::wormhole::Hubs;
+use crate::wormhole::SourceId;
 use serde::{Deserialize, Serialize};
 use std::fmt;
 use std::fs;
@@ -11,13 +12,43 @@ use std::path::{Path, PathBuf};
 pub const APP_DIR: &str = "com.smrkn.eve-router";
 const FILE_NAME: &str = "eve-router.json";
 
+/// The three places that the router reads and writes: the config file, the SDE directory and the
+/// wormhole cache directory. `detect` finds them one time at the start. A test uses `in_dir`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct AppPaths {
+    pub config: PathBuf,
+    pub sde: PathBuf,
+    pub cache: PathBuf,
+}
+
+impl AppPaths {
+    /// The platform places. The cache is `com.smrkn.eve-router` in the platform cache directory,
+    /// for example `%LOCALAPPDATA%\com.smrkn.eve-router` on Windows. If the platform gives no cache
+    /// directory, the cache is a `cache` directory next to the config file.
+    pub fn detect() -> AppPaths {
+        let config = default_path();
+        let cache = dirs::cache_dir().map_or_else(|| config.with_file_name("cache"), |dir| dir.join(APP_DIR));
+        AppPaths { config, sde: default_sde_dir(), cache }
+    }
+
+    /// All places inside `dir`.
+    pub fn in_dir(dir: &Path) -> AppPaths {
+        AppPaths { config: dir.join(FILE_NAME), sde: dir.join("sde"), cache: dir.join("cache") }
+    }
+
+    /// The cache file of a wormhole source, for example `nexum.json`.
+    pub fn cache_file(&self, source: SourceId) -> PathBuf {
+        self.cache.join(format!("{}.json", source.file_stem()))
+    }
+}
+
 /// The default config file:
 /// - Windows: `%APPDATA%\com.smrkn.eve-router\eve-router.json`
 /// - macOS: `~/Library/Application Support/com.smrkn.eve-router/eve-router.json`
 /// - Linux: `$XDG_CONFIG_HOME/com.smrkn.eve-router/eve-router.json`, else `~/.config/...`
 ///
 /// If the platform gives no config directory, use the working directory.
-pub fn default_path() -> PathBuf {
+fn default_path() -> PathBuf {
     dirs::config_dir().map_or_else(|| PathBuf::from(FILE_NAME), |dir| dir.join(APP_DIR).join(FILE_NAME))
 }
 
@@ -27,7 +58,7 @@ pub fn default_path() -> PathBuf {
 /// - Linux: `$XDG_DATA_HOME/com.smrkn.eve-router/sde`, else `~/.local/share/...`
 ///
 /// If the platform gives no data directory, use `sde` in the working directory.
-pub fn default_sde_dir() -> PathBuf {
+fn default_sde_dir() -> PathBuf {
     dirs::data_local_dir().map_or_else(|| PathBuf::from("sde"), |dir| dir.join(APP_DIR).join("sde"))
 }
 
@@ -265,8 +296,8 @@ mod tests {
 
     #[test]
     fn overlay_path_needs_the_file() {
-        let dir = std::env::temp_dir().join("eve-router-test-overlay");
-        fs::create_dir_all(&dir).unwrap();
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let cfg_path = dir.join(FILE_NAME);
         let default = dir.join(BRIDGES_FILE);
         let _ = fs::remove_file(&default);
@@ -275,17 +306,15 @@ mod tests {
         // The default file next to the config file.
         fs::write(&default, "").unwrap();
         assert_eq!(overlay_path(&cfg_path, BRIDGES_FILE), Some(default));
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
     fn save_creates_directory() {
-        let dir = std::env::temp_dir().join("eve-router-test-dir");
-        let _ = fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let path = dir.join(APP_DIR).join(FILE_NAME);
         Config::default().save(&path).unwrap();
         assert!(Config::load(&path).is_ok());
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
@@ -311,8 +340,8 @@ mod tests {
 
     #[test]
     fn nexum_settings_round_trip() {
-        let dir = std::env::temp_dir().join("eve-router-test-nexum-cfg");
-        let _ = fs::remove_dir_all(&dir);
+        let tmp = tempfile::tempdir().unwrap();
+        let dir = tmp.path().to_path_buf();
         let path = dir.join(FILE_NAME);
         let mut cfg = Config::default();
         cfg.nexum.url = Some("https://nexum.example".into());
@@ -327,7 +356,6 @@ mod tests {
             use std::os::unix::fs::PermissionsExt;
             assert_eq!(fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
         }
-        fs::remove_dir_all(&dir).unwrap();
     }
 
     #[test]
