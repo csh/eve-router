@@ -230,9 +230,10 @@ impl Pilots {
         self.accounts.is_none().then(|| self.keyring_error.clone().unwrap_or_else(|| "No token store.".into()))
     }
 
-    /// True if the UI shows the characters: the router can log in, or a character is stored.
+    /// True if the UI shows the characters. Without a client ID the router can neither log in nor
+    /// track a character, so the UI hides them. The stored characters stay in the file.
     pub fn shows_characters(&self) -> bool {
-        self.client_id.is_some() || self.accounts.as_ref().is_some_and(|a| !a.characters.is_empty())
+        self.client_id.is_some()
     }
 
     /// Start a login, and open the URL in the browser. The UI also shows the URL for a copy.
@@ -296,9 +297,9 @@ impl Pilots {
         }
     }
 
-    /// The character list: the active pilot first, then by name.
+    /// The character list: the active pilot first, then by name. Empty without a client ID.
     pub fn characters(&self) -> Vec<PilotView> {
-        let Some(accounts) = &self.accounts else { return Vec::new() };
+        let Some(accounts) = self.accounts.as_ref().filter(|_| self.shows_characters()) else { return Vec::new() };
         let active = self.active.as_ref().map(|a| a.character);
         let mut rows: Vec<PilotView> = accounts
             .characters
@@ -719,14 +720,30 @@ mod tests {
     }
 
     #[test]
-    fn characters_show_with_a_client_id_or_a_character() {
+    fn characters_show_only_with_a_client_id() {
         let tmp = tempfile::tempdir().unwrap();
         let dir = tmp.path().to_path_buf();
         // No client ID and no token store: nothing to show.
         assert!(!Pilots::offline(dir.join("active-route.json")).shows_characters());
         // `pilots_with` sets a client ID.
         let fake = Fake::default();
-        assert!(pilots(&fake).0.shows_characters());
+        let (mut p, _tmp) = pilots(&fake);
+        assert!(p.shows_characters());
+        assert_eq!(p.characters().len(), 1);
+        // A stored character stays hidden and cannot be a sender when the client ID is missing.
+        p.client_id = None;
+        assert!(!p.shows_characters());
+        assert!(p.characters().is_empty() && p.senders().is_empty());
+        assert!(p.pilot_rows("", &hulls()).iter().all(|r| matches!(r, PilotRow::Hull(_))));
+    }
+
+    #[test]
+    fn no_client_id_means_no_tracker() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store: Result<Box<dyn TokenStore>, String> = Ok(Box::new(MemoryStore::default()));
+        let p = Pilots::open(&tmp.path().join("eve-router.json"), store, None, Arc::new(|| {}));
+        assert!(p.tracker.is_none(), "a tracker would poll ESI");
+        assert!(p.login_blocked().is_some());
     }
 
     #[test]

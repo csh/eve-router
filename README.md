@@ -97,7 +97,7 @@ The router can send a route to the in-game autopilot of your character, and then
 3. Give the application these four scopes: `esi-ui.write_waypoint.v1`, `esi-location.read_location.v1`, `esi-location.read_ship_type.v1` and `esi-location.read_online.v1`.
 4. Set `EVE_ROUTER_CLIENT_ID` to the client ID of the application. The build reads it, and the same variable at run time overrides it.
 
-The repository holds no client ID. Without one, "Add character" is off and shows the reason.
+The repository holds no client ID. Without one, the window hides the Characters button, and the router makes no ESI call.
 
 The login uses OAuth 2.0 with PKCE. The router listens on `127.0.0.1:21404` for the browser redirect. If that fails, for example over SSH, paste the redirected URL into the login window.
 
