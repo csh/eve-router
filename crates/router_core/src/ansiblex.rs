@@ -23,7 +23,7 @@ pub struct Hull {
 }
 
 impl Hull {
-    /// The kebab-case name for the CLI and the config file, for example `black-ops`.
+    /// The kebab-case name for the config file, for example `black-ops`.
     pub fn key(&self) -> String {
         self.name.to_lowercase().split_whitespace().collect::<Vec<_>>().join("-")
     }

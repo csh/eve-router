@@ -1,8 +1,8 @@
 [workspace]
 resolver = "3"
-members = ["crates/router_core", "crates/router_egui", "crates/router_tui"]
-# `cargo run` starts the TUI. `cargo test` also runs the core tests.
-default-members = ["crates/router_tui", "crates/router_core"]
+members = ["crates/router_core", "crates/router_egui"]
+# `cargo run` starts the GUI. `cargo test` also runs the core tests.
+default-members = ["crates/router_egui", "crates/router_core"]
 
 [workspace.package]
 version = "0.1.0"
@@ -14,7 +14,6 @@ authors = ["csh <csh@smrkn.com>"]
 router_core = { path = "crates/router_core" }
 rayon = "1.12"
 petgraph = "0.8"
-clap = { version = "4.6", features = ["derive"] }
 mimalloc = "0.1.52"
 
 [profile.release]

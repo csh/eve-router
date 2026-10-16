@@ -85,7 +85,7 @@ impl RouterApp {
     }
 }
 
-/// The same load as the TUI, with the config file and the default SDE directory. The arguments
+/// The startup load, with the config file and the default SDE directory. The arguments
 /// of the command line are the first waypoints, for example `eve-router-egui Jita "New Caldari"`.
 fn load(ctx: egui::Context) -> Result<Session, String> {
     let cfg_path = config::default_path();
@@ -94,7 +94,7 @@ fn load(ctx: egui::Context) -> Result<Session, String> {
     let sde_dir = config::default_sde_dir();
     let mut startup_lines = Vec::new();
     let startup::Loaded { snapshot, base, report, types, .. } =
-        startup::finish(pending, &sde_dir, None, |outcome| startup_lines.extend(outcome.message(&sde_dir)))?;
+        startup::finish(pending, &sde_dir, |outcome| startup_lines.extend(outcome.message(&sde_dir)))?;
     let Snapshot { uni, shortcuts, all, log } = snapshot;
     let settings = Settings::from_config(&cfg, &uni)?;
     // The worker gets the wormholes again each 5 minutes, and wakes the window after each refresh.
@@ -109,7 +109,7 @@ fn load(ctx: egui::Context) -> Result<Session, String> {
     session.startup_lines = startup_lines;
     // A tracker event or a login result repaints the window.
     session.pilots = Pilots::open(&cfg_path, Arc::new(move || ctx.request_repaint()));
-    // The command line can give the start, the midpoints and the destination, as for the TUI.
+    // The command line can give the start, the midpoints and the destination.
     let systems: Vec<String> = std::env::args().skip(1).collect();
     if !systems.is_empty() {
         session.add_list(&systems.join(","));
@@ -856,7 +856,6 @@ mod tests {
         s.waypoints.iter().map(|&n| s.uni.name(n)).collect()
     }
 
-    /// The same routes as the `--print` snapshot of the TUI crate.
     #[test]
     fn replace_with_no_good_name_clears_the_routes() {
         let mut s = session("replace");
@@ -878,7 +877,7 @@ mod tests {
     }
 
     #[test]
-    fn waypoints_give_the_print_routes() {
+    fn waypoints_give_the_routes() {
         let mut s = session("routes");
         let jita = s.uni.exact("Jita").unwrap();
         let ualx = s.uni.exact("UALX-3").unwrap();

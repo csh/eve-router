@@ -6,7 +6,7 @@
 //! | Access token | Memory only. It expires after 20 minutes |
 //! | Character list (ID, name, scopes, last use) | `characters.json` next to `eve-router.json` |
 //!
-//! Without a keyring, the front end can offer `Accounts::session_only`. The tokens then stay in
+//! Without a keyring, the GUI can offer `Accounts::session_only`. The tokens then stay in
 //! memory and go at exit. The router never writes a token to a file.
 
 use super::Character;

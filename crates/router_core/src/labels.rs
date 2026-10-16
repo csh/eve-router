@@ -190,10 +190,11 @@ pub fn route_summary(route: &Route) -> String {
     parts.join(" · ")
 }
 
-/// The text of route number `index` (from 0), as `--print` writes it: the summary line, then
-/// one line for each step. The text has no final line break.
-pub fn route_text(uni: &Universe, rules: &BridgeRules, index: usize, route: &Route, now: u64) -> String {
-    let mut lines = vec![format!("#{} {}{}", index + 1, jumps_label(route.jumps), route_extras(route))];
+/// The route as tab-separated values: one header row, then one row for each step. The columns are
+/// `Step`, `Stop`, `System`, `Sec`, `Region` and `Via`. Slack and spreadsheets paste this text as a
+/// table. The text has no final line break.
+pub fn route_tsv(uni: &Universe, rules: &BridgeRules, route: &Route, now: u64) -> String {
+    let mut lines = vec!["Step\tStop\tSystem\tSec\tRegion\tVia".to_string()];
     for (step, &node) in route.path.nodes.iter().enumerate() {
         let sys = uni.system(node);
         let via = match step.checked_sub(1).map(|s| route.path.edges[s]) {
@@ -201,7 +202,7 @@ pub fn route_text(uni: &Universe, rules: &BridgeRules, index: usize, route: &Rou
             None => String::new(),
         };
         let stop = route.stop_at(step).map(|s| s.label()).unwrap_or_default();
-        lines.push(format!("  {:>3} {stop:<11} {:<20} {:>4.1} {:<20} {via}", step, sys.name, display_sec(sys.security), sys.region));
+        lines.push(format!("{step}\t{stop}\t{}\t{:.1}\t{}\t{via}", sys.name, display_sec(sys.security), sys.region));
     }
     lines.join("\n")
 }
@@ -277,6 +278,25 @@ mod tests {
         let nodes = [uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap()];
         let routes = settings(&uni, None).router(&uni, FIXTURE_TIME).routes(&nodes, 2).unwrap();
         (uni, routes)
+    }
+
+    /// The TSV of two routes: one with jump bridges, one into J-space. Slack pastes it as a table.
+    #[test]
+    fn route_tsv_snapshot() {
+        use crate::test_support::{FIXTURE_TIME, overlay_universe, settings};
+        let uni = overlay_universe();
+        let s = settings(&uni, Some("black-ops"));
+        let router = s.router(&uni, FIXTURE_TIME);
+        let mut out = String::new();
+        for (from, to) in [("UALX-3", "Jita"), ("Jita", "J134702")] {
+            let nodes = [uni.exact(from).unwrap(), uni.exact(to).unwrap()];
+            for route in router.routes(&nodes, s.top).unwrap() {
+                out.push_str(&route_tsv(&uni, &s.rules, &route, FIXTURE_TIME));
+                out.push_str("\n\n");
+            }
+        }
+        assert!(out.lines().all(|l| l.is_empty() || l.split('\t').count() == 6), "every row has six cells");
+        crate::assert_snapshot!("route_tsv", out);
     }
 
     #[test]

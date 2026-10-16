@@ -53,14 +53,14 @@ pub fn begin(cfg: &Config, cfg_path: &Path) -> Pending {
 }
 
 /// Update the SDE in `sde_dir`, load the map and add the overlays. `on_sde` gets the update
-/// result before the map load starts. `bridges` is the jump bridge file of the CLI flag, if any.
-pub fn finish(pending: Pending, sde_dir: &Path, bridges: Option<PathBuf>, on_sde: impl FnOnce(&Outcome)) -> Result<Loaded, String> {
+/// result before the map load starts.
+pub fn finish(pending: Pending, sde_dir: &Path, on_sde: impl FnOnce(&Outcome)) -> Result<Loaded, String> {
     on_sde(&sde_update::ensure(sde_dir)?);
     ansiblex::init(sde_dir)?;
 
     let started = Instant::now();
     let mut uni = Universe::from_sde(sde::load(sde_dir)?);
-    let bridges_path = config::overlay_path(bridges, &pending.cfg_path, config::BRIDGES_FILE);
+    let bridges_path = config::overlay_path(&pending.cfg_path, config::BRIDGES_FILE);
     let mut report = OverlayReport::default();
     if let Some(path) = &bridges_path {
         report = overlay::load_bridges(&mut uni, path)?;

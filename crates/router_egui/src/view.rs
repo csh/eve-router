@@ -1,5 +1,5 @@
-//! The layout of the window. It copies the regions of the TUI: the route input (here the route
-//! planner), the route list, the route table, the sidebar and the status line.
+//! The layout of the window: the route planner, the route list, the route table, the sidebar and
+//! the status line.
 
 use crate::app::Session;
 use crate::pilots_view::PilotsUi;
@@ -10,7 +10,7 @@ use crate::theme::{self, panel};
 use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
 use petgraph::graph::NodeIndex;
-use router_core::labels::{jumps_label, link_label, on_off, pilot_label, route_summary, route_text};
+use router_core::labels::{jumps_label, link_label, on_off, pilot_label, route_summary, route_tsv};
 use router_core::route::{Mode, Stop};
 use router_core::sources::FetchError;
 use router_core::sources::nexum::MapInfo;
@@ -552,7 +552,7 @@ impl View {
         }
     }
 
-    /// The search box and the waypoint list. They take the place of the route input of the TUI.
+    /// The search box and the waypoint list. They set the waypoints of the route.
     fn planner(&mut self, ui: &mut Ui, s: &mut Session, open: bool, grid_max: f32, narrow: bool) {
         let info = match s.waypoints.len() {
             0 => String::new(),
@@ -875,7 +875,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
         start = ui.add(button).on_hover_text("Send the waypoints of this route to a character in the game").clicked();
         ui.add_space(6.0);
         let button = Button::new(RichText::new("Copy route").size(11.0)).small();
-        copy = ui.add(button).on_hover_text("Copy the route as text, in the format of --print").clicked();
+        copy = ui.add(button).on_hover_text("Copy the route as tab-separated text, for a Slack table").clicked();
         // In the Sidebar class the summary strip above the tabs has the summary.
         if !compact {
             ui.add_space(6.0);
@@ -1038,7 +1038,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
         pilots.begin_start(s, s.selected);
     }
     if copy && let Some(route) = s.selected_route() {
-        ui.ctx().copy_text(route_text(&s.uni, &s.settings.rules, s.selected, route, s.now));
+        ui.ctx().copy_text(route_tsv(&s.uni, &s.settings.rules, route, s.now));
         s.status = format!("Route #{} copied to the clipboard", s.selected + 1);
     }
 }

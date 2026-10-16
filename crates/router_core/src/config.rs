@@ -1,4 +1,4 @@
-//! The `eve-router.json` file. CLI flags override its values.
+//! The `eve-router.json` file.
 
 use crate::route::Mode;
 use crate::wormhole::Hubs;
@@ -34,13 +34,11 @@ pub fn default_sde_dir() -> PathBuf {
 /// The default jump bridge list (SMT format), next to the config file.
 pub const BRIDGES_FILE: &str = "ansiblex.txt";
 
-/// The overlay file to load: the CLI flag if given, else the default file next to the
-/// config file. A missing default file is not an error. The router then loads no overlay.
-pub fn overlay_path(flag: Option<PathBuf>, cfg_path: &Path, default_name: &str) -> Option<PathBuf> {
-    flag.or_else(|| {
-        let path = cfg_path.with_file_name(default_name);
-        path.is_file().then_some(path)
-    })
+/// The overlay file to load: the default file next to the config file. A missing file is not an
+/// error. The router then loads no overlay.
+pub fn overlay_path(cfg_path: &Path, default_name: &str) -> Option<PathBuf> {
+    let path = cfg_path.with_file_name(default_name);
+    path.is_file().then_some(path)
 }
 
 /// The default minimum time (minutes) that a wormhole must have left.
@@ -169,49 +167,6 @@ pub struct Config {
     pub compact: bool,
 }
 
-/// The config before and after the CLI flags. A save puts back the file value of each field
-/// that a flag set, so a flag lasts one run. A field that the user changes in the app keeps the
-/// new value. A change back to the flag value counts as no change.
-#[derive(Default)]
-pub struct RunOverrides {
-    file: Config,
-    run: Config,
-}
-
-impl RunOverrides {
-    /// `file`: the config file as it loaded. `run`: the config with the flags, as
-    /// `Settings::store` writes it, so `restore` compares the same spellings.
-    pub fn new(file: Config, run: Config) -> Self {
-        Self { file, run }
-    }
-
-    /// Put back the file value of each flagged field that still has its flag value. A change
-    /// back to the flag value counts as no change. The hull and the pilot are one field:
-    /// together they set the hull source.
-    pub fn restore(&self, cfg: &mut Config) {
-        fn keep<T: PartialEq + Clone>(slot: &mut T, file: &T, run: &T) {
-            if slot == run && run != file {
-                slot.clone_from(file);
-            }
-        }
-        let (f, r) = (&self.file, &self.run);
-        keep(&mut cfg.capital, &f.capital, &r.capital);
-        let mut hull = (cfg.hull.take(), cfg.pilot.take());
-        keep(&mut hull, &(f.hull.clone(), f.pilot), &(r.hull.clone(), r.pilot));
-        (cfg.hull, cfg.pilot) = hull;
-        keep(&mut cfg.max_cap_tj, &f.max_cap_tj, &r.max_cap_tj);
-        keep(&mut cfg.min_life_min, &f.min_life_min, &r.min_life_min);
-        keep(&mut cfg.mode, &f.mode, &r.mode);
-        keep(&mut cfg.optimize, &f.optimize, &r.optimize);
-        keep(&mut cfg.top, &f.top, &r.top);
-        keep(&mut cfg.cap_weight, &f.cap_weight, &r.cap_weight);
-        keep(&mut cfg.unknown_sig_penalty, &f.unknown_sig_penalty, &r.unknown_sig_penalty);
-        keep(&mut cfg.unknown_sig_broken, &f.unknown_sig_broken, &r.unknown_sig_broken);
-        keep(&mut cfg.theme, &f.theme, &r.theme);
-        keep(&mut cfg.compact, &f.compact, &r.compact);
-    }
-}
-
 /// The Nexum URL from a text field. An empty text gives no URL. The URL loses a final "/".
 pub fn parse_nexum_url(text: &str) -> Result<Option<String>, String> {
     let value = text.trim();
@@ -259,33 +214,6 @@ impl Config {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn run_overrides_keep_the_hull_and_pilot_together() {
-        // The file follows pilot 9. `--hull Paladin` gives a manual hull for this run.
-        let file = Config { hull: Some("Sin".into()), pilot: Some(9), ..Config::default() };
-        let run = Config { hull: Some("Paladin".into()), pilot: None, ..file.clone() };
-        let overrides = RunOverrides::new(file, run.clone());
-        // The user picks the manual hull Rorqual in the app: the pilot stays off.
-        let mut cfg = Config { hull: Some("Rorqual".into()), ..run };
-        overrides.restore(&mut cfg);
-        assert_eq!((cfg.hull.as_deref(), cfg.pilot), (Some("Rorqual"), None));
-    }
-
-    #[test]
-    fn run_overrides_last_one_run() {
-        let file = Config { hull: Some("Sin".into()), pilot: Some(9), top: Some(3), ..Config::default() };
-        let run = Config { hull: Some("Paladin".into()), pilot: None, top: Some(5), ..file.clone() };
-        let overrides = RunOverrides::new(file, run.clone());
-        // No change in the app: the file values come back.
-        let mut cfg = run.clone();
-        overrides.restore(&mut cfg);
-        assert_eq!((cfg.hull.as_deref(), cfg.pilot, cfg.top), (Some("Sin"), Some(9), Some(3)));
-        // The user changed the route count in the app: the new value stays.
-        let mut cfg = Config { top: Some(7), ..run };
-        overrides.restore(&mut cfg);
-        assert_eq!((cfg.hull.as_deref(), cfg.top), (Some("Sin"), Some(7)));
-    }
 
     #[test]
     fn default_path_is_in_app_dir() {
@@ -336,20 +264,17 @@ mod tests {
     }
 
     #[test]
-    fn overlay_path_order() {
+    fn overlay_path_needs_the_file() {
         let dir = std::env::temp_dir().join("eve-router-test-overlay");
         fs::create_dir_all(&dir).unwrap();
         let cfg_path = dir.join(FILE_NAME);
         let default = dir.join(BRIDGES_FILE);
         let _ = fs::remove_file(&default);
-        // No flag and no default file: no overlay.
-        assert_eq!(overlay_path(None, &cfg_path, BRIDGES_FILE), None);
-        // No flag: the default file next to the config file.
+        // No default file: no overlay.
+        assert_eq!(overlay_path(&cfg_path, BRIDGES_FILE), None);
+        // The default file next to the config file.
         fs::write(&default, "").unwrap();
-        assert_eq!(overlay_path(None, &cfg_path, BRIDGES_FILE), Some(default));
-        // The flag wins.
-        let flag = PathBuf::from("other.txt");
-        assert_eq!(overlay_path(Some(flag.clone()), &cfg_path, BRIDGES_FILE), Some(flag));
+        assert_eq!(overlay_path(&cfg_path, BRIDGES_FILE), Some(default));
         fs::remove_dir_all(&dir).unwrap();
     }
 

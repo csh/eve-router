@@ -1,6 +1,6 @@
 //! The tracker: one thread that keeps the access tokens fresh, polls each character, and sends
-//! the waypoints of a route. The front ends send `Command`s and read `Event`s. Neither front end
-//! calls ESI or SSO itself.
+//! the waypoints of a route. The GUI sends `Command`s and reads `Event`s. The GUI
+//! does not call ESI or SSO itself.
 //!
 //! Poll intervals (`Intervals::default`):
 //! - location: 5 s for the active pilot, 30 s for the others,

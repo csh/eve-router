@@ -178,7 +178,7 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// The settings from the config. The TUI applies its CLI flags to `cfg` first.
+    /// The settings from the config.
     pub fn from_config(cfg: &Config, uni: &Universe) -> Result<Settings, String> {
         let capital = match &cfg.capital {
             Some(name) => Some(resolve_all(uni, std::slice::from_ref(name))?[0]),

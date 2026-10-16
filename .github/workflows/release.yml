@@ -1,4 +1,4 @@
-# Build the TUI and the GUI for each platform when a tag v* goes up, and put the archives on the
+# Build the GUI for each platform when a tag v* goes up, and put the archives on the
 # GitHub release of that tag. The release goes out only after the CI workflow passes.
 #
 # The binaries get the client ID of the EVE developer app at build time from the repository
@@ -41,7 +41,7 @@ jobs:
       - uses: Swatinem/rust-cache@v2
         with:
           key: dist-${{ matrix.target }}
-      - run: cargo build --locked --profile dist --target ${{ matrix.target }} -p router_tui -p router_egui
+      - run: cargo build --locked --profile dist --target ${{ matrix.target }} -p router_egui
       - name: Package
         shell: bash
         run: |
@@ -50,7 +50,7 @@ jobs:
           ext=""
           if [[ "${{ matrix.target }}" == *windows* ]]; then ext=".exe"; fi
           mkdir -p "pkg/$name"
-          cp "$bin/eve-router$ext" "$bin/eve-router-egui$ext" README.md "pkg/$name/"
+          cp "$bin/eve-router-egui$ext" README.md "pkg/$name/"
           cd pkg
           if [[ "${{ matrix.archive }}" == zip ]]; then
             7z a "$name.zip" "$name"

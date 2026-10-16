@@ -21,8 +21,8 @@ With this in mind, some of the code will inevitably be dogshit, however I am car
 - Wormhole connections from a Nexum map, fetched at startup. The router uses the wormhole size, mass status and expiry. This needs a hosted Nexum instance and an API key. Without them, the router uses only the EVE-Scout wormholes.
 - The signature of each wormhole jump, for example `Wormhole · Sig. ABC · XL`.
 - Thera and Turnur wormholes from the public [EVE-Scout](https://www.eve-scout.com/) feed, fetched at startup. Each hub has its own switch.
-- GUI: right-click a step in the route table to avoid its system or its region. The Avoid button lists the entries and removes them. Each entry is "Prefer" (a route crosses it only if no other route exists, or the other routes are much longer) or "Never".
-- GUI: `F5` or the Refresh button fetches the wormholes at once, with at least 15 seconds between two fetches. The Log button opens a window with one row for each fetch and its result.
+- right-click a step in the route table to avoid its system or its region. The Avoid button lists the entries and removes them. Each entry is "Prefer" (a route crosses it only if no other route exists, or the other routes are much longer) or "Never".
+- `F5` or the Refresh button fetches the wormholes at once, with at least 15 seconds between two fetches. The Log button opens a window with one row for each fetch and its result.
 
 ### Work in Progress
 
@@ -34,25 +34,16 @@ Maximum capacitor drain supported.
 ## Usage
 
 ```sh
-cargo run --release -- Jita Amarr
-cargo run --release -- "Jita > Rens > Amarr" --mode prefer-highsec -n 3
-cargo run --release -- --print --capital JK-Q77 --hull Sin UALX-3 Jita
+cargo run --release
 ```
 
-Use `--print` to echo all solved routes, omitting this launches the TUI.
-
-The egui window is in an early state. It loads the map and shows the route summaries:
-
-```sh
-cargo run --release -p router_egui
-```
+The window loads the map and shows the route summaries. Use "Copy route" to copy the selected route as tab-separated text. Slack and spreadsheets paste it as a table.
 
 ### Crates
 
 | Crate                 | Contents                                                                 |
 |-----------------------|--------------------------------------------------------------------------|
 | `crates/router_core`  | The SDE, the map graph, the overlays and the route search (library)      |
-| `crates/router_tui`   | The CLI, `--print` and the terminal UI (binary `eve-router`)             |
 | `crates/router_egui`  | The egui window (binary `eve-router-egui`)                               |
 
 ### Settings
@@ -123,8 +114,7 @@ If the system has no keyring, the router offers "Session only": the tokens stay 
 
 ### Start a route
 
-- TUI: select a route, then press `g`. Press `c` for the character list.
-- GUI: push "Start route #n" in the route table header. Push "Characters (n)" in the top bar for the character list.
+- Push "Start route #n" in the route table header. Push "Characters (n)" in the top bar for the character list.
 
 With two or more characters, you choose one. The confirm step names the character before anything goes to the game. If the character is not on the route, the default is a route from its current system.
 
@@ -162,8 +152,7 @@ Set `EVE_ROUTER_SKIP_SDE_CHECK=1` to skip this check on startup.
 ## Development
 
 ```sh
-cargo test               # router_core and router_tui
-cargo test --workspace   # also router_egui
+cargo test               # router_egui and router_core
 ```
 
 Set `UPDATE_SNAPSHOTS=1` to write the snapshot files in `tests/snapshots/` of each crate again.
@@ -174,7 +163,7 @@ The tests use the map files in `sde/` and the small fixtures in `crates/router_c
 
 GitHub Actions runs `.github/workflows/ci.yml` for each pull request and each push to `main`. It runs rustfmt, clippy, the tests on Linux, Windows and macOS, and `cargo deny`. CI uses the `ci` profile: the dev profile with line tables only and no incremental files. Thus the build cache stays small.
 
-A tag `v*` starts `.github/workflows/release.yml`. First it runs the CI. Then it builds both binaries with the `dist` profile: full LTO, one codegen unit and no symbols. The targets are Linux x86-64, Windows x86-64, and macOS on Apple silicon and Intel. The archives and a `SHA256SUMS` file go on the GitHub release of the tag. To build the client ID into the binaries, set the repository secret `EVE_ROUTER_CLIENT_ID`.
+A tag `v*` starts `.github/workflows/release.yml`. First it runs the CI. Then it builds the binary with the `dist` profile: full LTO, one codegen unit and no symbols. The targets are Linux x86-64, Windows x86-64, and macOS on Apple silicon and Intel. The archives and a `SHA256SUMS` file go on the GitHub release of the tag. To build the client ID into the binary, set the repository secret `EVE_ROUTER_CLIENT_ID`.
 
 ```sh
 git tag v0.1.0 && git push origin v0.1.0

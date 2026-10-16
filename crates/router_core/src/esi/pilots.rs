@@ -1,8 +1,8 @@
-//! `Pilots`: the state that the TUI and the GUI share. It holds the logins, the token store,
-//! the tracker, the live data of each pilot and the active route. The front ends draw this
+//! `Pilots`: the state of the pilots. It holds the logins, the token store,
+//! the tracker, the live data of each pilot and the active route. The GUI draws this
 //! state and call its methods. They hold no SSO, ESI or tracking logic.
 //!
-//! The front end calls `update` often (each frame, or each 250 ms). `update` reads the tracker
+//! The GUI calls `update` often (each frame, or each 250 ms). `update` reads the tracker
 //! events and the login result, and gives the status lines in `notices`.
 
 use super::active::{ActiveRoute, Observation, active_path};
@@ -163,7 +163,7 @@ impl Pilots {
     }
 
     /// No token store, no client ID and no tracker. The UI shows the planner only. The tests of
-    /// the front ends use it, and the TUI uses it until `open` is done.
+    /// the front end use it, and the GUI uses it until `open` is done.
     pub fn offline(active_path: PathBuf) -> Pilots {
         Self::with_parts(None, None, None, active_path, Arc::new(|| {}))
     }
@@ -633,7 +633,7 @@ impl Pilots {
     }
 }
 
-/// A stored character with a live location, for the tests of the front ends. No tracker runs.
+/// A stored character with a live location, for the tests of the GUI. No tracker runs.
 #[cfg(any(test, feature = "test-support"))]
 impl Pilots {
     pub fn add_test_pilot(&mut self, id: u64, name: &str, system: u32) {
@@ -651,7 +651,7 @@ impl Pilots {
     }
 }
 
-/// `Pilots` with a test `Api` and short poll intervals, for the tests of the front ends.
+/// `Pilots` with a test `Api` and short poll intervals, for the tests of the GUI.
 #[cfg(any(test, feature = "test-support"))]
 impl Pilots {
     pub fn for_tests(accounts: Accounts, api: impl super::tracker::Api, active_path: PathBuf) -> Pilots {

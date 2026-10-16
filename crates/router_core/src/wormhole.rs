@@ -1,5 +1,5 @@
 //! The shared wormhole record. Each source converts its data to this record.
-//! The router and the TUI read only this record, never the raw format of a source.
+//! The router reads only this record, never the raw format of a source.
 
 use chrono::{DateTime, Local, TimeZone};
 use serde::{Deserialize, Serialize};
@@ -301,7 +301,7 @@ fn duration_text(secs: u64) -> String {
     if minutes >= 60 { format!("{}h {}m", minutes / 60, minutes % 60) } else { format!("{minutes}m") }
 }
 
-/// The remaining time of a wormhole, for the TUI.
+/// The remaining time of a wormhole.
 pub fn expiry_text(e: Expiry, now: u64) -> String {
     if e.at <= now {
         return "Expired".into();

@@ -1,4 +1,4 @@
-//! EVE SSO and ESI. The login and the token store are here. The front ends hold no SSO code.
+//! EVE SSO and ESI. The login and the token store are here. The GUI holds no SSO code.
 
 pub mod active;
 pub mod client;

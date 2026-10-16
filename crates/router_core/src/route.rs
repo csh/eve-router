@@ -48,7 +48,6 @@ pub const DEFAULT_UNKNOWN_SIG_PENALTY: u32 = 4 * JUMP as u32;
 pub const MAX_MIDPOINTS: usize = 20;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-#[cfg_attr(feature = "clap", derive(clap::ValueEnum))]
 #[serde(rename_all = "kebab-case")]
 pub enum Mode {
     Shortest,

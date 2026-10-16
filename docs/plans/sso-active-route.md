@@ -2,7 +2,7 @@
 
 Status: phases 1 to 6 are done. One item is open: the in-game waypoint cap is not measured (see [The waypoint limits](#the-waypoint-limits)).
 
-This plan adds three things to the TUI (`router_tui`) and the GUI (`router_egui`):
+This plan adds three things to the GUI (`router_egui`). The terminal UI (`router_tui`) is removed since 2026-10-16, so the TUI parts of this plan are gone:
 
 - EVE SSO login for one or more characters, with tokens in the OS keyring.
 - "Start route": the router sends the waypoints of the selected route to a chosen character.
@@ -88,7 +88,7 @@ Each dependency must pass `cargo deny check` (see `deny.toml`): no open RustSec 
 
 ### Start flow (both front ends)
 
-1. The user selects a route and pushes `Start route #n` (GUI) or presses `g` (TUI).
+1. The user selects a route and pushes `Start route #n`.
 2. With no characters, the button reads `Log in to start`. After login, the flow goes to step 3. It never sends at once.
 3. With two or more characters, a picker shows. It preselects the last-used character. Each row shows the name, the system and the online state.
 4. The confirm step shows `Send route #1 to <Name>?` and `30 jumps · 28 waypoints · 2 manual jumps`. It can add these lines:
@@ -140,38 +140,6 @@ A "Pilots" panel goes in the sidebar, below "Shortest route". It shows the chara
 
 The panel replaces the "Elsewhere" list from the first draft.
 
-## TUI changes (`router_tui`)
-
-### Login
-
-- `c` opens a Characters page, like the settings page. `a` adds a character, `d` removes one.
-- The login popup shows the URL and a text prompt for the redirected URL. The listener and the prompt run at the same time. The first to give a code wins.
-
-### Active route view
-
-- `ui::draw` hides the input box and the route list. The step table takes the full left area under a one-line header and a `Gauge`.
-- The table rows use `✓` and `▶` like the GUI. A new narrow column shows the pilot initials, or `+n`.
-
-### Key lock
-
-| Key | Active mode |
-|---|---|
-| `i`, `/`, `Enter`, `m`, `w`, `j`, `h`, `+`, `=`, `-` | Locked |
-| `s` | Opens. Favourites stay editable. Capital, max cap, Nexum, Thera and Turnur rows show `(locked)` |
-| `Esc` | Does not quit |
-| `q` | Asks `Quit? Route stays in game; resume on next launch. y/n` |
-| `x` | Stop route, with a confirm |
-| `↑↓`, `PgUp`, `PgDn`, `Home`, `End`, `n`, `p` | Scroll the step table |
-| `c` | Characters page |
-
-A locked key shows `Locked while route is active — press x to stop` in WARN for 3 s. The help line shows only the keys that work:
-
-```
-x Stop route  ↑↓ Scroll  n/p Next/prev stop  c Characters  s Settings  q Quit
-```
-
-The lock lives in one function, `App::route_locked(key) -> bool`, so a test can check every key.
-
 ## Clutter rule
 
 Each new element must change a decision the user makes now. If it does not, it goes in hover text or does not show.
@@ -192,7 +160,7 @@ The adversarial review gave these, most important first.
 | 4 | MUST | Offer to route from the pilot's current system at start |
 | 5 | MUST | Paste fallback for SSO, and a clear message for a busy port |
 | 6 | MUST | Monotonic progress that accepts skipped rows |
-| 7 | MUST | TUI key lock. `Esc` does not quit. `q` asks first |
+| 7 | — | Removed with the TUI (was the key lock) |
 | 8 | MUST | Save the active route and offer to resume it |
 | 9 | MUST | Token-failure banner, with tracking shown as paused |
 | 10 | MUST | Off-route detection after two polls, and a re-route only on confirm |
@@ -207,7 +175,7 @@ The adversarial review gave these, most important first.
 | 19 | SHOULD | Waypoint cap check |
 | 20 | COULD | Hull and ship warning |
 | 21 | SHOULD | Pilots panel of online pilots below "Shortest route" |
-| 22 | COULD | TUI pilot initials column |
+| 22 | — | Removed with the TUI (was the initials column) |
 
 ## Phases
 
@@ -216,7 +184,7 @@ The adversarial review gave these, most important first.
 | 1 | `esi::sso` and `esi::store`: PKCE, listener, paste, keyring, `characters.json`. Unit tests for PKCE, JWT claims and URL parse | 1 day |
 | 2 | `esi::client` and `esi::tracker`: the four endpoints, refresh, error-limit back-off. Tests with fixture JSON | 1 day |
 | 3 | `esi::active`: segments, progress, off-route, persistence. Pure unit tests | 1 day |
-| 4 | TUI: Characters page, start flow, active view, key lock. A snapshot test of the active screen and a test for each locked key | 1.5 days |
+| 4 | Removed with the TUI | — |
 | 5 | GUI: Characters popover, start dialog, active view, Pilots column, Pilots panel, portrait cache | 2.5 days |
 | 6 | Measure the waypoint cap in game, register the SSO app, update the README | 0.5 day |
 

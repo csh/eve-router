@@ -60,5 +60,5 @@ Why a hybrid: R2Z2 alone has no kills from before the app starts. The region API
 - The largest distance from a gate for a camp kill.
 - The kill count and the time window that make a camp.
 - The kill count and the time window that make a "high kill count" system.
-- The warning text in the GUI and the TUI.
+- The warning text in the GUI.
 - The default for the avoid-or-ignore setting.

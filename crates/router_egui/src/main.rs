@@ -1,8 +1,7 @@
 // A release build opens no console window next to the app window.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
-//! The egui window of EVE Router. It has the layout and the functions of the TUI, with a
-//! system search in place of the text input.
+//! The egui window of EVE Router.
 
 mod app;
 mod log_window;
