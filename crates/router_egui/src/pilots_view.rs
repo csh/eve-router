@@ -234,7 +234,7 @@ impl PilotsUi {
     fn login(&mut self, s: &mut Session) {
         self.paste.clear();
         if let Err(e) = s.pilots.start_login() {
-            s.status = e;
+            s.status = e.to_string();
         }
         self.characters_open = true;
     }
@@ -312,7 +312,9 @@ impl PilotsUi {
             crate::settings_window::title(ui, "Characters");
             // No keyring: offer a login for this session only.
             if s.pilots.accounts.is_none() && s.pilots.keyring_error.is_some() {
-                ui.label(RichText::new(s.pilots.keyring_error.clone().unwrap_or_default()).color(theme::TEXT_DIM));
+                ui.label(
+                    RichText::new(s.pilots.keyring_error.as_ref().map(ToString::to_string).unwrap_or_default()).color(theme::TEXT_DIM),
+                );
                 ui.label(RichText::new("No system keyring found. Keep login for this session only?").color(theme::TEXT));
                 ui.horizontal(|ui| {
                     if ui.button("Session only").clicked() {
@@ -391,7 +393,7 @@ impl PilotsUi {
     fn login_section(&mut self, ui: &mut Ui, s: &mut Session) {
         let Some(flow) = &s.pilots.login else { return };
         let url = flow.login.url.clone();
-        let listen_error = flow.login.listen_error().map(str::to_owned);
+        let listen_error = flow.login.listen_error().map(ToString::to_string);
         let (busy, error) = (flow.busy(), flow.error.clone());
         ui.label(RichText::new("Opening EVE login in your browser…").color(theme::TEXT));
         ui.horizontal(|ui| {
@@ -668,7 +670,7 @@ impl PilotsUi {
                 if ui.button("Re-route from here").clicked() {
                     match s.pilots.reroute(&s.uni, &s.settings, router_core::wormhole::now()) {
                         Ok(route) => self.reroute = Some(Box::new(route)),
-                        Err(e) => s.status = e,
+                        Err(e) => s.status = e.to_string(),
                     }
                 }
                 if ui.button("Stop route").clicked() {

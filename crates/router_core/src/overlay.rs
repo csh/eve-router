@@ -1,5 +1,6 @@
 //! Jump bridges from an SMT list.
 
+use crate::error::FileError;
 use crate::universe::{Link, Universe};
 use std::fs;
 use std::path::Path;
@@ -21,8 +22,8 @@ impl OverlayReport {
 }
 
 /// Add jump bridges from an SMT list. Each line `<id> <FROM> --> <TO>` is one direction.
-pub fn load_bridges(uni: &mut Universe, path: &Path) -> Result<OverlayReport, String> {
-    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
+pub fn load_bridges(uni: &mut Universe, path: &Path) -> Result<OverlayReport, FileError> {
+    let text = fs::read_to_string(path).map_err(FileError::io(path))?;
     Ok(add_bridges(uni, &text))
 }
 

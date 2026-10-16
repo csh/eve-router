@@ -3,6 +3,7 @@
 //! The SDE update makes it from `types.jsonl` and `typeDogma.jsonl`, and keeps it in
 //! `wormholes.json`. A type is a name `Wormhole X000` with the attributes 1382 and 1385.
 
+use crate::error::{FileError, SdeError, write_atomic};
 use crate::ships::Sources;
 use serde::{Deserialize, Serialize};
 use std::fs;
@@ -93,19 +94,16 @@ pub fn derive(build: Option<u32>, src: &Sources) -> WormholeTypes {
     WormholeTypes { build, types }
 }
 
-pub fn save(dir: &Path, data: &WormholeTypes) -> Result<(), String> {
+pub fn save(dir: &Path, data: &WormholeTypes) -> Result<(), FileError> {
     let path = dir.join(FILE);
-    let tmp = path.with_extension("json.part");
-    let text = serde_json::to_string(data).map_err(|e| e.to_string())?;
-    fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+    let text = serde_json::to_string(data).map_err(FileError::json(&path))?;
+    write_atomic(&path, &path.with_extension("json.part"), &text)
 }
 
-pub fn load(dir: &Path) -> Result<WormholeTypes, String> {
+pub fn load(dir: &Path) -> Result<WormholeTypes, SdeError> {
     let path = dir.join(FILE);
-    let text =
-        fs::read_to_string(&path).map_err(|e| format!("{}: {e}. Unset {} to download it.", path.display(), crate::sde_update::SKIP_ENV))?;
-    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+    let text = fs::read_to_string(&path).map_err(|source| SdeError::Missing { path: path.clone(), source })?;
+    Ok(serde_json::from_str(&text).map_err(FileError::json(&path))?)
 }
 
 #[cfg(test)]

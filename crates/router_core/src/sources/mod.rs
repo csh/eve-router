@@ -4,6 +4,7 @@
 pub mod evescout;
 pub mod nexum;
 
+use crate::error::{FileError, write_atomic};
 use crate::wormhole::{SourceData, SourceId, local_time};
 use std::fs;
 use std::path::Path;
@@ -16,13 +17,16 @@ pub const CACHE_FRESH_SECS: u64 = 300;
 /// The largest response body. A large alliance map is a few MB.
 const MAX_BODY: u64 = 64 * 1024 * 1024;
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum FetchError {
     /// 401 or 403: the key is wrong, or it has no access to the map.
+    #[error("the server refused the request")]
     Auth,
     /// 404: the map ID is wrong.
+    #[error("not found")]
     NotFound,
     /// A timeout, a network error, a 5xx status or bad JSON.
+    #[error("{0}")]
     Offline(String),
 }
 
@@ -91,14 +95,9 @@ pub fn read_cache(path: &Path) -> Option<SourceData> {
 }
 
 /// Write a cache file: a temporary file, then a rename, so a reader never sees half a file.
-pub fn write_cache(path: &Path, data: &SourceData) -> Result<(), String> {
-    if let Some(dir) = path.parent() {
-        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    }
-    let tmp = path.with_extension("json.part");
-    let text = serde_json::to_string(data).map_err(|e| e.to_string())?;
-    fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+pub fn write_cache(path: &Path, data: &SourceData) -> Result<(), FileError> {
+    let text = serde_json::to_string(data).map_err(FileError::json(path))?;
+    write_atomic(path, &path.with_extension("json.part"), &text)
 }
 
 /// True if the cache is less than 5 minutes old. A fetch time after `now` is not fresh.

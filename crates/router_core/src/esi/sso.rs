@@ -55,36 +55,36 @@ pub fn redirect_uri() -> String {
     format!("http://localhost:{CALLBACK_PORT}{CALLBACK_PATH}")
 }
 
-#[derive(Debug, PartialEq)]
+/// Why the listener for the browser redirect did not start. The pilot can paste the URL instead.
+#[derive(Debug, thiserror::Error)]
+pub enum ListenError {
+    #[error("Port {port} is in use. Paste the redirected URL instead.")]
+    InUse { port: u16 },
+    #[error("Cannot listen on port {port}: {source}. Paste the redirected URL instead.")]
+    Bind { port: u16, source: io::Error },
+}
+
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum LoginError {
     /// SSO sent an `error` to the callback, for example when the user cancels the login.
+    #[error("EVE SSO did not give access ({0}). Start the login again.")]
     Denied(String),
     /// The `state` is not the one of this login.
+    #[error("This URL is not from the current login. Use the URL from the newest login tab.")]
     StateMismatch,
     /// The text has no `code`.
+    #[error("The URL has no login code. Paste the full URL from the address bar.")]
     NoCode,
     /// SSO refused the code or the refresh token. The character must log in again.
+    #[error("EVE SSO refused the login ({0}). Log in again.")]
     Rejected(String),
     /// A timeout, a network error, a 5xx status or a bad response.
+    #[error("EVE SSO is not reachable: {0}")]
     Offline(String),
     /// The token is not valid: a wrong issuer, audience or subject, or an expired token.
+    #[error("EVE SSO sent a token that is not valid: {0}")]
     BadToken(String),
 }
-
-impl fmt::Display for LoginError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            LoginError::Denied(e) => write!(f, "EVE SSO did not give access ({e}). Start the login again."),
-            LoginError::StateMismatch => f.write_str("This URL is not from the current login. Use the URL from the newest login tab."),
-            LoginError::NoCode => f.write_str("The URL has no login code. Paste the full URL from the address bar."),
-            LoginError::Rejected(e) => write!(f, "EVE SSO refused the login ({e}). Log in again."),
-            LoginError::Offline(e) => write!(f, "EVE SSO is not reachable: {e}"),
-            LoginError::BadToken(e) => write!(f, "EVE SSO sent a token that is not valid: {e}"),
-        }
-    }
-}
-
-impl std::error::Error for LoginError {}
 
 /// The token requests and the revoke request have different error response types.
 impl<T: ErrorResponseType + fmt::Display + 'static> From<RequestTokenError<ureq::Error, StandardErrorResponse<T>>> for LoginError {
@@ -166,9 +166,9 @@ impl Sso {
             .add_scopes(SCOPES.iter().map(|s| Scope::new((*s).to_owned())))
             .set_pkce_challenge(challenge)
             .url();
-        let listener = Listener::bind(port, state.secret().clone()).map_err(|e| match e.kind() {
-            io::ErrorKind::AddrInUse => format!("Port {port} is in use. Paste the redirected URL instead."),
-            _ => format!("Cannot listen on port {port}: {e}. Paste the redirected URL instead."),
+        let listener = Listener::bind(port, state.secret().clone()).map_err(|source| match source.kind() {
+            io::ErrorKind::AddrInUse => ListenError::InUse { port },
+            _ => ListenError::Bind { port, source },
         });
         Login { url: url.into(), state, verifier, listener }
     }
@@ -315,13 +315,13 @@ pub struct Login {
     pub url: String,
     state: CsrfToken,
     verifier: PkceCodeVerifier,
-    listener: Result<Listener, String>,
+    listener: Result<Listener, ListenError>,
 }
 
 impl Login {
     /// The reason the listener did not start, if it did not.
-    pub fn listen_error(&self) -> Option<&str> {
-        self.listener.as_ref().err().map(String::as_str)
+    pub fn listen_error(&self) -> Option<&ListenError> {
+        self.listener.as_ref().err()
     }
 
     /// The code from the listener, when the browser sent it.
@@ -604,7 +604,7 @@ mod tests {
         let busy = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).unwrap();
         let port = busy.local_addr().unwrap().port();
         let login = Sso::new(CLIENT).start_login_on(port);
-        assert_eq!(login.listen_error(), Some(format!("Port {port} is in use. Paste the redirected URL instead.").as_str()));
+        assert!(matches!(login.listen_error(), Some(ListenError::InUse { port: p }) if *p == port));
         assert!(login.poll().is_none());
         let state = login.state.secret();
         assert_eq!(text(login.paste(&format!("http://localhost:{port}/callback?code=c0de&state={state}"))), Ok("c0de".into()));

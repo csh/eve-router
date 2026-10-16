@@ -12,6 +12,7 @@
 use super::Character;
 use super::sso::Tokens;
 use crate::config::APP_DIR;
+use crate::error::{FileError, write_atomic};
 use oauth2::{RefreshToken, Scope};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -28,12 +29,26 @@ pub fn characters_path(cfg_path: &Path) -> PathBuf {
     cfg_path.with_file_name(FILE_NAME)
 }
 
+/// Why the router cannot read or write a refresh token or the character list.
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    /// The platform has no keyring.
+    #[error("No system keyring: {0}")]
+    NoKeyring(String),
+    #[error("{0}")]
+    Keyring(#[from] keyring::Error),
+    #[error("The token store is locked by a failed thread")]
+    Poisoned,
+    #[error(transparent)]
+    File(#[from] FileError),
+}
+
 /// A place for refresh tokens, by character ID.
 pub trait TokenStore: Send + Sync {
-    fn get(&self, id: u64) -> Result<Option<RefreshToken>, String>;
-    fn set(&self, id: u64, token: &RefreshToken) -> Result<(), String>;
+    fn get(&self, id: u64) -> Result<Option<RefreshToken>, StoreError>;
+    fn set(&self, id: u64, token: &RefreshToken) -> Result<(), StoreError>;
     /// Delete the token. A missing token is not an error.
-    fn delete(&self, id: u64) -> Result<(), String>;
+    fn delete(&self, id: u64) -> Result<(), StoreError>;
 }
 
 /// The OS keyring: Windows Credential Manager, macOS Keychain, or the Secret Service on Linux.
@@ -42,32 +57,32 @@ pub struct Keyring;
 impl Keyring {
     /// The keyring, if the platform has one. The error text says why not, for the
     /// "Session only" prompt.
-    pub fn open() -> Result<Keyring, String> {
-        keyring::Entry::store_status().as_ref().map(|_| Keyring).map_err(|e| format!("No system keyring: {e}"))
+    pub fn open() -> Result<Keyring, StoreError> {
+        keyring::Entry::store_status().as_ref().map(|_| Keyring).map_err(|e| StoreError::NoKeyring(e.to_string()))
     }
 
-    fn entry(id: u64) -> Result<keyring::Entry, String> {
-        keyring::Entry::new(KEYRING_SERVICE, &id.to_string()).map_err(|e| e.to_string())
+    fn entry(id: u64) -> Result<keyring::Entry, StoreError> {
+        Ok(keyring::Entry::new(KEYRING_SERVICE, &id.to_string())?)
     }
 }
 
 impl TokenStore for Keyring {
-    fn get(&self, id: u64) -> Result<Option<RefreshToken>, String> {
+    fn get(&self, id: u64) -> Result<Option<RefreshToken>, StoreError> {
         match Self::entry(id)?.get_password() {
             Ok(token) => Ok(Some(RefreshToken::new(token))),
             Err(keyring::Error::NoEntry) => Ok(None),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(e.into()),
         }
     }
 
-    fn set(&self, id: u64, token: &RefreshToken) -> Result<(), String> {
-        Self::entry(id)?.set_password(token.secret()).map_err(|e| e.to_string())
+    fn set(&self, id: u64, token: &RefreshToken) -> Result<(), StoreError> {
+        Ok(Self::entry(id)?.set_password(token.secret())?)
     }
 
-    fn delete(&self, id: u64) -> Result<(), String> {
+    fn delete(&self, id: u64) -> Result<(), StoreError> {
         match Self::entry(id)?.delete_credential() {
             Ok(()) | Err(keyring::Error::NoEntry) => Ok(()),
-            Err(e) => Err(e.to_string()),
+            Err(e) => Err(e.into()),
         }
     }
 }
@@ -77,17 +92,17 @@ impl TokenStore for Keyring {
 pub struct MemoryStore(Mutex<HashMap<u64, RefreshToken>>);
 
 impl TokenStore for MemoryStore {
-    fn get(&self, id: u64) -> Result<Option<RefreshToken>, String> {
-        Ok(self.0.lock().map_err(|e| e.to_string())?.get(&id).cloned())
+    fn get(&self, id: u64) -> Result<Option<RefreshToken>, StoreError> {
+        Ok(self.0.lock().map_err(|_| StoreError::Poisoned)?.get(&id).cloned())
     }
 
-    fn set(&self, id: u64, token: &RefreshToken) -> Result<(), String> {
-        self.0.lock().map_err(|e| e.to_string())?.insert(id, token.clone());
+    fn set(&self, id: u64, token: &RefreshToken) -> Result<(), StoreError> {
+        self.0.lock().map_err(|_| StoreError::Poisoned)?.insert(id, token.clone());
         Ok(())
     }
 
-    fn delete(&self, id: u64) -> Result<(), String> {
-        self.0.lock().map_err(|e| e.to_string())?.remove(&id);
+    fn delete(&self, id: u64) -> Result<(), StoreError> {
+        self.0.lock().map_err(|_| StoreError::Poisoned)?.remove(&id);
         Ok(())
     }
 }
@@ -125,7 +140,7 @@ impl Accounts {
     }
 
     /// Read the list file, if `path` is set. A missing file gives an empty list.
-    pub fn with_store(path: Option<PathBuf>, secrets: Box<dyn TokenStore>) -> Result<Accounts, String> {
+    pub fn with_store(path: Option<PathBuf>, secrets: Box<dyn TokenStore>) -> Result<Accounts, StoreError> {
         let characters = match &path {
             Some(path) => load(path)?,
             None => Vec::new(),
@@ -139,7 +154,7 @@ impl Accounts {
 
     /// Store the tokens of a login or a refresh. The refresh token goes to the store before the
     /// list changes, because SSO can rotate it: the old token can be invalid after this call.
-    pub fn store(&mut self, tokens: &Tokens) -> Result<(), String> {
+    pub fn store(&mut self, tokens: &Tokens) -> Result<(), StoreError> {
         let c = &tokens.character;
         self.secrets.set(c.id, &tokens.refresh)?;
         match self.characters.iter_mut().find(|e| e.id == c.id) {
@@ -153,20 +168,20 @@ impl Accounts {
     }
 
     /// The refresh token of a character. `None` means the character must log in again.
-    pub fn refresh_token(&self, id: u64) -> Result<Option<RefreshToken>, String> {
+    pub fn refresh_token(&self, id: u64) -> Result<Option<RefreshToken>, StoreError> {
         self.secrets.get(id)
     }
 
     /// Delete the refresh token and the list entry. Revoke the token at SSO before this call,
     /// with `sso::revoke`.
-    pub fn remove(&mut self, id: u64) -> Result<(), String> {
+    pub fn remove(&mut self, id: u64) -> Result<(), StoreError> {
         self.secrets.delete(id)?;
         self.characters.retain(|e| e.id != id);
         self.save()
     }
 
     /// Record a route start with this character, for the preselection in the picker.
-    pub fn mark_used(&mut self, id: u64, now: u64) -> Result<(), String> {
+    pub fn mark_used(&mut self, id: u64, now: u64) -> Result<(), StoreError> {
         if let Some(entry) = self.characters.iter_mut().find(|e| e.id == id) {
             entry.last_used = Some(now);
         }
@@ -178,31 +193,26 @@ impl Accounts {
         self.characters.iter().filter(|e| e.last_used.is_some()).max_by_key(|e| e.last_used).map(|e| e.id)
     }
 
-    fn save(&self) -> Result<(), String> {
+    fn save(&self) -> Result<(), StoreError> {
         match &self.path {
-            Some(path) => save(path, &self.characters),
+            Some(path) => Ok(save(path, &self.characters)?),
             None => Ok(()),
         }
     }
 }
 
-fn load(path: &Path) -> Result<Vec<CharacterEntry>, String> {
+fn load(path: &Path) -> Result<Vec<CharacterEntry>, FileError> {
     match fs::read_to_string(path) {
-        Ok(text) => serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display())),
+        Ok(text) => serde_json::from_str(&text).map_err(FileError::json(path)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Vec::new()),
-        Err(e) => Err(format!("{}: {e}", path.display())),
+        Err(e) => Err(FileError::Io { path: path.to_path_buf(), source: e }),
     }
 }
 
 /// Write a temporary file, then rename it, so a reader never sees half a file.
-fn save(path: &Path, characters: &[CharacterEntry]) -> Result<(), String> {
-    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-        fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-    }
-    let tmp = path.with_extension("json.part");
-    let text = serde_json::to_string_pretty(characters).map_err(|e| e.to_string())?;
-    fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+fn save(path: &Path, characters: &[CharacterEntry]) -> Result<(), FileError> {
+    let text = serde_json::to_string_pretty(characters).map_err(FileError::json(path))?;
+    write_atomic(path, &path.with_extension("json.part"), &text)
 }
 
 #[cfg(test)]
@@ -219,7 +229,7 @@ mod tests {
     }
 
     /// The token text. `RefreshToken` has no `PartialEq`.
-    fn secret(result: Result<Option<RefreshToken>, String>) -> Option<String> {
+    fn secret(result: Result<Option<RefreshToken>, StoreError>) -> Option<String> {
         result.unwrap().map(|t| t.secret().clone())
     }
 

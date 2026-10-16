@@ -2,12 +2,22 @@
 //! Source: https://www.eveonline.com/news/view/force-projection-ansiblex-capacitor-update
 //! The hull costs and the gate capacitor come from the SDE. The zones are not in the SDE.
 
+use crate::error::SdeError;
 use crate::ships::ShipData;
 use crate::universe::Universe;
 use petgraph::graph::NodeIndex;
 use std::collections::BTreeMap;
 use std::path::Path;
 use std::sync::Arc;
+
+/// Why a hull cannot use an Ansiblex bridge. The text completes "The <hull> ...".
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+pub enum Ban {
+    #[error("has no Ansiblex activation cost")]
+    NoCost,
+    #[error("is heavier than the {max_mass_kg:.0} kg gate limit")]
+    TooHeavy { max_mass_kg: f64 },
+}
 
 /// A ship, or a ship group that stands for all of its ships.
 pub struct Hull {
@@ -20,7 +30,7 @@ pub struct Hull {
     /// The share of the gate capacitor that one base jump uses, in percent. `None` with `base_tj`.
     pub base_cap_pct: Option<f32>,
     /// Why the hull cannot use a bridge.
-    pub ban: Option<String>,
+    pub ban: Option<Ban>,
     /// The mass in kg, for the wormhole size check. A group has the mass of its heaviest ship.
     pub mass_kg: Option<f64>,
 }
@@ -51,7 +61,7 @@ impl HullTable {
     fn new(data: ShipData) -> Self {
         let max_mass = data.ansiblex.max_jump_mass_kg;
         let gate_capacitor_tj = (data.ansiblex.capacitor_gj / GJ_PER_TJ) as f32;
-        let hull = |type_id: Option<u32>, name: String, group: String, result: Result<f32, String>, mass_kg: Option<f64>| {
+        let hull = |type_id: Option<u32>, name: String, group: String, result: Result<f32, Ban>, mass_kg: Option<f64>| {
             let base_tj = result.as_ref().ok().copied();
             Arc::new(Hull {
                 type_id,
@@ -65,8 +75,8 @@ impl HullTable {
         };
         // A ship needs a bridge cost, and its mass must not be more than the gate limit.
         let check = |cost_gj: Option<f64>, mass: Option<f64>| match (cost_gj, mass) {
-            (None, _) => Err("has no Ansiblex activation cost".to_string()),
-            (Some(_), Some(m)) if m > max_mass => Err(format!("is heavier than the {max_mass:.0} kg gate limit")),
+            (None, _) => Err(Ban::NoCost),
+            (Some(_), Some(m)) if m > max_mass => Err(Ban::TooHeavy { max_mass_kg: max_mass }),
             (Some(c), _) => Ok((c / GJ_PER_TJ) as f32),
         };
         let mut groups: BTreeMap<String, (Option<f64>, Option<f64>)> = BTreeMap::new();
@@ -91,7 +101,7 @@ impl HullTable {
 
 impl HullTable {
     /// Load the hull table from `ships.json` in the SDE directory.
-    pub fn load(sde_dir: &Path) -> Result<Arc<HullTable>, String> {
+    pub fn load(sde_dir: &Path) -> Result<Arc<HullTable>, SdeError> {
         Ok(Arc::new(HullTable::new(crate::ships::load(sde_dir)?)))
     }
 
@@ -209,6 +219,26 @@ mod tests {
     fn rules(hull: Option<&str>, max_cap: Option<f32>) -> BridgeRules {
         let uni = universe();
         BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| hulls().find(h).unwrap()), max_cap }
+    }
+
+    #[test]
+    fn a_missing_table_names_the_file_and_the_way_out() {
+        let tmp = tempfile::tempdir().unwrap();
+        let Err(error) = HullTable::load(tmp.path()) else { panic!("loaded from an empty directory") };
+        assert!(matches!(error, SdeError::Missing { .. }), "{error:?}");
+        let text = error.to_string();
+        assert!(text.contains("ships.json") && text.contains("Unset EVE_ROUTER_SKIP_SDE_CHECK to download it."), "{text}");
+    }
+
+    #[test]
+    fn a_ban_completes_the_sentence_about_the_hull() {
+        let avatar = hulls().find("Avatar").unwrap();
+        assert!(matches!(avatar.ban, Some(Ban::NoCost)));
+        let rules = BridgeRules { capital: None, hull: Some(avatar), max_cap: None };
+        // A capital is the first rule, so set one to see the ban text.
+        let uni = universe();
+        let rules = BridgeRules { capital: uni.exact("JK-Q77"), ..rules };
+        assert_eq!(rules.blocked_reason().as_deref(), Some("The Avatar has no Ansiblex activation cost"));
     }
 
     #[test]

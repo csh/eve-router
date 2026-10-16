@@ -1,5 +1,6 @@
 //! Parse the SDE JSONL files that the router needs.
 
+use crate::error::FileError;
 use rayon::prelude::*;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
@@ -64,16 +65,13 @@ pub struct SdeData {
 }
 
 /// Read a JSONL file and parse its lines in parallel.
-pub fn read_jsonl<T: DeserializeOwned + Send>(path: &Path) -> Result<Vec<T>, String> {
-    let text = fs::read_to_string(path).map_err(|e| format!("{}: {e}", path.display()))?;
-    text.par_lines()
-        .filter(|line| !line.trim().is_empty())
-        .map(|line| serde_json::from_str(line).map_err(|e| format!("{}: {e}", path.display())))
-        .collect()
+pub fn read_jsonl<T: DeserializeOwned + Send>(path: &Path) -> Result<Vec<T>, FileError> {
+    let text = fs::read_to_string(path).map_err(FileError::io(path))?;
+    text.par_lines().filter(|line| !line.trim().is_empty()).map(|line| serde_json::from_str(line).map_err(FileError::json(path))).collect()
 }
 
 /// Load the map files from an SDE directory. The three files load at the same time.
-pub fn load(dir: &Path) -> Result<SdeData, String> {
+pub fn load(dir: &Path) -> Result<SdeData, FileError> {
     let (systems, (stargates, regions)) = rayon::join(
         || read_jsonl::<SdeSystem>(&dir.join("mapSolarSystems.jsonl")),
         || {

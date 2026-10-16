@@ -9,10 +9,11 @@ use super::Character;
 use super::active::{ActiveRoute, Observation, active_path};
 use super::client::{Esi, Location, Ship};
 use super::sso::{Login, LoginError, Sso, Tokens};
-use super::store::{Accounts, TokenStore, characters_path};
+use super::store::{Accounts, StoreError, TokenStore, characters_path};
 use super::tracker::{Command, Event, Intervals, Live, Tracker};
 use crate::ansiblex::{HullClass, HullTable, same_class, same_hull};
 use crate::route::Route;
+use crate::route::RouteError;
 use crate::settings::{HullSource, Settings};
 use crate::universe::Universe;
 use std::collections::HashMap;
@@ -69,6 +70,24 @@ pub struct SendState {
     pub failed: Option<String>,
 }
 
+/// Why a route start, a re-route or a login cannot go on.
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum PilotError {
+    /// The router cannot log in. The text says why.
+    #[error("{0}")]
+    LoginBlocked(String),
+    #[error("System {0} is not on the map")]
+    NotOnMap(u32),
+    #[error("No route.")]
+    NoRoute,
+    #[error("No active route.")]
+    NoActiveRoute,
+    #[error("The location of the pilot is not known yet.")]
+    LocationUnknown,
+    #[error(transparent)]
+    Route(#[from] RouteError),
+}
+
 /// A row of the Pilot picker.
 pub enum PilotRow {
     /// Follow the ship of this character.
@@ -118,7 +137,7 @@ pub struct Pilots {
     /// `None` until the user chooses "Session only", when the keyring is missing.
     pub accounts: Option<Accounts>,
     /// Why the keyring is not available, for the "Session only" prompt.
-    pub keyring_error: Option<String>,
+    pub keyring_error: Option<StoreError>,
     client_id: Option<String>,
     tracker: Option<Tracker>,
     pub live: HashMap<u64, PilotState>,
@@ -146,7 +165,7 @@ impl Pilots {
     /// Read `characters.json`, start the tracker, and read the active route of the last run.
     /// `store` is the token store, for example `Keyring::open()`. Its error says why there is no
     /// store, for the "Session only" prompt.
-    pub fn open(cfg_path: &Path, store: Result<Box<dyn TokenStore>, String>, client_id: Option<String>, wake: Wake) -> Pilots {
+    pub fn open(cfg_path: &Path, store: Result<Box<dyn TokenStore>, StoreError>, client_id: Option<String>, wake: Wake) -> Pilots {
         let accounts = store.and_then(|store| Accounts::with_store(Some(characters_path(cfg_path)), store));
         let (accounts, keyring_error) = match accounts {
             Ok(accounts) => (Some(accounts), None),
@@ -227,7 +246,7 @@ impl Pilots {
         if self.client_id.is_none() {
             return Some(format!("No EVE client ID in this build. Set {}.", super::CLIENT_ID_VAR));
         }
-        self.accounts.is_none().then(|| self.keyring_error.clone().unwrap_or_else(|| "No token store.".into()))
+        self.accounts.is_none().then(|| self.keyring_error.as_ref().map_or_else(|| "No token store.".into(), ToString::to_string))
     }
 
     /// True if the UI shows the characters. Without a client ID the router can neither log in nor
@@ -237,9 +256,9 @@ impl Pilots {
     }
 
     /// Start a login, and open the URL in the browser. The UI also shows the URL for a copy.
-    pub fn start_login(&mut self) -> Result<(), String> {
+    pub fn start_login(&mut self) -> Result<(), PilotError> {
         if let Some(reason) = self.login_blocked() {
-            return Err(reason);
+            return Err(PilotError::LoginBlocked(reason));
         }
         let sso = Sso::new(self.client_id.as_deref().expect("client ID"));
         let login = sso.start_login();
@@ -293,7 +312,7 @@ impl Pilots {
             });
         }
         if let Err(e) = accounts.remove(id) {
-            self.notices.push(e);
+            self.notices.push(e.to_string());
         }
     }
 
@@ -374,7 +393,7 @@ impl Pilots {
         if let Some(accounts) = &mut self.accounts
             && let Err(e) = accounts.mark_used(id, crate::wormhole::now())
         {
-            self.notices.push(e);
+            self.notices.push(e.to_string());
         }
         self.pending = Some(route);
         self.send_waypoints(id, systems);
@@ -416,7 +435,7 @@ impl Pilots {
             tracker.send(Command::SetActive(None));
         }
         if let Err(e) = ActiveRoute::clear(&self.active_path) {
-            self.notices.push(e);
+            self.notices.push(e.to_string());
         }
     }
 
@@ -429,7 +448,7 @@ impl Pilots {
     pub fn discard_resume(&mut self) {
         self.resume = None;
         if let Err(e) = ActiveRoute::clear(&self.active_path) {
-            self.notices.push(e);
+            self.notices.push(e.to_string());
         }
     }
 
@@ -448,7 +467,7 @@ impl Pilots {
 
     fn save(&mut self, route: &ActiveRoute) {
         if let Err(e) = route.save(&self.active_path) {
-            self.notices.push(e);
+            self.notices.push(e.to_string());
         }
     }
 
@@ -495,7 +514,7 @@ impl Pilots {
         let Character { id, name, .. } = tokens.character.clone();
         let Some(accounts) = &mut self.accounts else { return };
         if let Err(e) = accounts.store(&tokens) {
-            self.notices.push(e);
+            self.notices.push(e.to_string());
             return;
         }
         let live = self.live.entry(id).or_default();
@@ -526,7 +545,7 @@ impl Pilots {
                 if let Some(accounts) = &mut self.accounts
                     && let Err(e) = accounts.store(&tokens)
                 {
-                    self.notices.push(e);
+                    self.notices.push(e.to_string());
                 }
             }
             Event::LoginExpired(id) => {
@@ -577,11 +596,11 @@ impl Pilots {
 }
 
 /// The route from the system `from` through `stops` (system IDs), with the current settings.
-pub fn route_from(uni: &Universe, settings: &Settings, from: u32, stops: &[u32], now: u64) -> Result<Route, String> {
-    let node = |id: &u32| uni.by_id.get(id).copied().ok_or_else(|| format!("System {id} is not on the map"));
+pub fn route_from(uni: &Universe, settings: &Settings, from: u32, stops: &[u32], now: u64) -> Result<Route, PilotError> {
+    let node = |id: &u32| uni.by_id.get(id).copied().ok_or(PilotError::NotOnMap(*id));
     let nodes = std::iter::once(&from).chain(stops).map(node).collect::<Result<Vec<_>, _>>()?;
     let mut routes = settings.router(uni, now).routes(&nodes, 1)?;
-    if routes.is_empty() { Err("No route.".into()) } else { Ok(routes.remove(0)) }
+    if routes.is_empty() { Err(PilotError::NoRoute) } else { Ok(routes.remove(0)) }
 }
 
 /// The confirm step of a route start.
@@ -612,7 +631,7 @@ impl StartPlan {
         let stops: Vec<u32> = plan.planned.stops.iter().skip(1).map(|&i| plan.planned.steps[i].system).collect();
         match route_from(uni, settings, system, &stops, now) {
             Ok(r) => plan.from_here = Some(ActiveRoute::new(uni, &settings.rules, &r, number, pilot.id, &pilot.name, now)),
-            Err(e) => plan.error = Some(e),
+            Err(e) => plan.error = Some(e.to_string()),
         }
         plan
     }
@@ -626,9 +645,9 @@ impl StartPlan {
 impl Pilots {
     /// "Re-route from here": the route from the current system of the active pilot through the
     /// stops ahead. The UI shows its jump count, and sends it with `replace_route` on confirm.
-    pub fn reroute(&self, uni: &Universe, settings: &Settings, now: u64) -> Result<ActiveRoute, String> {
-        let active = self.active.as_ref().ok_or("No active route.")?;
-        let system = self.live.get(&active.character).and_then(|l| l.system).ok_or("The location of the pilot is not known yet.")?;
+    pub fn reroute(&self, uni: &Universe, settings: &Settings, now: u64) -> Result<ActiveRoute, PilotError> {
+        let active = self.active.as_ref().ok_or(PilotError::NoActiveRoute)?;
+        let system = self.live.get(&active.character).and_then(|l| l.system).ok_or(PilotError::LocationUnknown)?;
         let stops: Vec<u32> = active.stops.iter().filter(|&&i| i > active.progress).map(|&i| active.steps[i].system).collect();
         let route = route_from(uni, settings, system, &stops, now)?;
         Ok(ActiveRoute::new(uni, &settings.rules, &route, active.number, active.character, &active.character_name, now))
@@ -740,7 +759,7 @@ mod tests {
     #[test]
     fn no_client_id_means_no_tracker() {
         let tmp = tempfile::tempdir().unwrap();
-        let store: Result<Box<dyn TokenStore>, String> = Ok(Box::new(MemoryStore::default()));
+        let store: Result<Box<dyn TokenStore>, StoreError> = Ok(Box::new(MemoryStore::default()));
         let p = Pilots::open(&tmp.path().join("eve-router.json"), store, None, Arc::new(|| {}));
         assert!(p.tracker.is_none(), "a tracker would poll ESI");
         assert!(p.login_blocked().is_some());

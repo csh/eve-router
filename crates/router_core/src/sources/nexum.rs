@@ -79,8 +79,8 @@ pub type SystemSigs = HashMap<String, Vec<NexumSig>>;
 /// The number of signature requests that run at the same time.
 const SIG_WORKERS: usize = 8;
 
-pub fn parse_map(text: &str) -> Result<NexumMap, String> {
-    serde_json::from_str(text).map_err(|e| format!("Nexum map: {e}"))
+pub fn parse_map(text: &str) -> Result<NexumMap, serde_json::Error> {
+    serde_json::from_str(text)
 }
 
 /// One map in `GET /api/v1/maps`.
@@ -408,7 +408,7 @@ pub struct Fetched {
 /// GET the map, then the signatures of its wormhole ends. A failed signature request
 /// drops only the signatures of that system.
 fn fetch_all(cfg: &NexumConfig) -> Result<Fetched, FetchError> {
-    let map = parse_map(&fetch_map(cfg, sources::TIMEOUT)?).map_err(FetchError::Offline)?;
+    let map = parse_map(&fetch_map(cfg, sources::TIMEOUT)?).map_err(|e| FetchError::Offline(format!("Nexum map: {e}")))?;
     let (sigs, sig_failures) = fetch_sigs(cfg, &sig_systems(&map), sources::TIMEOUT);
     Ok(Fetched { map, sigs, sig_failures })
 }

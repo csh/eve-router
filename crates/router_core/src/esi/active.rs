@@ -11,6 +11,7 @@
 
 use super::client::Location;
 use crate::ansiblex::BridgeRules;
+use crate::error::{FileError, write_atomic};
 use crate::labels::link_label;
 use crate::route::{Route, Stop};
 use crate::universe::{Link, Universe};
@@ -263,20 +264,15 @@ impl ActiveRoute {
     }
 
     /// Write a temporary file, then rename it, so a reader never sees half a file.
-    pub fn save(&self, path: &Path) -> Result<(), String> {
-        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
-        }
-        let tmp = path.with_extension("json.part");
-        let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
-        fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        fs::rename(&tmp, path).map_err(|e| format!("{}: {e}", path.display()))
+    pub fn save(&self, path: &Path) -> Result<(), FileError> {
+        let text = serde_json::to_string_pretty(self).map_err(FileError::json(path))?;
+        write_atomic(path, &path.with_extension("json.part"), &text)
     }
 
     /// Delete the file after a stop or an arrival. A missing file is not an error.
-    pub fn clear(path: &Path) -> Result<(), String> {
+    pub fn clear(path: &Path) -> Result<(), FileError> {
         match fs::remove_file(path) {
-            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(format!("{}: {e}", path.display())),
+            Err(e) if e.kind() != std::io::ErrorKind::NotFound => Err(FileError::Io { path: path.to_path_buf(), source: e }),
             _ => Ok(()),
         }
     }

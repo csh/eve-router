@@ -4,8 +4,9 @@ use crate::theme;
 use crate::view::View;
 use petgraph::graph::NodeIndex;
 use router_core::config::{AppPaths, Config};
+use router_core::error::FileError;
 use router_core::esi::pilots::Pilots;
-use router_core::esi::store::{Keyring, TokenStore};
+use router_core::esi::store::{Keyring, StoreError, TokenStore};
 use router_core::esi::{self, active::active_path};
 use router_core::labels::Shortcuts;
 use router_core::log::{self, LogEntry};
@@ -13,6 +14,7 @@ use router_core::refresh::{self, Refresher, Setup, Snapshot, kept_route, route_n
 use router_core::route::{Route, Stop};
 use router_core::settings::{Settings, split_systems};
 use router_core::sources::nexum::{self, MapInfo};
+use router_core::startup::StartupError;
 use router_core::universe::Universe;
 use router_core::wormhole::SourceData;
 use router_core::{sde_update, startup};
@@ -71,7 +73,7 @@ impl RouterApp {
         theme::set_font(&ctx);
         let (tx, rx) = mpsc::channel();
         std::thread::spawn(move || {
-            let result = load(ctx.clone(), &tx);
+            let result = load(ctx.clone(), &tx).map_err(|e| e.to_string());
             let _ = tx.send(LoadMsg::Done(Box::new(result)));
             ctx.request_repaint();
         });
@@ -105,7 +107,7 @@ impl RouterApp {
 }
 
 /// The OS keyring as the token store, or the reason why there is none.
-fn keyring() -> Result<Box<dyn TokenStore>, String> {
+fn keyring() -> Result<Box<dyn TokenStore>, StoreError> {
     Keyring::open().map(|keyring| Box::new(keyring) as Box<dyn TokenStore>)
 }
 
@@ -123,7 +125,7 @@ fn client_id() -> Option<String> {
 
 /// The startup load, with the config file and the default SDE directory. The arguments
 /// of the command line are the first waypoints, for example `eve-router-egui Jita "New Caldari"`.
-fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, String> {
+fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, StartupError> {
     let paths = AppPaths::detect();
     let cfg = Config::load(&paths.config)?;
     // Each step wakes the window, so the splash screen shows it.
@@ -356,7 +358,7 @@ impl Session {
             None => {}
             // The route table shows the optimized order, so the status line does not.
             Some(Ok((routes, _))) => self.routes = routes,
-            Some(Err(e)) => self.status = self.settings.explain(e),
+            Some(Err(e)) => self.status = self.settings.explain(&e),
         }
     }
 
@@ -530,14 +532,14 @@ impl Session {
     pub fn save(&mut self) {
         self.status = match self.write_config() {
             Ok(()) => "Config saved!".into(),
-            Err(e) => e,
+            Err(e) => e.to_string(),
         };
     }
 
     /// Save the config. Show only an error on the status line.
     pub fn save_quietly(&mut self) {
         if let Err(e) = self.write_config() {
-            self.status = e;
+            self.status = e.to_string();
         }
     }
 
@@ -552,7 +554,7 @@ impl Session {
                 // No worker: a test, or a worker that stopped.
                 None => "Nexum settings saved. Restart to load the new map.".into(),
             },
-            Err(e) => e,
+            Err(e) => e.to_string(),
         };
     }
 
@@ -586,7 +588,7 @@ impl Session {
     }
 
     /// Copy the settings to the config, and write the config file.
-    fn write_config(&mut self) -> Result<(), String> {
+    fn write_config(&mut self) -> Result<(), FileError> {
         self.settings.store(&self.uni, &mut self.cfg);
         self.cfg.save(&self.cfg_path)
     }

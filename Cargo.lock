@@ -3317,6 +3317,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "thiserror 2.0.21",
  "tiny_http",
  "ureq",
  "webbrowser",

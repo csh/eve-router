@@ -190,6 +190,21 @@ impl Default for RouterOptions {
     }
 }
 
+/// Why a route cannot be found, or why the waypoints are not valid.
+#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+pub enum RouteError {
+    #[error("Give two or more systems")]
+    TooFewSystems,
+    #[error("No route from {from} to {to}")]
+    NoRoute { from: String, to: String },
+    #[error("Optimize order takes {max} midpoints at most. This route has {got}")]
+    TooManyMidpoints { max: usize, got: usize },
+    #[error("Unknown system \"{0}\"")]
+    UnknownSystem(String),
+    #[error("\"{name}\" matches more than one system: {}", .candidates.join(", "))]
+    AmbiguousSystem { name: String, candidates: Vec<String> },
+}
+
 pub struct Router<'a> {
     pub uni: &'a Universe,
     pub rules: BridgeRules,
@@ -450,14 +465,14 @@ impl<'a> Router<'a> {
     }
 
     /// The `n` cheapest routes through all waypoints, in order.
-    pub fn routes(&self, waypoints: &[NodeIndex], n: usize) -> Result<Vec<Route>, String> {
+    pub fn routes(&self, waypoints: &[NodeIndex], n: usize) -> Result<Vec<Route>, RouteError> {
         if waypoints.len() < 2 {
-            return Err("Give two or more systems".into());
+            return Err(RouteError::TooFewSystems);
         }
         let legs: Vec<Vec<Path>> = waypoints.par_windows(2).map(|w| self.alternatives(w[0], w[1], n)).collect();
         for (w, leg) in waypoints.windows(2).zip(&legs) {
             if leg.is_empty() {
-                return Err(format!("No route from {} to {}", self.uni.name(w[0]), self.uni.name(w[1])));
+                return Err(RouteError::NoRoute { from: self.uni.name(w[0]).to_string(), to: self.uni.name(w[1]).to_string() });
             }
         }
 
@@ -500,7 +515,7 @@ impl<'a> Router<'a> {
     /// The waypoints in the cheapest order, as a classic TSP. Each system gets one visit: a repeated
     /// midpoint merges, and a midpoint equal to the start or the destination drops out. The start and
     /// the destination stay in place. A tie keeps the given order.
-    pub fn optimize(&self, waypoints: &[NodeIndex]) -> Result<Vec<NodeIndex>, String> {
+    pub fn optimize(&self, waypoints: &[NodeIndex]) -> Result<Vec<NodeIndex>, RouteError> {
         let [from, inner @ .., to] = waypoints else {
             return Ok(waypoints.to_vec());
         };
@@ -511,7 +526,7 @@ impl<'a> Router<'a> {
             }
         }
         if midpoints.len() > MAX_MIDPOINTS {
-            return Err(format!("Optimize order takes {MAX_MIDPOINTS} midpoints at most. This route has {}", midpoints.len()));
+            return Err(RouteError::TooManyMidpoints { max: MAX_MIDPOINTS, got: midpoints.len() });
         }
         if midpoints.len() >= 2 {
             midpoints = self.best_order(*from, &midpoints, *to);

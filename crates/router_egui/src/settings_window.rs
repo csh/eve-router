@@ -408,7 +408,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                                 s.recompute();
                                 s.save();
                             }
-                            Err(e) => form.error = Some(e),
+                            Err(e) => form.error = Some(e.to_string()),
                         }
                     }
                 })
@@ -518,7 +518,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                                 form.error = None;
                                 s.nexum_saved();
                             }
-                            Err(e) => form.error = Some(e),
+                            Err(e) => form.error = Some(e.to_string()),
                         }
                     }
                 })

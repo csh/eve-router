@@ -7,7 +7,6 @@
 use oauth2::AccessToken;
 use serde::Deserialize;
 use serde::de::DeserializeOwned;
-use std::fmt;
 use std::time::{Duration, SystemTime};
 
 pub const ESI_URL: &str = "https://esi.evetech.net";
@@ -55,30 +54,21 @@ pub struct Fetched<T> {
     pub errors_left: Option<u32>,
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, thiserror::Error)]
 pub enum EsiError {
     /// 401 or 403: the token is expired, revoked or has no scope for the call.
+    #[error("ESI refused the login")]
     Auth,
     /// 420 or 429: ESI blocks the router for a time.
+    #[error("ESI limited — slowing updates")]
     Limited { retry_after: Option<Duration> },
     /// A timeout, a network error, a 5xx status or bad JSON.
+    #[error("ESI is not reachable: {0}")]
     Offline(String),
     /// Any other status.
+    #[error("ESI gave status {0}")]
     Status(u16),
 }
-
-impl fmt::Display for EsiError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            EsiError::Auth => f.write_str("ESI refused the login"),
-            EsiError::Limited { .. } => f.write_str("ESI limited — slowing updates"),
-            EsiError::Offline(e) => write!(f, "ESI is not reachable: {e}"),
-            EsiError::Status(code) => write!(f, "ESI gave status {code}"),
-        }
-    }
-}
-
-impl std::error::Error for EsiError {}
 
 /// The ESI client. One agent keeps its connections open between polls.
 #[derive(Clone)]

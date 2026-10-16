@@ -1,6 +1,7 @@
 //! The `eve-router.json` file.
 
-use crate::route::Mode;
+use crate::error::FileError;
+use crate::route::{Mode, RouteError};
 use crate::wormhole::Hubs;
 use crate::wormhole::SourceId;
 use serde::{Deserialize, Serialize};
@@ -198,47 +199,60 @@ pub struct Config {
     pub compact: bool,
 }
 
+/// Why a value of the config or of a settings field is not valid.
+#[derive(Debug, PartialEq, thiserror::Error)]
+pub enum ConfigError {
+    #[error("\"{0}\" is not a URL. Give a URL that starts with https://.")]
+    BadUrl(String),
+    #[error("Unknown hull \"{0}\"")]
+    UnknownHull(String),
+    #[error("\"{value}\" is not a TJ value. Give a number from 0 to {max}, or leave it empty for no limit.")]
+    BadTjValue { value: String, max: f32 },
+    #[error(transparent)]
+    System(#[from] RouteError),
+}
+
 /// The Nexum URL from a text field. An empty text gives no URL. The URL loses a final "/".
-pub fn parse_nexum_url(text: &str) -> Result<Option<String>, String> {
+pub fn parse_nexum_url(text: &str) -> Result<Option<String>, ConfigError> {
     let value = text.trim();
     if value.is_empty() {
         Ok(None)
     } else if value.starts_with("https://") || value.starts_with("http://") {
         Ok(Some(value.trim_end_matches('/').to_string()))
     } else {
-        Err(format!("\"{value}\" is not a URL. Give a URL that starts with https://."))
+        Err(ConfigError::BadUrl(value.to_string()))
     }
 }
 
 impl Config {
     /// Read the file. A missing file gives the default config.
-    pub fn load(path: &Path) -> Result<Config, String> {
+    pub fn load(path: &Path) -> Result<Config, FileError> {
         match fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display())),
+            Ok(text) => serde_json::from_str(&text).map_err(FileError::json(path)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
-            Err(e) => Err(format!("{}: {e}", path.display())),
+            Err(e) => Err(FileError::Io { path: path.to_path_buf(), source: e }),
         }
     }
 
     /// Write the file. Create its directory first if necessary.
-    pub fn save(&self, path: &Path) -> Result<(), String> {
+    pub fn save(&self, path: &Path) -> Result<(), FileError> {
         if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+            fs::create_dir_all(dir).map_err(FileError::io(dir))?;
         }
-        let text = serde_json::to_string_pretty(self).map_err(|e| e.to_string())?;
+        let text = serde_json::to_string_pretty(self).map_err(FileError::json(path))?;
         // The file holds the Nexum key, so only the owner can read it. The file gets its
         // mode before the router writes the key. No other user can read the key at any time.
         #[cfg(unix)]
         if self.nexum.key.is_some() {
             use std::io::Write;
             use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-            let err = |e: std::io::Error| format!("{}: {e}", path.display());
-            let mut file = fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path).map_err(err)?;
+            let mut file =
+                fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path).map_err(FileError::io(path))?;
             // The mode above applies only to a new file. This call fixes an old file.
-            file.set_permissions(fs::Permissions::from_mode(0o600)).map_err(err)?;
-            return file.write_all((text + "\n").as_bytes()).map_err(err);
+            file.set_permissions(fs::Permissions::from_mode(0o600)).map_err(FileError::io(path))?;
+            return file.write_all((text + "\n").as_bytes()).map_err(FileError::io(path));
         }
-        fs::write(path, text + "\n").map_err(|e| format!("{}: {e}", path.display()))
+        fs::write(path, text + "\n").map_err(FileError::io(path))
     }
 }
 
@@ -359,10 +373,21 @@ mod tests {
     }
 
     #[test]
+    fn a_broken_config_file_names_its_path() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        fs::write(&path, "{ not json").unwrap();
+        let error = Config::load(&path).unwrap_err();
+        assert!(matches!(error, FileError::Json { .. }), "{error:?}");
+        assert!(error.to_string().starts_with(&path.display().to_string()), "{error}");
+    }
+
+    #[test]
     fn nexum_url_text() {
         assert_eq!(parse_nexum_url(""), Ok(None));
         assert_eq!(parse_nexum_url(" https://nexum.example/ "), Ok(Some("https://nexum.example".into())));
-        assert!(parse_nexum_url("ftp://x").unwrap_err().contains("is not a URL"));
+        assert_eq!(parse_nexum_url("ftp://x"), Err(ConfigError::BadUrl("ftp://x".into())));
+        assert!(parse_nexum_url("ftp://x").unwrap_err().to_string().contains("is not a URL"));
     }
 
     #[test]

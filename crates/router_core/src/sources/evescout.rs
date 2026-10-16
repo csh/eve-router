@@ -32,8 +32,8 @@ pub struct Signature {
     pub in_signature: Option<String>,
 }
 
-pub fn parse(text: &str) -> Result<Vec<Signature>, String> {
-    serde_json::from_str(text).map_err(|e| format!("EVE-Scout signatures: {e}"))
+pub fn parse(text: &str) -> Result<Vec<Signature>, serde_json::Error> {
+    serde_json::from_str(text)
 }
 
 /// The entries that the converter did not use, by reason.
@@ -154,7 +154,7 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
             let fetched = thread.join().unwrap_or_else(|_| Err(FetchError::Offline("the fetch thread failed".into())));
             let mut report = EveScoutReport::default();
             let converted = fetched.and_then(|text| {
-                let sigs = parse(&text).map_err(FetchError::Offline)?;
+                let sigs = parse(&text).map_err(|e| FetchError::Offline(format!("EVE-Scout signatures: {e}")))?;
                 let (mut data, r) = convert(&sigs, &known, types, started);
                 data.origin = Some(origin);
                 report = r;

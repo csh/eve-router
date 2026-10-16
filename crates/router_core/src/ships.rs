@@ -4,6 +4,7 @@
 //! `groups.jsonl` one time. It keeps only the results: this table in `ships.json`, and
 //! the wormhole type table in `wormholes.json` (see `wormhole_types`).
 
+use crate::error::{FileError, SdeError, write_atomic};
 use rayon::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
@@ -17,7 +18,7 @@ pub const FILE: &str = "ships.json";
 pub const SOURCES: [&str; 3] = ["types.jsonl", "typeDogma.jsonl", "groups.jsonl"];
 
 const SHIP_CATEGORY: u32 = 6;
-const ANSIBLEX_TYPE: u32 = 35841;
+pub(crate) const ANSIBLEX_TYPE: u32 = 35841;
 /// `baseJumpBridgeCapacitorCost`, in GJ. A ship without it cannot use a bridge.
 const ATTR_BRIDGE_COST: u32 = 6364;
 /// `capacitorCapacity`, in GJ.
@@ -93,9 +94,12 @@ struct SdeAttribute {
     value: f64,
 }
 
-fn parse_lines<T: DeserializeOwned + Send>(name: &str, data: &[u8]) -> Result<Vec<T>, String> {
-    let text = std::str::from_utf8(data).map_err(|e| format!("{name}: {e}"))?;
-    text.par_lines().filter(|l| !l.trim().is_empty()).map(|l| serde_json::from_str(l).map_err(|e| format!("{name}: {e}"))).collect()
+fn parse_lines<T: DeserializeOwned + Send>(name: &str, data: &[u8]) -> Result<Vec<T>, SdeError> {
+    let text = std::str::from_utf8(data).map_err(|source| SdeError::Utf8 { name: name.into(), source })?;
+    text.par_lines()
+        .filter(|l| !l.trim().is_empty())
+        .map(|l| serde_json::from_str(l).map_err(|source| SdeError::Line { name: name.into(), source }))
+        .collect()
 }
 
 /// The 3 SDE source files, parsed. The ship table and the wormhole table both read it.
@@ -118,7 +122,7 @@ impl Sources {
 }
 
 /// Parse the 3 SDE source files, in the order of `SOURCES`.
-pub fn parse(types: &[u8], dogma: &[u8], groups: &[u8]) -> Result<Sources, String> {
+pub fn parse(types: &[u8], dogma: &[u8], groups: &[u8]) -> Result<Sources, SdeError> {
     let (types, (dogma, groups)) = rayon::join(
         || parse_lines::<SdeType>("types.jsonl", types),
         || rayon::join(|| parse_lines::<SdeTypeDogma>("typeDogma.jsonl", dogma), || parse_lines::<SdeGroup>("groups.jsonl", groups)),
@@ -129,7 +133,7 @@ pub fn parse(types: &[u8], dogma: &[u8], groups: &[u8]) -> Result<Sources, Strin
 }
 
 /// Make the ship table from the parsed SDE files.
-pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, String> {
+pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, SdeError> {
     let ship_groups: HashMap<u32, &str> = src
         .groups
         .iter()
@@ -137,9 +141,7 @@ pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, String> {
         .map(|g| (g.id, g.name.as_ref().and_then(|n| n.en.as_deref()).unwrap_or_default()))
         .collect();
 
-    let need = |attr_id: u32, what: &str| {
-        src.attr(ANSIBLEX_TYPE, attr_id).ok_or(format!("typeDogma.jsonl: the Ansiblex ({ANSIBLEX_TYPE}) has no {what}"))
-    };
+    let need = |attr_id: u32, what: &'static str| src.attr(ANSIBLEX_TYPE, attr_id).ok_or(SdeError::NoAnsiblexAttribute(what));
     let ansiblex = AnsiblexData {
         capacitor_gj: need(ATTR_CAPACITOR, "capacitorCapacity")?,
         recharge_ms: need(ATTR_RECHARGE, "rechargeRate")?,
@@ -163,23 +165,20 @@ pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, String> {
         })
         .collect();
     if ships.is_empty() {
-        return Err("types.jsonl: no published ships".into());
+        return Err(SdeError::NoShips);
     }
     ships.sort_by(|a, b| a.group.cmp(&b.group).then(a.name.cmp(&b.name)));
     Ok(ShipData { build, ansiblex, ships })
 }
 
-pub fn save(dir: &Path, data: &ShipData) -> Result<(), String> {
+pub fn save(dir: &Path, data: &ShipData) -> Result<(), FileError> {
     let path = dir.join(FILE);
-    let tmp = path.with_extension("json.part");
-    let text = serde_json::to_string(data).map_err(|e| e.to_string())?;
-    fs::write(&tmp, text).map_err(|e| format!("{}: {e}", tmp.display()))?;
-    fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))
+    let text = serde_json::to_string(data).map_err(FileError::json(&path))?;
+    write_atomic(&path, &path.with_extension("json.part"), &text)
 }
 
-pub fn load(dir: &Path) -> Result<ShipData, String> {
+pub fn load(dir: &Path) -> Result<ShipData, SdeError> {
     let path = dir.join(FILE);
-    let text =
-        fs::read_to_string(&path).map_err(|e| format!("{}: {e}. Unset {} to download it.", path.display(), crate::sde_update::SKIP_ENV))?;
-    serde_json::from_str(&text).map_err(|e| format!("{}: {e}", path.display()))
+    let text = fs::read_to_string(&path).map_err(|source| SdeError::Missing { path: path.clone(), source })?;
+    Ok(serde_json::from_str(&text).map_err(FileError::json(&path))?)
 }

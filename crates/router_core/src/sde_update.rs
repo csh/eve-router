@@ -5,6 +5,7 @@
 //! from the end of the build zip, and fetches only the entries it needs with HTTP
 //! range requests. This downloads about 1.8 MB instead of the full 99 MB zip.
 
+use crate::error::{FileError, SdeError};
 use crate::ships;
 use flate2::Crc;
 use flate2::read::DeflateDecoder;
@@ -13,7 +14,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::io::Read;
 use std::path::Path;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::Mutex;
 use std::time::Duration;
 
 /// The SDE files that the router needs. `_sde.jsonl` comes last, so an interrupted
@@ -40,7 +41,7 @@ pub enum Outcome {
     /// The check failed, but a local SDE exists. The router uses it.
     Offline {
         local: u32,
-        error: String,
+        error: SdeError,
     },
 }
 
@@ -65,7 +66,7 @@ impl Outcome {
 
 /// Make sure that `dir` holds the latest SDE files. With `skip`, do not look at the network.
 /// `on_bytes` reports the progress of a download.
-pub fn ensure(dir: &Path, skip: bool, on_bytes: OnBytes) -> Result<Outcome, String> {
+pub fn ensure(dir: &Path, skip: bool, on_bytes: OnBytes) -> Result<Outcome, SdeError> {
     if skip {
         return Ok(Outcome::Skipped);
     }
@@ -76,7 +77,7 @@ pub fn ensure(dir: &Path, skip: bool, on_bytes: OnBytes) -> Result<Outcome, Stri
         Err(error) => {
             return match local {
                 Some(local) => Ok(Outcome::Offline { local, error }),
-                None => Err(format!("Cannot download the SDE to {}: {error}", dir.display())),
+                None => Err(SdeError::Download { dir: dir.to_path_buf(), source: Box::new(error) }),
             };
         }
     };
@@ -88,7 +89,7 @@ pub fn ensure(dir: &Path, skip: bool, on_bytes: OnBytes) -> Result<Outcome, Stri
 }
 
 /// Download build `latest` into `dir`. `from` is the local build before the download.
-fn install(src: &dyn RangeSource, dir: &Path, latest: u32, on_bytes: OnBytes) -> Result<Outcome, String> {
+fn install(src: &dyn RangeSource, dir: &Path, latest: u32, on_bytes: OnBytes) -> Result<Outcome, SdeError> {
     // The local build can exist without ships.json or wormholes.json, from a version before these derived tables.
     let from = crate::sde::build_number(dir);
     let bytes = download(src, dir, on_bytes)?;
@@ -110,21 +111,25 @@ fn agent() -> ureq::Agent {
         .new_agent()
 }
 
-fn latest_build(agent: &ureq::Agent) -> Result<u32, String> {
+fn latest_build(agent: &ureq::Agent) -> Result<u32, SdeError> {
     let url = format!("{BASE_URL}/latest.jsonl");
-    let text = agent.get(&url).call().and_then(|mut r| r.body_mut().read_to_string()).map_err(|e| format!("{url}: {e}"))?;
+    let text = agent
+        .get(&url)
+        .call()
+        .and_then(|mut r| r.body_mut().read_to_string())
+        .map_err(|e| SdeError::Http { url: url.clone(), source: Box::new(e) })?;
     text.lines()
         .filter_map(|line| serde_json::from_str::<serde_json::Value>(line).ok())
         .find(|v| v["_key"] == "sde")
         .and_then(|v| v["buildNumber"].as_u64())
         .and_then(|b| u32::try_from(b).ok())
-        .ok_or_else(|| format!("{url}: no \"sde\" record with a build number"))
+        .ok_or(SdeError::NoBuild { url })
 }
 
 /// A file that gives byte ranges: a remote zip, or bytes in memory for tests.
 pub(crate) trait RangeSource: Sync {
-    fn len(&self) -> Result<u64, String>;
-    fn read(&self, start: u64, len: u64) -> Result<Vec<u8>, String>;
+    fn len(&self) -> Result<u64, SdeError>;
+    fn read(&self, start: u64, len: u64) -> Result<Vec<u8>, SdeError>;
 }
 
 struct HttpSource {
@@ -138,27 +143,33 @@ fn range_header(start: u64, len: u64) -> Option<String> {
     Some(format!("bytes={start}-{last}"))
 }
 
+impl HttpSource {
+    fn http(&self, source: ureq::Error) -> SdeError {
+        SdeError::Http { url: self.url.clone(), source: Box::new(source) }
+    }
+}
+
 impl RangeSource for HttpSource {
-    fn len(&self) -> Result<u64, String> {
-        let resp = self.agent.head(&self.url).call().map_err(|e| format!("{}: {e}", self.url))?;
+    fn len(&self) -> Result<u64, SdeError> {
+        let resp = self.agent.head(&self.url).call().map_err(|e| self.http(e))?;
         resp.headers()
             .get("content-length")
             .and_then(|v| v.to_str().ok()?.parse().ok())
-            .ok_or_else(|| format!("{}: no Content-Length", self.url))
+            .ok_or_else(|| SdeError::NoContentLength { url: self.url.clone() })
     }
 
-    fn read(&self, start: u64, len: u64) -> Result<Vec<u8>, String> {
+    fn read(&self, start: u64, len: u64) -> Result<Vec<u8>, SdeError> {
         let Some(range) = range_header(start, len) else { return Ok(Vec::new()) };
-        let mut resp = self.agent.get(&self.url).header("Range", &range).call().map_err(|e| format!("{}: {e}", self.url))?;
+        let mut resp = self.agent.get(&self.url).header("Range", &range).call().map_err(|e| self.http(e))?;
         // 206 Partial Content. A 200 is the full 99 MB zip, so stop.
         if resp.status().as_u16() != 206 {
-            return Err(format!("{}: the server ignored the range request ({})", self.url, resp.status()));
+            return Err(SdeError::RangeIgnored { url: self.url.clone(), status: resp.status().as_u16() });
         }
         // The ureq limit fails when the body reaches it, so allow one more byte. The check below
         // still catches a wrong length.
-        let body = resp.body_mut().with_config().limit(len + 1).read_to_vec().map_err(|e| e.to_string())?;
+        let body = resp.body_mut().with_config().limit(len + 1).read_to_vec().map_err(|e| self.http(e))?;
         if body.len() as u64 != len {
-            return Err(format!("{}: asked for {len} bytes, got {}", self.url, body.len()));
+            return Err(SdeError::ShortBody { url: self.url.clone(), want: len, got: body.len() as u64 });
         }
         Ok(body)
     }
@@ -189,17 +200,17 @@ const LOCAL_SIG: u32 = 0x0403_4b50;
 const MAX_RESERVE: usize = 256 * 1024 * 1024;
 
 /// Read the central directory. The end record is in the last 64 KiB + 22 bytes of the zip.
-fn read_directory(src: &dyn RangeSource) -> Result<Vec<Entry>, String> {
+fn read_directory(src: &dyn RangeSource) -> Result<Vec<Entry>, SdeError> {
     let total = src.len()?;
     let tail_len = total.min(65_557);
     let tail = src.read(total - tail_len, tail_len)?;
-    let end = tail.windows(4).rposition(|w| w == EOCD_SIG).ok_or("no zip end record")?;
+    let end = tail.windows(4).rposition(|w| w == EOCD_SIG).ok_or_else(|| SdeError::Zip("no zip end record".into()))?;
     if tail.len() < end + 22 {
-        return Err("short zip end record".into());
+        return Err(SdeError::Zip("short zip end record".into()));
     }
     let (size, offset) = (u32_at(&tail, end + 12), u32_at(&tail, end + 16));
     if offset == u32::MAX {
-        return Err("zip64 archives are not supported".into());
+        return Err(SdeError::Zip("zip64 archives are not supported".into()));
     }
     let dir = src.read(offset.into(), size.into())?;
     let mut entries = Vec::new();
@@ -208,7 +219,7 @@ fn read_directory(src: &dyn RangeSource) -> Result<Vec<Entry>, String> {
         let name_len = u16_at(&dir, i + 28) as usize;
         let extra_len = u16_at(&dir, i + 30) as usize;
         let comment_len = u16_at(&dir, i + 32) as usize;
-        let name = dir.get(i + 46..i + 46 + name_len).ok_or("short zip directory")?;
+        let name = dir.get(i + 46..i + 46 + name_len).ok_or_else(|| SdeError::Zip("short zip directory".into()))?;
         entries.push(Entry {
             name: String::from_utf8_lossy(name).into_owned(),
             method: u16_at(&dir, i + 10),
@@ -226,7 +237,7 @@ fn read_directory(src: &dyn RangeSource) -> Result<Vec<Entry>, String> {
 const CHUNK: u64 = 1024 * 1024;
 
 /// Read `len` bytes from `start` in requests of at most `CHUNK` bytes. `step` gets the size of each part.
-fn read_chunks(src: &dyn RangeSource, start: u64, len: u64, step: &dyn Fn(u64)) -> Result<Vec<u8>, String> {
+fn read_chunks(src: &dyn RangeSource, start: u64, len: u64, step: &dyn Fn(u64)) -> Result<Vec<u8>, SdeError> {
     let mut out = Vec::with_capacity(usize::try_from(len).unwrap_or(0).min(MAX_RESERVE));
     let mut at = 0;
     while at < len {
@@ -240,8 +251,8 @@ fn read_chunks(src: &dyn RangeSource, start: u64, len: u64, step: &dyn Fn(u64)) 
 
 /// Fetch and decompress one entry. Make sure that its size and CRC-32 are correct.
 /// `step` gets the number of compressed bytes after each part of the download.
-fn extract(src: &dyn RangeSource, entry: &Entry, step: &dyn Fn(u64)) -> Result<Vec<u8>, String> {
-    let err = |msg: &str| format!("{}: {msg}", entry.name);
+fn extract(src: &dyn RangeSource, entry: &Entry, step: &dyn Fn(u64)) -> Result<Vec<u8>, SdeError> {
+    let err = |msg: &str| SdeError::Entry { name: entry.name.clone(), message: msg.to_string() };
     let header = src.read(entry.offset, 30)?;
     if u32_at(&header, 0) != LOCAL_SIG {
         return Err(err("bad local header"));
@@ -275,17 +286,22 @@ fn inflate(data: &[u8], size: u64) -> std::io::Result<Vec<u8>> {
 /// Fetch `FILES` from the zip into `dir`, and make `ships.json` from the ship source files.
 /// The source files are not kept. Return the number of compressed bytes. `on_bytes` gets
 /// `(done, total)` at the start and after each part of the download.
-pub(crate) fn download(src: &dyn RangeSource, dir: &Path, on_bytes: OnBytes) -> Result<u64, String> {
+pub(crate) fn download(src: &dyn RangeSource, dir: &Path, on_bytes: OnBytes) -> Result<u64, SdeError> {
     let entries = read_directory(src)?;
     let names: Vec<&str> = FILES.iter().chain(&ships::SOURCES).copied().collect();
     let wanted: Vec<&Entry> = names
         .iter()
-        .map(|&f| entries.iter().find(|e| e.name == f).ok_or(format!("{f} is not in the SDE zip")))
+        .map(|&f| entries.iter().find(|e| e.name == f).ok_or_else(|| SdeError::NotInZip(f.to_string())))
         .collect::<Result<_, _>>()?;
     let total: u64 = wanted.iter().map(|e| e.compressed).sum();
-    let done = AtomicU64::new(0);
+    let done = Mutex::new(0u64);
     on_bytes(0, total);
-    let step = |part: u64| on_bytes(done.fetch_add(part, Ordering::Relaxed) + part, total);
+    // The lock covers the report, so the reports come in order and `done` never goes back.
+    let step = |part: u64| {
+        let mut done = done.lock().unwrap_or_else(|e| e.into_inner());
+        *done += part;
+        on_bytes(*done, total);
+    };
     // The entries are independent, so fetch them at the same time.
     let mut files: HashMap<&str, Vec<u8>> =
         wanted.par_iter().map(|e| extract(src, e, &step).map(|data| (e.name.as_str(), data))).collect::<Result<_, _>>()?;
@@ -297,7 +313,7 @@ pub(crate) fn download(src: &dyn RangeSource, dir: &Path, on_bytes: OnBytes) -> 
     let wormhole_data = crate::wormhole_types::derive(build, &sources);
     drop(sources);
 
-    fs::create_dir_all(dir).map_err(|e| format!("{}: {e}", dir.display()))?;
+    fs::create_dir_all(dir).map_err(FileError::io(dir))?;
     ships::save(dir, &ship_data)?;
     crate::wormhole_types::save(dir, &wormhole_data)?;
     // FILES ends with _sde.jsonl, so the build number changes last.
@@ -306,8 +322,8 @@ pub(crate) fn download(src: &dyn RangeSource, dir: &Path, on_bytes: OnBytes) -> 
         // Write a temporary file, then rename it, so a reader never sees half a file.
         let path = dir.join(name);
         let tmp = path.with_extension("jsonl.part");
-        fs::write(&tmp, data).map_err(|e| format!("{}: {e}", tmp.display()))?;
-        fs::rename(&tmp, &path).map_err(|e| format!("{}: {e}", path.display()))?;
+        fs::write(&tmp, data).map_err(FileError::io(&tmp))?;
+        fs::rename(&tmp, &path).map_err(FileError::io(&path))?;
     }
     Ok(total)
 }
@@ -325,12 +341,12 @@ mod tests {
 
     /// A zip in memory.
     impl RangeSource for Vec<u8> {
-        fn len(&self) -> Result<u64, String> {
+        fn len(&self) -> Result<u64, SdeError> {
             Ok(Vec::len(self) as u64)
         }
 
-        fn read(&self, start: u64, len: u64) -> Result<Vec<u8>, String> {
-            self.get(start as usize..(start + len) as usize).map(<[u8]>::to_vec).ok_or("range out of bounds".into())
+        fn read(&self, start: u64, len: u64) -> Result<Vec<u8>, SdeError> {
+            self.get(start as usize..(start + len) as usize).map(<[u8]>::to_vec).ok_or_else(|| SdeError::Zip("range out of bounds".into()))
         }
     }
 
@@ -371,7 +387,8 @@ mod tests {
         let seen = seen.into_inner().unwrap();
         assert_eq!(seen.first(), Some(&(0, total)), "the first report is the start");
         assert_eq!(seen.last(), Some(&(total, total)), "the last report is the end");
-        // The files download at the same time, so the reports can come in any order.
+        // The files download at the same time, but the reports keep their order.
+        assert!(seen.windows(2).all(|w| w[0].0 <= w[1].0), "{seen:?}");
         assert!(seen.iter().all(|&(done, t)| t == total && done <= total));
     }
 
@@ -416,7 +433,7 @@ mod tests {
         assert_eq!(text(updated(Some(7))).unwrap(), "Completed SDE build 7 (1.8 MB) in sde");
         assert_eq!(text(updated(Some(6))).unwrap(), "Updated the SDE from build 6 to build 7 (1.8 MB) in sde");
         assert_eq!(text(updated(None)).unwrap(), "Downloaded SDE build 7 (1.8 MB) to sde");
-        let offline = Outcome::Offline { local: 6, error: "timeout".into() };
+        let offline = Outcome::Offline { local: 6, error: SdeError::Zip("timeout".into()) };
         assert_eq!(text(offline).unwrap(), "Cannot check for a new SDE. Using local build 6. Cause: timeout");
     }
 

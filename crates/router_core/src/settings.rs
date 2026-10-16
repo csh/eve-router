@@ -1,8 +1,8 @@
 //! The route settings, and the system names of the user input.
 
 use crate::ansiblex::{BridgeRules, HullTable, same_hull};
-use crate::config::{self, AvoidName, Config};
-use crate::route::{DEFAULT_CAP_WEIGHT, DEFAULT_UNKNOWN_SIG_PENALTY, JUMP, Mode, PENALTY, Router, RouterOptions};
+use crate::config::{self, AvoidName, Config, ConfigError};
+use crate::route::{DEFAULT_CAP_WEIGHT, DEFAULT_UNKNOWN_SIG_PENALTY, JUMP, Mode, PENALTY, RouteError, Router, RouterOptions};
 use crate::universe::Universe;
 use crate::wormhole;
 use petgraph::graph::NodeIndex;
@@ -182,13 +182,13 @@ pub struct Settings {
 
 impl Settings {
     /// The settings from the config.
-    pub fn from_config(cfg: &Config, uni: &Universe, hulls: Arc<HullTable>) -> Result<Settings, String> {
+    pub fn from_config(cfg: &Config, uni: &Universe, hulls: Arc<HullTable>) -> Result<Settings, ConfigError> {
         let capital = match &cfg.capital {
             Some(name) => Some(resolve_all(uni, std::slice::from_ref(name))?[0]),
             None => None,
         };
         let hull = match &cfg.hull {
-            Some(name) => Some(hulls.find(name).ok_or_else(|| format!("Unknown hull \"{name}\""))?),
+            Some(name) => Some(hulls.find(name).ok_or_else(|| ConfigError::UnknownHull(name.clone()))?),
             None => None,
         };
         Ok(Settings {
@@ -264,13 +264,13 @@ impl Settings {
 
     /// The text of a route error. A "No route" error gets a hint while a "Never" entry is on the
     /// avoid list, because only such an entry can block every route.
-    pub fn explain(&self, error: String) -> String {
+    pub fn explain(&self, error: &RouteError) -> String {
         let never = self.avoid.systems.iter().any(|e| e.never) || self.avoid.regions.iter().any(|e| e.never);
-        if never && error.starts_with("No route") { format!("{error}. {NO_ROUTE_HINT}") } else { error }
+        if never && matches!(error, RouteError::NoRoute { .. }) { format!("{error}. {NO_ROUTE_HINT}") } else { error.to_string() }
     }
 
     /// The waypoints in the order to route them, and a status text if the order changed.
-    pub fn order(&self, router: &Router, nodes: &[NodeIndex]) -> Result<(Vec<NodeIndex>, Option<String>), String> {
+    pub fn order(&self, router: &Router, nodes: &[NodeIndex]) -> Result<(Vec<NodeIndex>, Option<String>), RouteError> {
         if !self.optimize {
             return Ok((nodes.to_vec(), None));
         }
@@ -290,7 +290,7 @@ pub fn split_systems(input: &str) -> Vec<String> {
 }
 
 /// The max TJ for one bridge jump, from a text field. An empty text gives no limit.
-pub fn parse_max_cap(text: &str, hulls: &HullTable) -> Result<Option<f32>, String> {
+pub fn parse_max_cap(text: &str, hulls: &HullTable) -> Result<Option<f32>, ConfigError> {
     let value = text.trim();
     if value.is_empty() {
         return Ok(None);
@@ -298,17 +298,17 @@ pub fn parse_max_cap(text: &str, hulls: &HullTable) -> Result<Option<f32>, Strin
     let max = hulls.gate_capacitor_tj;
     match value.parse::<f32>() {
         Ok(tj) if (0.0..=max).contains(&tj) => Ok(Some(tj)),
-        _ => Err(format!("\"{value}\" is not a TJ value. Give a number from 0 to {max}, or leave it empty for no limit.")),
+        _ => Err(ConfigError::BadTjValue { value: value.to_string(), max }),
     }
 }
 
-pub fn resolve_all(uni: &Universe, names: &[String]) -> Result<Vec<NodeIndex>, String> {
+pub fn resolve_all(uni: &Universe, names: &[String]) -> Result<Vec<NodeIndex>, RouteError> {
     names
         .iter()
         .map(|name| {
             uni.resolve(name).map_err(|candidates| match candidates.as_slice() {
-                [] => format!("Unknown system \"{name}\""),
-                c => format!("\"{name}\" matches more than one system: {}", c.join(", ")),
+                [] => RouteError::UnknownSystem(name.clone()),
+                _ => RouteError::AmbiguousSystem { name: name.clone(), candidates },
             })
         })
         .collect()
@@ -491,16 +491,18 @@ mod tests {
     fn a_no_route_error_points_at_a_never_entry() {
         let uni = overlay_universe();
         let mut s = settings(&uni, None);
-        let error = "No route from Jita to Perimeter".to_string();
-        assert_eq!(s.explain(error.clone()), error);
+        let error = RouteError::NoRoute { from: "Jita".into(), to: "Perimeter".into() };
+        let text = error.to_string();
+        assert_eq!(text, "No route from Jita to Perimeter");
+        assert_eq!(s.explain(&error), text);
         // A "prefer" entry never blocks a route, so it gets no hint.
         let perimeter = uni.exact("Perimeter").unwrap();
         s.avoid.add_system(perimeter);
-        assert_eq!(s.explain(error.clone()), error);
+        assert_eq!(s.explain(&error), text);
         s.avoid.set_system_never(perimeter, true);
-        assert_eq!(s.explain(error.clone()), format!("{error}. {NO_ROUTE_HINT}"));
+        assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_HINT}"));
         // Another error stays as it is.
-        assert_eq!(s.explain("Give two or more systems".into()), "Give two or more systems");
+        assert_eq!(s.explain(&RouteError::TooFewSystems), "Give two or more systems");
     }
 
     #[test]
@@ -535,7 +537,7 @@ mod tests {
         // Never: no route exists, and the error points at the avoid list.
         s.avoid.set_system_never(point, true);
         let error = routes(&s).err().expect("no route");
-        assert_eq!(s.explain(error), "No route from New Eden to Dead End. Your avoid list might be in the way.");
+        assert_eq!(s.explain(&error), "No route from New Eden to Dead End. Your avoid list might be in the way.");
 
         // Back to Prefer: the route is there again.
         s.avoid.set_system_never(point, false);
@@ -588,10 +590,23 @@ mod tests {
     }
 
     #[test]
+    fn a_system_name_gives_a_typed_error() {
+        let uni = overlay_universe();
+        let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        assert_eq!(resolve_all(&uni, &names(&["Nowhere"])), Err(RouteError::UnknownSystem("Nowhere".into())));
+        assert_eq!(resolve_all(&uni, &names(&["Nowhere"])).unwrap_err().to_string(), "Unknown system \"Nowhere\"");
+        // "A" is the first letter of many system names.
+        let Err(RouteError::AmbiguousSystem { name, candidates }) = resolve_all(&uni, &names(&["A"])) else { panic!("not ambiguous") };
+        assert_eq!(name, "A");
+        assert!(candidates.len() > 1, "{candidates:?}");
+    }
+
+    #[test]
     fn max_cap_text() {
         assert_eq!(parse_max_cap(" ", &hulls()), Ok(None));
         assert_eq!(parse_max_cap("36.5", &hulls()), Ok(Some(36.5)));
-        assert!(parse_max_cap("-1", &hulls()).unwrap_err().contains("is not a TJ value"));
+        assert_eq!(parse_max_cap("-1", &hulls()), Err(ConfigError::BadTjValue { value: "-1".into(), max: 1250.0 }));
+        assert!(parse_max_cap("-1", &hulls()).unwrap_err().to_string().contains("is not a TJ value"));
         assert!(parse_max_cap("lots", &hulls()).is_err());
     }
 

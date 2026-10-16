@@ -3,7 +3,8 @@
 //! `load` starts the Nexum and EVE-Scout fetches first, so they run at the same time as the SDE
 //! update. It tells the caller about each step with `Progress`, for the splash screen.
 
-use crate::config::{self, AppPaths, Config};
+use crate::config::{self, AppPaths, Config, ConfigError};
+use crate::error::{FileError, SdeError};
 use crate::overlay::{self, OverlayReport};
 use crate::refresh::{self, Snapshot};
 use crate::sde_update::{self, Outcome};
@@ -50,6 +51,17 @@ impl Progress {
     }
 }
 
+/// Why the startup load failed.
+#[derive(Debug, thiserror::Error)]
+pub enum StartupError {
+    #[error(transparent)]
+    Sde(#[from] SdeError),
+    #[error(transparent)]
+    File(#[from] FileError),
+    #[error(transparent)]
+    Config(#[from] ConfigError),
+}
+
 /// The loaded map, with the overlays.
 pub struct Loaded {
     /// What the SDE update did. `Outcome::message` gives the status line.
@@ -68,7 +80,7 @@ pub struct Loaded {
 /// Update the SDE in `paths.sde`, load the map and add the overlays and the wormholes.
 /// `skip_sde_check` skips the network check of the SDE. `progress` gets each step. It can run on
 /// any thread of the load, so it must be quick.
-pub fn load(cfg: &Config, paths: &AppPaths, skip_sde_check: bool, progress: impl Fn(Progress) + Sync) -> Result<Loaded, String> {
+pub fn load(cfg: &Config, paths: &AppPaths, skip_sde_check: bool, progress: impl Fn(Progress) + Sync) -> Result<Loaded, StartupError> {
     // Nexum data comes only from the API. EVE-Scout is public, so the router always fetches it.
     // The Thera and Turnur switches act at route time, so a switch works with no restart.
     let nexum = nexum::start(&cfg.nexum, paths.cache_file(SourceId::Nexum), wormhole::now());
