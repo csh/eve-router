@@ -8,7 +8,7 @@ use crate::search::{Pick, SearchBox};
 use crate::settings_window::{self, Popup, SettingsForm};
 use crate::strip;
 use crate::theme::{self, panel};
-use crate::widgets::{CutButton, UiExt};
+use crate::widgets::{AppButton, UiExt};
 use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
 use petgraph::graph::NodeIndex;
@@ -425,7 +425,7 @@ impl View {
                 0 => "Avoid".to_string(),
                 n => format!("Avoid ({n})"),
             };
-            let button = ui.add_enabled(!locked, CutButton::new(avoid)).on_hover_text("Systems and regions that routes avoid");
+            let button = ui.add_enabled(!locked, AppButton::new(avoid)).on_hover_text("Systems and regions that routes avoid");
             if button.clicked() {
                 self.popup = Some(Popup::Avoid { confirm: false, search: SearchBox::new("avoid-search"), region: String::new() });
                 ui.close();
@@ -434,7 +434,7 @@ impl View {
             if self.pilots.characters_button(ui, s) {
                 ui.close();
             }
-            if ui.cut_button("Settings").clicked() {
+            if ui.app_button("Settings").clicked() {
                 self.settings = Some(SettingsForm::new(s));
                 ui.close();
             }
@@ -448,13 +448,13 @@ impl View {
             n => format!("Avoid ({n})"),
         };
         let locked = s.pilots.active.is_some();
-        let button = ui.add_enabled(!locked, CutButton::new(avoid)).on_hover_text("Systems and regions that routes avoid");
+        let button = ui.add_enabled(!locked, AppButton::new(avoid)).on_hover_text("Systems and regions that routes avoid");
         if button.clicked() {
             self.popup = Some(Popup::Avoid { confirm: false, search: SearchBox::new("avoid-search"), region: String::new() });
         }
         button.on_disabled_hover_text(settings_window::LOCKED);
         self.pilots.characters_button(ui, s);
-        let settings = ui.cut_button(if short { "⚙" } else { "⚙ Settings" });
+        let settings = ui.app_button(if short { "⚙" } else { "⚙ Settings" });
         let settings = if short { settings.on_hover_text("Settings") } else { settings };
         if settings.clicked() {
             self.settings = Some(SettingsForm::new(s));
@@ -468,7 +468,7 @@ impl View {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // The right-to-left layout draws the Settings button first, so it sits at the right edge.
-                if ui.cut_button("⚙ Settings").clicked() {
+                if ui.app_button("⚙ Settings").clicked() {
                     self.settings = Some(SettingsForm::new(s));
                 }
                 let avoid = match s.settings.avoid.len() {
@@ -476,7 +476,7 @@ impl View {
                     n => format!("Avoid ({n})"),
                 };
                 let locked = s.pilots.active.is_some();
-                let button = ui.add_enabled(!locked, CutButton::new(avoid)).on_hover_text("Systems and regions that routes avoid");
+                let button = ui.add_enabled(!locked, AppButton::new(avoid)).on_hover_text("Systems and regions that routes avoid");
                 if button.clicked() {
                     self.popup = Some(Popup::Avoid { confirm: false, search: SearchBox::new("avoid-search"), region: String::new() });
                 }
@@ -513,25 +513,25 @@ impl View {
                     let hint = "Plan for the ship of a character, or for a hull that you pick";
                     let pilot = pilot_label(&s.settings, &s.pilots);
                     if rtl {
-                        if ui.cut_button(pilot).on_hover_text(hint).clicked() {
+                        if ui.app_button(pilot).on_hover_text(hint).clicked() {
                             self.popup = Some(Popup::Pilot { filter: String::new() });
                         }
                         ui.label(theme::header_text("Pilot"));
                     } else {
                         ui.label(theme::header_text("Pilot"));
-                        if ui.cut_button(pilot).on_hover_text(hint).clicked() {
+                        if ui.app_button(pilot).on_hover_text(hint).clicked() {
                             self.popup = Some(Popup::Pilot { filter: String::new() });
                         }
                     }
                 }
                 1 => {
                     let hint = "Add many systems at once: one name for each line, or names separated by commas";
-                    if ui.cut_button("Paste list…").on_hover_text(hint).clicked() {
+                    if ui.app_button("Paste list…").on_hover_text(hint).clicked() {
                         self.popup = Some(Popup::List { text: String::new(), problems: Vec::new() });
                     }
                 }
                 _ => {
-                    if ui.add(CutButton::new("+ Add waypoint").primary()).clicked() {
+                    if ui.add(AppButton::new("+ Add waypoint").primary()).clicked() {
                         match self.search.take_highlighted() {
                             Some(node) => s.add_waypoint(node),
                             None => self.search.focus(ui),
@@ -639,7 +639,7 @@ impl View {
                                     ("Move down", Edit::MoveDown(i), i < last),
                                     ("Remove", Edit::Remove(i), true),
                                 ] {
-                                    if ui.add_enabled(enabled, CutButton::new(label)).clicked() {
+                                    if ui.add_enabled(enabled, AppButton::new(label)).clicked() {
                                         edit = Some(action);
                                         ui.close();
                                     }
@@ -652,10 +652,10 @@ impl View {
             ui.add_space(4.0);
             ui.horizontal(|ui| {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                    if ui.cut_button("Clear route").clicked() {
+                    if ui.app_button("Clear route").clicked() {
                         s.clear();
                     }
-                    if ui.add_enabled(s.waypoints.len() > 1, CutButton::new("Reverse")).clicked() {
+                    if ui.add_enabled(s.waypoints.len() > 1, AppButton::new("Reverse")).clicked() {
                         s.reverse();
                     }
                 });
@@ -676,14 +676,14 @@ impl View {
 fn count_stepper(ui: &mut Ui, s: &mut Session) {
     let rtl = ui.layout().prefer_right_to_left();
     let minus = |ui: &mut Ui, s: &mut Session| {
-        if ui.add_enabled(s.settings.top > 1, CutButton::new("−")).clicked() {
+        if ui.add_enabled(s.settings.top > 1, AppButton::new("−")).clicked() {
             s.settings.top -= 1;
             s.recompute();
             s.save_quietly();
         }
     };
     let plus = |ui: &mut Ui, s: &mut Session| {
-        if ui.cut_button("+").clicked() {
+        if ui.app_button("+").clicked() {
             s.settings.top += 1;
             s.recompute();
             s.save_quietly();
@@ -706,7 +706,7 @@ fn bridges_toggle(ui: &mut Ui, s: &mut Session) {
         Some(_) => "off (no capital)",
         None => on_off(s.settings.bridges),
     };
-    let response = ui.add(CutButton::new(format!("Jump bridges: {bridges}")).selected(s.settings.bridges && blocked.is_none()));
+    let response = ui.add(AppButton::new(format!("Jump bridges: {bridges}")).selected(s.settings.bridges && blocked.is_none()));
     if response.clicked() {
         s.settings.bridges = !s.settings.bridges;
         s.recompute();
@@ -717,7 +717,7 @@ fn bridges_toggle(ui: &mut Ui, s: &mut Session) {
 }
 
 fn wormholes_toggle(ui: &mut Ui, s: &mut Session) {
-    if ui.add(CutButton::new(format!("Wormholes: {}", on_off(s.settings.wormholes))).selected(s.settings.wormholes)).clicked() {
+    if ui.add(AppButton::new(format!("Wormholes: {}", on_off(s.settings.wormholes))).selected(s.settings.wormholes)).clicked() {
         s.settings.wormholes = !s.settings.wormholes;
         s.recompute();
     }
@@ -1007,7 +1007,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
                         let avoid = &s.settings.avoid;
                         let system =
                             if avoid.has_system(node) { format!("Stop avoiding {}", sys.name) } else { format!("Avoid {}", sys.name) };
-                        if ui.cut_button(system).clicked() {
+                        if ui.app_button(system).clicked() {
                             toggle = Some(Toggle::System(node));
                             ui.close();
                         }
@@ -1016,7 +1016,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
                         } else {
                             format!("Avoid {}", sys.region)
                         };
-                        if ui.cut_button(region).clicked() {
+                        if ui.app_button(region).clicked() {
                             toggle = Some(Toggle::Region(sys.region.clone()));
                             ui.close();
                         }

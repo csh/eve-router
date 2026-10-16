@@ -3,7 +3,7 @@
 use crate::app::Session;
 use crate::notice::Level;
 use crate::theme::{self, panel, panel_with};
-use crate::widgets::{CutButton, UiExt};
+use crate::widgets::{AppButton, UiExt};
 use egui::load::SizedTexture;
 use egui::{
     Align, Color32, ColorImage, CornerRadius, Frame, Id, Label, Layout, Margin, Modal, RichText, Sense, Stroke, StrokeKind, TextEdit,
@@ -277,7 +277,7 @@ impl PilotsUi {
             return false;
         }
         let count = s.pilots.characters().len();
-        let clicked = ui.cut_button(format!("Characters ({count})")).clicked();
+        let clicked = ui.app_button(format!("Characters ({count})")).clicked();
         if clicked {
             self.characters_open = true;
         }
@@ -319,10 +319,10 @@ impl PilotsUi {
                 );
                 ui.label(RichText::new("No system keyring found. Keep login for this session only?").color(theme::TEXT));
                 ui.horizontal(|ui| {
-                    if ui.cut_button("Session only").clicked() {
+                    if ui.app_button("Session only").clicked() {
                         s.pilots.use_session_only();
                     }
-                    if ui.cut_button("Cancel").clicked() {
+                    if ui.app_button("Cancel").clicked() {
                         self.characters_open = false;
                     }
                 });
@@ -341,12 +341,12 @@ impl PilotsUi {
                         ship_row(ui, row, &s.settings.hulls);
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.cut_button("Remove").clicked() {
+                        if ui.app_button("Remove").clicked() {
                             self.remove = Some(row.id);
                         }
                         let again = if row.live.expired { Some("Log in again") } else { row.needs_reauth.then_some("Re-authorize") };
                         if let Some(text) = again
-                            && ui.cut_button(text).clicked()
+                            && ui.app_button(text).clicked()
                         {
                             self.login(s);
                         }
@@ -356,11 +356,11 @@ impl PilotsUi {
                     ui.horizontal(|ui| {
                         let text = format!("Remove {}? This revokes access and deletes stored tokens.", row.name);
                         ui.label(RichText::new(text).color(theme::WARN));
-                        if ui.cut_button("Remove").clicked() {
+                        if ui.app_button("Remove").clicked() {
                             s.pilots.remove(row.id);
                             self.remove = None;
                         }
-                        if ui.cut_button("Cancel").clicked() {
+                        if ui.app_button("Cancel").clicked() {
                             self.remove = None;
                         }
                     });
@@ -372,14 +372,14 @@ impl PilotsUi {
             ui.horizontal(|ui| {
                 let blocked = s.pilots.login_blocked();
                 if s.pilots.login.is_none() {
-                    let add = ui.add_enabled(blocked.is_none(), CutButton::new("Add character").primary());
+                    let add = ui.add_enabled(blocked.is_none(), AppButton::new("Add character").primary());
                     if let Some(reason) = &blocked {
                         add.on_disabled_hover_text(reason);
                     } else if add.clicked() {
                         self.login(s);
                     }
                 }
-                if ui.cut_button("Close").clicked() {
+                if ui.app_button("Close").clicked() {
                     self.characters_open = false;
                 }
             });
@@ -413,7 +413,7 @@ impl PilotsUi {
             let field =
                 ui.add(TextEdit::singleline(&mut self.paste).hint_text("http://localhost:21404/callback?code=…").desired_width(360.0));
             let enter = field.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
-            if (ui.add_enabled(!busy && !self.paste.trim().is_empty(), CutButton::new("Use URL").primary()).clicked() || enter) && !busy {
+            if (ui.add_enabled(!busy && !self.paste.trim().is_empty(), AppButton::new("Use URL").primary()).clicked() || enter) && !busy {
                 s.pilots.paste(&self.paste);
             }
         });
@@ -426,7 +426,7 @@ impl PilotsUi {
         if let Some(e) = error {
             ui.label(RichText::new(e).color(theme::ERROR));
         }
-        if ui.cut_button("Cancel login").clicked() {
+        if ui.app_button("Cancel login").clicked() {
             s.pilots.cancel_login();
             self.start_after_login = None;
         }
@@ -462,10 +462,10 @@ impl PilotsUi {
                     }
                     ui.add_space(6.0);
                     ui.horizontal(|ui| {
-                        if ui.add(CutButton::new("Continue").primary()).clicked() {
+                        if ui.add(AppButton::new("Continue").primary()).clicked() {
                             next = Some((route, *chosen));
                         }
-                        close = ui.cut_button("Cancel").clicked();
+                        close = ui.app_button("Cancel").clicked();
                     });
                 }
                 Start::Confirm(plan) => {
@@ -491,7 +491,7 @@ impl PilotsUi {
                     if let Some(flown) = &plan.flown {
                         let planned = s.settings.rules.hull.as_deref().map_or("no hull".into(), hull_label);
                         ui.label(RichText::new(format!("Planned for {planned}. {name} flies a {}.", flown.name)).color(theme::WARN));
-                        if ui.cut_button(format!("Plan for {}", flown.name)).clicked() {
+                        if ui.app_button(format!("Plan for {}", flown.name)).clicked() {
                             plan_for = Some((plan.planned.character, flown.name.clone()));
                         }
                     }
@@ -500,23 +500,23 @@ impl PilotsUi {
                         let send = if plan.online == Some(false) { "Send anyway" } else { "Send" };
                         match (&here, &plan.from_here) {
                             (Some(here), Some(from_here)) => {
-                                if ui.add(CutButton::new(format!("Route from {here}")).primary()).clicked() {
+                                if ui.add(AppButton::new(format!("Route from {here}")).primary()).clicked() {
                                     s.pilots.start_route(from_here.clone());
                                     close = true;
                                 }
-                                if ui.cut_button("Send as planned").clicked() {
+                                if ui.app_button("Send as planned").clicked() {
                                     s.pilots.start_route(plan.planned.clone());
                                     close = true;
                                 }
                             }
                             _ => {
-                                if ui.add(CutButton::new(send).primary()).clicked() {
+                                if ui.add(AppButton::new(send).primary()).clicked() {
                                     s.pilots.start_route(plan.planned.clone());
                                     close = true;
                                 }
                             }
                         }
-                        if ui.cut_button("Cancel").clicked() {
+                        if ui.app_button("Cancel").clicked() {
                             close = true;
                         }
                     });
@@ -559,10 +559,10 @@ impl PilotsUi {
                     crate::settings_window::title(ui, "Send failed");
                     ui.label(RichText::new(error).color(theme::WARN));
                     ui.horizontal(|ui| {
-                        if ui.cut_button("Retry").clicked() {
+                        if ui.app_button("Retry").clicked() {
                             s.pilots.retry_send();
                         }
-                        if ui.cut_button("Cancel").clicked() {
+                        if ui.app_button("Cancel").clicked() {
                             s.pilots.cancel_send();
                         }
                     });
@@ -610,7 +610,7 @@ impl PilotsUi {
         let destination = destination(s, &active);
         let jumps = active.jumps();
         let mut stop = false;
-        let header = |ui: &mut Ui| stop = ui.cut_button("Stop route").clicked();
+        let header = |ui: &mut Ui| stop = ui.app_button("Stop route").clicked();
         panel_with(ui, "Active route", header, false, |ui| {
             ui.horizontal(|ui| {
                 // Oxanium and the egui fallback fonts have no right arrow glyph. Oxanium has "»".
@@ -646,21 +646,21 @@ impl PilotsUi {
         if let Some(error) = send_error {
             bar(ui, theme::WARN, &mut |ui| {
                 ui.label(RichText::new(&error).color(theme::WARN));
-                if ui.cut_button("Retry").clicked() {
+                if ui.app_button("Retry").clicked() {
                     s.pilots.retry_send();
                 }
             });
         } else if live.expired {
             bar(ui, theme::WARN, &mut |ui| {
                 ui.label(RichText::new(format!("Tracking paused — {name}'s login expired.")).color(theme::WARN));
-                if ui.cut_button("Log in again").clicked() {
+                if ui.app_button("Log in again").clicked() {
                     self.login(s);
                 }
             });
         } else if active.arrived() {
             bar(ui, theme::OK, &mut |ui| {
                 ui.label(RichText::new(format!("Arrived at {destination}.")).color(theme::OK));
-                if ui.cut_button("Done").clicked() {
+                if ui.app_button("Done").clicked() {
                     s.pilots.stop_route();
                 }
             });
@@ -668,13 +668,13 @@ impl PilotsUi {
             let here = live.system.map_or_else(|| "?".into(), |id| system_name(s, id));
             bar(ui, theme::WARN, &mut |ui| {
                 ui.label(RichText::new(format!("Off route — {name} is in {here}.")).color(theme::WARN));
-                if ui.cut_button("Re-route from here").clicked() {
+                if ui.app_button("Re-route from here").clicked() {
                     match s.pilots.reroute(&s.uni, &s.settings, router_core::wormhole::now()) {
                         Ok(route) => self.reroute = Some(Box::new(route)),
                         Err(e) => s.notify(Level::Error, e.to_string()),
                     }
                 }
-                if ui.cut_button("Stop route").clicked() {
+                if ui.app_button("Stop route").clicked() {
                     self.stop = true;
                 }
             });
@@ -913,7 +913,7 @@ fn question(ui: &mut Ui, id: &str, title: &str, text: &str, buttons: &[(&str, bo
         ui.add_space(6.0);
         ui.horizontal(|ui| {
             for (i, (label, primary)) in buttons.iter().enumerate() {
-                let button = CutButton::new(*label);
+                let button = AppButton::new(*label);
                 let button = if *primary { button.primary() } else { button };
                 if ui.add(button).clicked() {
                     clicked = Some(i);

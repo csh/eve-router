@@ -4,7 +4,7 @@ use crate::app::Session;
 use crate::search::SearchBox;
 use crate::theme;
 use crate::view::View;
-use crate::widgets::{CutButton, UiExt};
+use crate::widgets::{AppButton, UiExt};
 use egui::{Button, Color32, Frame, Id, Key, Margin, Modal, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, vec2};
 use router_core::ansiblex::HullClass;
 use router_core::config::{self, ApiKey};
@@ -112,7 +112,7 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
                 let mut picked = false;
                 for map in maps.iter() {
                     let selected = s.cfg.nexum.map_id.as_ref() == Some(&map.id);
-                    if ui.add(CutButton::new(&map.name).selected(selected).min_size(vec2(320.0, 0.0))).clicked() {
+                    if ui.add(AppButton::new(&map.name).selected(selected).min_size(vec2(320.0, 0.0))).clicked() {
                         s.cfg.nexum.map_id = Some(map.id.clone());
                         s.nexum_saved();
                         picked = true;
@@ -137,7 +137,7 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
                 ui.set_max_width(420.0);
                 ui.label(RichText::new(text.as_str()).color(theme::TEXT));
                 ui.add_space(8.0);
-                ui.cut_button("OK").clicked()
+                ui.app_button("OK").clicked()
             });
             response.inner || response.should_close()
         }
@@ -211,7 +211,7 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
             } else {
                 "Steer clear if possible, but go through if there's no other way"
             };
-            ui.add(CutButton::new(RichText::new(text).color(color)).min_size(vec2(64.0, 0.0))).on_hover_text(hover).clicked()
+            ui.add(AppButton::new(RichText::new(text).color(color)).min_size(vec2(64.0, 0.0))).on_hover_text(hover).clicked()
         };
         use egui_extras::Column;
         let table = egui_extras::TableBuilder::new(ui)
@@ -282,7 +282,7 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
                         }
                     }
                     row.col(|ui| {
-                        let remove = if narrow { ui.cut_button("🗙").on_hover_text("Remove") } else { ui.cut_button("Remove") };
+                        let remove = if narrow { ui.app_button("🗙").on_hover_text("Remove") } else { ui.app_button("Remove") };
                         if remove.clicked() {
                             act = Some(AvoidAct::Remove(kind));
                         }
@@ -297,17 +297,17 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
     ui.horizontal(|ui| {
         if *confirm {
             ui.label(RichText::new(format!("Remove all {count} entries?")).color(theme::WARN));
-            if ui.cut_button("Clear all").clicked() {
+            if ui.app_button("Clear all").clicked() {
                 clear = true;
             }
-            if ui.cut_button("Cancel").clicked() {
+            if ui.app_button("Cancel").clicked() {
                 *confirm = false;
             }
         } else {
-            if ui.add_enabled(count > 0, CutButton::new("Clear all")).clicked() {
+            if ui.add_enabled(count > 0, AppButton::new("Clear all")).clicked() {
                 *confirm = true;
             }
-            close = ui.cut_button("Close").clicked();
+            close = ui.app_button("Close").clicked();
         }
     });
     match act {
@@ -401,7 +401,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                 ui.horizontal_wrapped(|ui| {
                     let response = ui.add(TextEdit::singleline(&mut form.max_cap).hint_text("no limit").desired_width(120.0));
                     let enter = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
-                    if ui.add(CutButton::new("Apply").primary()).clicked() || enter {
+                    if ui.add(AppButton::new("Apply").primary()).clicked() || enter {
                         match parse_max_cap(&form.max_cap, &s.settings.hulls) {
                             Ok(max_cap) => {
                                 s.settings.rules.max_cap = max_cap;
@@ -512,7 +512,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             ui.add_enabled_ui(!locked, |ui| {
                 ui.horizontal_wrapped(|ui| {
                     ui.add(TextEdit::singleline(&mut form.url).hint_text("https://nexum.example").desired_width(field));
-                    if ui.add(CutButton::new("Save").primary()).clicked() {
+                    if ui.add(AppButton::new("Save").primary()).clicked() {
                         match config::parse_nexum_url(&form.url) {
                             Ok(url) => {
                                 s.cfg.nexum.url = url;
@@ -540,12 +540,12 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                                 .hint_text("paste a key with the read scope")
                                 .desired_width(field),
                         );
-                        if ui.add_enabled(!form.key.trim().is_empty(), CutButton::new("Save").primary()).clicked() {
+                        if ui.add_enabled(!form.key.trim().is_empty(), AppButton::new("Save").primary()).clicked() {
                             s.cfg.nexum.key = Some(ApiKey(form.key.trim().to_string()));
                             form.key.clear();
                             s.nexum_saved();
                         }
-                        if s.cfg.nexum.key.is_some() && ui.cut_button("Clear").clicked() {
+                        if s.cfg.nexum.key.is_some() && ui.app_button("Clear").clicked() {
                             s.cfg.nexum.key = None;
                             s.nexum_saved();
                         }
@@ -564,7 +564,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                     if loading {
                         ui.add(egui::Spinner::new().color(theme::accent(ui)));
                         ui.label(RichText::new("Loading maps…").color(theme::TEXT_DIM));
-                    } else if ui.cut_button("Choose map…").clicked() {
+                    } else if ui.app_button("Choose map…").clicked() {
                         if s.cfg.nexum.url.is_none() || s.cfg.nexum.key.is_none() {
                             form.error = Some("Set the Nexum URL and key first".into());
                         } else {
@@ -638,7 +638,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
     }
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-            if ui.cut_button("Close").clicked() {
+            if ui.app_button("Close").clicked() {
                 action = Some(Action::Close);
             }
         });
@@ -665,13 +665,13 @@ fn paste_list(ui: &mut Ui, text: &mut String, problems: &mut Vec<String>, s: &mu
     let mut action = None;
     ui.horizontal(|ui| {
         let empty = text.trim().is_empty();
-        if ui.add_enabled(!empty, CutButton::new("Add to route").primary()).clicked() {
+        if ui.add_enabled(!empty, AppButton::new("Add to route").primary()).clicked() {
             action = Some(false);
         }
-        if ui.add_enabled(!empty, CutButton::new("Replace route")).clicked() {
+        if ui.add_enabled(!empty, AppButton::new("Replace route")).clicked() {
             action = Some(true);
         }
-        if ui.cut_button("Cancel").clicked() {
+        if ui.app_button("Cancel").clicked() {
             close = true;
         }
     });
