@@ -632,7 +632,7 @@ impl Session {
 }
 
 impl eframe::App for RouterApp {
-    fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
+    fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         if let Some(elapsed) = self.last_frame.map(|t| t.elapsed())
             && elapsed < MIN_FRAME_TIME
         {
@@ -645,6 +645,7 @@ impl eframe::App for RouterApp {
             session.poll_refresh();
             self.chrome = session.custom_chrome();
         }
+        crate::chrome::round_corners(frame, !self.chrome);
         if self.chrome {
             let detail = match &self.state {
                 State::Ready(session, _) => session.uni.build.map(|build| format!("SDE {build}")).unwrap_or_default(),

@@ -3343,6 +3343,7 @@ dependencies = [
  "image",
  "mimalloc",
  "petgraph",
+ "raw-window-handle",
  "rayon",
  "router_core",
  "tempfile",

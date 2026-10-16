@@ -128,6 +128,37 @@ pub fn paint_border(ctx: &Context, accent: Color32) {
     }
 }
 
+/// Tell Windows 11 whether to round the corners of the window. The app frame is square, so the
+/// rounding of the OS cuts into the border. Other systems and Windows 10 ignore the call. The
+/// function acts only when `round` differs from the last call.
+pub fn round_corners(frame: &eframe::Frame, round: bool) {
+    #[cfg(windows)]
+    {
+        use raw_window_handle::{HasWindowHandle, RawWindowHandle};
+        use std::sync::atomic::{AtomicU8, Ordering};
+
+        // DWMWA_WINDOW_CORNER_PREFERENCE, with DWMWCP_DEFAULT and DWMWCP_DONOTROUND.
+        const ATTRIBUTE: u32 = 33;
+        static LAST: AtomicU8 = AtomicU8::new(u8::MAX);
+        #[link(name = "dwmapi")]
+        unsafe extern "system" {
+            fn DwmSetWindowAttribute(hwnd: *mut std::ffi::c_void, attribute: u32, value: *const u32, size: u32) -> i32;
+        }
+
+        if LAST.swap(round as u8, Ordering::Relaxed) == round as u8 {
+            return;
+        }
+        let Ok(handle) = frame.window_handle() else { return };
+        let RawWindowHandle::Win32(window) = handle.as_raw() else { return };
+        let preference: u32 = if round { 0 } else { 1 };
+        // SAFETY: the handle is the live window of this frame. The value is a `u32` of 4 bytes.
+        // The call has no effect, and returns an error code, where the system has no such attribute.
+        unsafe { DwmSetWindowAttribute(window.hwnd.get() as *mut std::ffi::c_void, ATTRIBUTE, &preference, 4) };
+    }
+    #[cfg(not(windows))]
+    let _ = (frame, round);
+}
+
 /// Start a resize when the pilot presses the primary button at the edge of the window. The OS
 /// draws no resize border on a window with no decorations.
 pub fn resize_edges(ctx: &Context) {
