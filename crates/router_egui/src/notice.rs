@@ -103,8 +103,7 @@ impl Toaster {
 
 /// One toast: a colored icon and the wrapped text, on the panel color. A click closes it.
 fn toast_contents(ui: &mut Ui, toast: &mut Toast, level: Level) -> Response {
-    let frame =
-        Frame::new().fill(theme::HEADER).stroke(Stroke::new(1.0, level.color())).corner_radius(4).inner_margin(Margin::symmetric(10, 8));
+    let frame = Frame::new().fill(theme::HEADER).stroke(Stroke::new(1.0, level.color())).inner_margin(Margin::symmetric(10, 8));
     let response = frame
         .show(ui, |ui| {
             ui.set_max_width(TOAST_WIDTH);

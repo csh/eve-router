@@ -338,3 +338,13 @@ Order for step 7, from the cheapest: underline tabs (done, `4c02933`, user appro
 ## Open points added 2026-10-09
 
 - **Long routes make a cluttered strip.** A route of 30 to 53 jumps (no wormholes or bridges) draws one tiny square for each system. The strip shrinks and the squares get hard to tell apart. A long route without shortcuts is normal, so this case is real. Ideas for later: group runs of the same security class into one bar with a count, show only the changes of class, or cap the square size and let the strip scroll. Keep the legs, wormholes and bridges visible in every case. Fix with step 2 follow-up, about 0.5 day.
+
+## Rift look (branch `ui/rift-photon`, 2026-10-17)
+
+The Rift Kotlin app (Photon style) is the reference for step 7.
+
+- **Palette:** the neutrals and the Caldari accent (`#58A7BF`) are the Rift values. The other factions keep their accents. `theme::accent_dark` and `theme::accent_light` give the shades.
+- **Window frame:** the app draws its own frame by default (`chrome.rs`): a 32 px title bar, window buttons as bare icons with a glow, a 1 px border, a lit top edge, and edge zones for resize. The config key `os_frame` brings back the OS frame. The window reads it before it opens.
+- **Buttons:** `AppButton` in `widgets.rs`. A primary button has an accent fill. The user dropped the cut corner after a trial, so all corners are square.
+- **Other controls:** floating scrollbar, a 0.5 s tooltip delay, a glow under the active tab, square toasts.
+- **Left:** a left rail, a transparent overlay, and a text field with an icon.

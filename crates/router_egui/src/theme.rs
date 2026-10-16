@@ -251,6 +251,10 @@ pub fn apply(ctx: &egui::Context, theme: FactionTheme, compact: bool) {
         // A label has no frame line.
         w.noninteractive.bg_stroke = Stroke::new(1.0, LINE);
 
+        // A thin bar that floats over the content and takes no room, as in the Rift app.
+        style.spacing.scroll = egui::style::ScrollStyle { bar_width: 8.0, handle_min_length: 30.0, ..egui::style::ScrollStyle::floating() };
+        style.interaction.tooltip_delay = 0.5;
+
         let s = &mut style.spacing;
         if compact {
             s.item_spacing = vec2(4.0, 2.0);
@@ -340,7 +344,10 @@ pub fn underline_tab(ui: &mut Ui, active: bool, text: &str, size: Vec2) -> egui:
     p.text(rect.center() - vec2(0.0, 1.0), egui::Align2::CENTER_CENTER, text, egui::TextStyle::Body.resolve(ui.style()), color);
     p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(1.0, LINE));
     if active {
-        p.line_segment([rect.left_bottom(), rect.right_bottom()], Stroke::new(2.0, accent(ui)));
+        // egui has no blur, so a wide faint line above the accent line stands in for the glow.
+        let glow = Stroke::new(3.0, accent(ui).gamma_multiply(0.25));
+        p.line_segment([rect.left_bottom() - vec2(0.0, 2.0), rect.right_bottom() - vec2(0.0, 2.0)], glow);
+        p.line_segment([rect.left_bottom() - vec2(0.0, 0.5), rect.right_bottom() - vec2(0.0, 0.5)], Stroke::new(1.0, accent(ui)));
     }
     response
 }
