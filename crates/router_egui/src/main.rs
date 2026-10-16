@@ -13,6 +13,7 @@ mod settings_window;
 mod strip;
 mod theme;
 mod view;
+mod widgets;
 
 use app::RouterApp;
 

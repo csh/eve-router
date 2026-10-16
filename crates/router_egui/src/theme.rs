@@ -16,6 +16,8 @@ pub const TEXT: Color32 = Color32::from_rgb(0xC1, 0xC1, 0xC1);
 /// Between `TEXT` and `TEXT_DIM`: the summary of a route in the route list.
 pub const TEXT_SOFT: Color32 = Color32::from_rgb(0xA0, 0xA0, 0xA0);
 pub const TEXT_DIM: Color32 = Color32::from_rgb(0x83, 0x83, 0x83);
+/// The text of a disabled widget.
+pub const TEXT_OFF: Color32 = Color32::from_rgb(0x4F, 0x4F, 0x4F);
 pub const OK: Color32 = Color32::from_rgb(0x8D, 0xC1, 0x69);
 pub const WARN: Color32 = Color32::from_rgb(0xF3, 0x90, 0x58);
 pub const ERROR: Color32 = Color32::from_rgb(0xFF, 0x45, 0x4B);
@@ -74,17 +76,6 @@ impl FactionTheme {
         }
     }
 
-    /// The accent in a darker shade: the fill of a primary button at rest.
-    #[cfg_attr(not(test), expect(dead_code, reason = "the primary button of step 3 uses it"))]
-    pub fn accent_dark(self) -> Color32 {
-        mix(Color32::BLACK, self.accent(), 0.65)
-    }
-
-    /// The accent in a lighter shade: the line of a focused field and of a hovered primary button.
-    pub fn accent_light(self) -> Color32 {
-        mix(self.accent(), Color32::WHITE, 0.25)
-    }
-
     pub fn selection_bg(self) -> Color32 {
         match self {
             FactionTheme::Caldari => Color32::from_rgb(0x35, 0x58, 0x66),
@@ -136,6 +127,20 @@ impl FactionTheme {
 fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
     let lerp = |x: u8, y: u8| (x as f32 + (y as f32 - x as f32) * t).round() as u8;
     Color32::from_rgb(lerp(a.r(), b.r()), lerp(a.g(), b.g()), lerp(a.b(), b.b()))
+}
+
+/// The accent in a darker shade: the fill of a primary button at rest.
+pub fn accent_dark(ui: &Ui) -> Color32 {
+    mix(Color32::BLACK, accent(ui), 0.65)
+}
+
+/// The accent in a lighter shade: the line of a focused field and of a hovered primary button.
+pub fn accent_light(ui: &Ui) -> Color32 {
+    accent_light_of(accent(ui))
+}
+
+fn accent_light_of(accent: Color32) -> Color32 {
+    mix(accent, Color32::WHITE, 0.25)
 }
 
 /// The current accent color from the active UI visuals.
@@ -225,7 +230,7 @@ pub fn apply(ctx: &egui::Context, theme: FactionTheme, compact: bool) {
         v.warn_fg_color = WARN;
         v.error_fg_color = ERROR;
         v.selection.bg_fill = sel_bg;
-        v.selection.stroke = Stroke::new(1.0, theme.accent_light());
+        v.selection.stroke = Stroke::new(1.0, accent_light_of(accent));
         v.window_highlight_topmost = false;
 
         let w = &mut v.widgets;
@@ -358,8 +363,7 @@ mod tests {
     fn caldari_uses_the_rift_cryo_blue() {
         assert_eq!(FactionTheme::Caldari.accent(), Color32::from_rgb(0x58, 0xA7, 0xBF));
         for theme in FactionTheme::ALL {
-            assert_ne!(theme.accent_dark(), theme.accent());
-            assert_ne!(theme.accent_light(), theme.accent());
+            assert_ne!(accent_light_of(theme.accent()), theme.accent());
         }
     }
 }
