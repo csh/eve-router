@@ -1165,34 +1165,41 @@ fn favourites_panel(ui: &mut Ui, s: &mut Session, fill: bool) {
         }
         for &fav in &s.settings.favourites {
             let jumps = s.hubs.iter().find(|(n, _)| *n == fav).map(|&(_, j)| j);
-            let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
-            if response.hovered() {
-                ui.painter().rect_filled(rect, 0.0, theme::accent(ui).linear_multiply(0.18));
+            let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
+            let accent = theme::accent(ui);
+            // A row has the line of a secondary button at rest, so it reads as a button before the
+            // pointer comes. Under the pointer the line turns light and the row gets a fill.
+            let hovered = response.hovered();
+            if hovered {
+                ui.painter().rect_filled(rect, 0.0, accent.linear_multiply(0.15));
                 theme::selection_bar(ui, rect);
             }
+            let line = if hovered { theme::accent_light(ui) } else { ui.visuals().widgets.inactive.bg_stroke.color };
+            ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, line), egui::StrokeKind::Inside);
             let font = egui::TextStyle::Body.resolve(ui.style());
             let sys = s.uni.system(fav);
             let p = ui.painter();
-            let accent = theme::accent(ui);
             p.text(
-                rect.left_center() + vec2(8.0, 0.0),
+                rect.left_center() + vec2(10.0, 0.0),
                 egui::Align2::LEFT_CENTER,
                 icons::STAR.as_str(),
                 font.clone(),
                 accent.gamma_multiply(0.6),
             );
-            p.text(rect.left_center() + vec2(28.0, 0.0), egui::Align2::LEFT_CENTER, &sys.name, font.clone(), theme::TEXT);
+            p.text(rect.left_center() + vec2(30.0, 0.0), egui::Align2::LEFT_CENTER, &sys.name, font.clone(), theme::TEXT);
+            // The plus at the right edge tells that a click adds the system. It is dim at rest.
+            let plus = if hovered { accent } else { accent.gamma_multiply(0.5) };
+            p.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, icons::PLUS.as_str(), font.clone(), plus);
             let jumps = match jumps {
                 Some(Some(j)) => j.to_string(),
                 Some(None) => "-".into(),
                 None => String::new(),
             };
-            // With no jump count, the plus under the pointer tells that a click adds the system.
-            let jumps = if jumps.is_empty() && response.hovered() { icons::PLUS.as_str().to_string() } else { jumps };
-            p.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, jumps, font, accent);
+            p.text(rect.right_center() - vec2(30.0, 0.0), egui::Align2::RIGHT_CENTER, jumps, font, accent);
             if response.on_hover_text("Click to add as a waypoint").clicked() {
                 add = Some(fav);
             }
+            ui.add_space(2.0);
         }
     });
     if let Some(node) = add {
