@@ -1167,15 +1167,13 @@ fn favourites_panel(ui: &mut Ui, s: &mut Session, fill: bool) {
             let jumps = s.hubs.iter().find(|(n, _)| *n == fav).map(|&(_, j)| j);
             let (rect, response) = ui.allocate_exact_size(vec2(ui.available_width(), 24.0), Sense::click());
             let accent = theme::accent(ui);
-            // A row has the line of a secondary button at rest, so it reads as a button before the
-            // pointer comes. Under the pointer the line turns light and the row gets a fill.
+            // A row has a faint fill at rest, so it reads as a button before the pointer comes.
+            // Under the pointer the fill is brighter and the row gets the bar of a selected row.
             let hovered = response.hovered();
+            ui.painter().rect_filled(rect, 0.0, accent.gamma_multiply(if hovered { 0.15 } else { 0.07 }));
             if hovered {
-                ui.painter().rect_filled(rect, 0.0, accent.linear_multiply(0.15));
                 theme::selection_bar(ui, rect);
             }
-            let line = if hovered { theme::accent_light(ui) } else { ui.visuals().widgets.inactive.bg_stroke.color };
-            ui.painter().rect_stroke(rect, 0.0, Stroke::new(1.0, line), egui::StrokeKind::Inside);
             let font = egui::TextStyle::Body.resolve(ui.style());
             let sys = s.uni.system(fav);
             let p = ui.painter();
