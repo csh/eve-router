@@ -2,7 +2,7 @@
 //! with a click. The other levels end after a time.
 
 use crate::theme;
-use egui::{Align2, Color32, Direction, Frame, Id, Label, Margin, Response, RichText, Sense, Stroke, Ui};
+use egui::{Align2, Color32, Direction, Frame, Id, Label, Margin, Rect, Response, RichText, Sense, Stroke, Ui, vec2};
 use egui_phosphor_icons::icons;
 use egui_toast::{Toast, ToastKind, ToastOptions, Toasts};
 use std::time::Duration;
@@ -44,7 +44,7 @@ impl Level {
             Level::Info => theme::TEXT_SOFT,
             Level::Success => theme::OK,
             Level::Warning => theme::WARN,
-            Level::Error => theme::ERROR,
+            Level::Error => theme::ERROR_SOFT,
         }
     }
 
@@ -103,19 +103,35 @@ impl Toaster {
     }
 }
 
-/// One toast: a colored icon and the wrapped text, on the panel color. A click closes it.
+/// One toast, in the style of the panels: a bar in the color of the level at the left edge, the
+/// icon, the wrapped text, and a dim cross at the top right that tells that a click closes it.
 fn toast_contents(ui: &mut Ui, toast: &mut Toast, level: Level) -> Response {
-    let frame = Frame::new().fill(theme::HEADER).stroke(Stroke::new(1.0, level.color())).inner_margin(Margin::symmetric(10, 8));
+    // The info level takes the accent of the theme, so it follows the faction.
+    let color = if level == Level::Info { theme::accent(ui) } else { level.color() };
+    let frame = Frame::new().fill(theme::HEADER).stroke(Stroke::new(1.0, theme::LINE)).inner_margin(Margin {
+        left: 16,
+        right: 32,
+        top: 10,
+        bottom: 10,
+    });
     let response = frame
         .show(ui, |ui| {
             ui.set_max_width(TOAST_WIDTH);
             ui.horizontal_top(|ui| {
-                ui.label(RichText::new(level.icon()).color(level.color()).strong());
-                ui.add(Label::new(RichText::new(toast.text.text()).color(theme::TEXT)).wrap());
+                ui.spacing_mut().item_spacing.x = 10.0;
+                ui.label(RichText::new(level.icon()).size(16.0).color(color));
+                let text = RichText::new(toast.text.text()).color(theme::TEXT).line_height(Some(18.0));
+                ui.add(Label::new(text).wrap());
             });
         })
         .response
         .interact(Sense::click());
+    let rect = response.rect;
+    let painter = ui.painter();
+    painter.rect_filled(Rect::from_min_size(rect.left_top(), vec2(3.0, rect.height())), 0.0, color);
+    let cross = if response.hovered() { Color32::WHITE } else { theme::TEXT_OFF };
+    let font = egui::TextStyle::Body.resolve(ui.style());
+    painter.text(rect.right_top() + vec2(-12.0, 11.0), Align2::RIGHT_TOP, icons::X.as_str(), font, cross);
     if response.clicked() {
         toast.close();
     }
