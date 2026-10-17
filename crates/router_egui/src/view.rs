@@ -265,6 +265,7 @@ impl View {
                 ui.separator();
                 ui.label(theme::header_text("Show up to"));
                 count_stepper(ui, s);
+                ui.label(theme::header_text("routes"));
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // The right-to-left layout draws the Settings button first, so it sits at the right edge.
@@ -461,19 +462,25 @@ fn count_stepper(ui: &mut Ui, s: &mut Session) {
 }
 
 fn bridges_toggle(ui: &mut Ui, s: &mut Session) {
+    // With no capital or no bridge, the toggle has no use, so it is hidden.
+    if s.settings.rules.capital.is_none() || s.bridges.is_empty() {
+        return;
+    }
     let blocked = s.settings.rules.blocked_reason();
     let bridges = match &blocked {
-        Some(_) => "off (no capital)",
+        Some(_) => "off (not allowed)",
         None => on_off(s.settings.bridges),
     };
-    let response = ui.add(AppButton::new(format!("Jump bridges: {bridges}")).selected(s.settings.bridges && blocked.is_none()));
+    // A hull that cannot use bridges makes the button off, and the tooltip gives the reason.
+    let button = AppButton::new(format!("Jump bridges: {bridges}")).selected(s.settings.bridges && blocked.is_none());
+    let response = ui.add_enabled(blocked.is_none(), button);
     if response.clicked() {
         s.settings.bridges = !s.settings.bridges;
         s.recompute();
         s.save();
     }
     if let Some(reason) = blocked {
-        response.on_hover_text(reason);
+        response.on_disabled_hover_text(reason);
     }
 }
 

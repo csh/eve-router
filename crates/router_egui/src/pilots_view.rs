@@ -195,11 +195,17 @@ impl PilotsUi {
             HullSync::Hull => {
                 // The routes change with no action from the pilot, so say why. With no routes, nothing changes.
                 let had_routes = !s.routes.is_empty();
-                s.recompute();
+                let bridges_off = s.plan();
                 s.save();
                 if had_routes {
                     let kind = ship_kind(s);
-                    s.notify(Level::Warning, format!("Ship changed to {kind}. The routes are planned again."));
+                    let mut text = format!("Ship changed to {kind}. The routes are planned again.");
+                    if let Some(reason) = bridges_off {
+                        text = format!("{text} Jump bridges off: {reason}");
+                    }
+                    s.notify(Level::Warning, text);
+                } else if let Some(reason) = bridges_off {
+                    s.notify(Level::Warning, format!("Jump bridges off: {reason}"));
                 }
             }
         }

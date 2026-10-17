@@ -389,18 +389,28 @@ impl Session {
 
     /// Find the routes and the favourite distances again.
     pub fn recompute(&mut self) {
+        if let Some(reason) = self.plan() {
+            self.notify(Level::Warning, format!("Jump bridges off: {reason}"));
+        }
+    }
+
+    /// Find the routes again, as `recompute` does. Return the reason when the jump bridges turned off
+    /// with this search, so the caller can fold it into its own notice.
+    pub fn plan(&mut self) -> Option<String> {
         self.routes.clear();
         self.selected = 0;
         self.selected_step = None;
         self.status.clear();
         self.note.clear();
         let reason = self.settings.rules.blocked_reason();
-        if reason != self.bridges_reason {
-            if let Some(reason) = &reason {
-                self.notify(Level::Warning, format!("Jump bridges off: {reason}"));
-            }
-            self.bridges_reason = reason;
-        }
+        let turned_off = if reason != self.bridges_reason { reason.clone() } else { None };
+        self.bridges_reason = reason;
+        self.search();
+        turned_off
+    }
+
+    /// Find the favourite distances and the routes for the waypoints.
+    fn search(&mut self) {
         let Some(&origin) = self.waypoints.first() else {
             self.hubs.clear();
             return;
@@ -524,9 +534,10 @@ impl Session {
             self.recompute();
         }
         let s = if added == 1 { "" } else { "s" };
+        // The dialog shows each problem line, so the toast gives only the count.
         let mut text = format!("Added {added} system{s}");
         if !problems.is_empty() {
-            text = format!("{text} · {}", problems.join(" · "));
+            text = format!("{text}, {} not found", problems.len());
         }
         self.notify(if problems.is_empty() { Level::Info } else { Level::Warning }, text);
         problems

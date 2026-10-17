@@ -691,7 +691,7 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
     let field = FIELD;
     group(ui, "Alliance capital");
     egui::Grid::new("settings-ansiblex").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        label(ui, "Alliance capital");
+        label(ui, "System");
         ui.add_enabled_ui(!locked, |ui| {
             // The name and Clear while a capital is set, else the search box.
             if let Some(capital) = s.settings.rules.capital {
