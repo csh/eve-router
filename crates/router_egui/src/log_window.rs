@@ -11,17 +11,23 @@ fn result_text(entry: &LogEntry) -> &'static str {
     if entry.ok { "ok" } else { "failed" }
 }
 
+/// The title of the Log window. The OS shows it in the task bar, and the app finds the window by it.
+const TITLE: &str = "EVE Router - Log";
+
 /// Show the Log window while `open`. A close request of the window sets `open` to false.
 pub fn show(ctx: &Context, open: &mut bool, s: &Session) {
     if !*open {
         return;
     }
-    // The window starts hidden. The OS shows a new window with its own background and size for
-    // a moment, before the first frame of the app is drawn. The window shows after that frame.
+    // The window has no OS frame, as the main window has. It starts hidden and transparent. The OS
+    // shows a new window with a white background for a moment, before the first frame of the app is
+    // drawn. The window shows after that frame.
     let builder = ViewportBuilder::default()
-        .with_title("EVE Router - Log")
+        .with_title(TITLE)
         .with_inner_size([660.0, 380.0])
         .with_min_inner_size([420.0, 180.0])
+        .with_decorations(false)
+        .with_transparent(true)
         .with_visible(false);
     let frames_id = Id::new("log-window-frames");
     ctx.show_viewport_immediate(ViewportId::from_hash_of("log-window"), builder, |ui, _class| {
@@ -37,11 +43,18 @@ pub fn show(ctx: &Context, open: &mut bool, s: &Session) {
         });
         match frames {
             1 => ui.ctx().request_repaint(),
-            2 => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(true)),
+            2 => {
+                crate::chrome::square_window_titled(TITLE);
+                ui.ctx().request_repaint();
+            }
+            3 => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(true)),
             _ => {}
         }
+        crate::chrome::title_bar(ui, "Log", "");
         let frame = Frame::new().fill(theme::BG).inner_margin(Margin::same(10));
         egui::CentralPanel::default().frame(frame).show(ui, |ui| table(ui, &s.log));
+        crate::chrome::paint_border(ui.ctx(), theme::accent(ui));
+        crate::chrome::resize_edges(ui.ctx());
     });
 }
 

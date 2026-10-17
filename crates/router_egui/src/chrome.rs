@@ -137,34 +137,72 @@ pub fn square_window(frame: &eframe::Frame) {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        // DWMWA_WINDOW_CORNER_PREFERENCE with DWMWCP_DONOTROUND, and DWMWA_BORDER_COLOR with
-        // DWMWA_COLOR_NONE.
-        const CORNER_PREFERENCE: u32 = 33;
-        const DO_NOT_ROUND: u32 = 1;
-        const BORDER_COLOR: u32 = 34;
-        const NO_COLOR: u32 = 0xFFFF_FFFE;
         static DONE: AtomicBool = AtomicBool::new(false);
-        #[link(name = "dwmapi")]
-        unsafe extern "system" {
-            fn DwmSetWindowAttribute(hwnd: *mut std::ffi::c_void, attribute: u32, value: *const u32, size: u32) -> i32;
-        }
-
         if DONE.load(Ordering::Relaxed) {
             return;
         }
         let Ok(handle) = frame.window_handle() else { return };
         let RawWindowHandle::Win32(window) = handle.as_raw() else { return };
         DONE.store(true, Ordering::Relaxed);
-        let hwnd = window.hwnd.get() as *mut std::ffi::c_void;
-        // SAFETY: the handle is the live window of this frame. Each value is a `u32` of 4 bytes.
+        win::square(window.hwnd.get() as *mut std::ffi::c_void);
+    }
+    #[cfg(not(windows))]
+    let _ = frame;
+}
+
+/// Do the same for the window with this title. The second window of the app, the Log window, has no
+/// `eframe::Frame`, so it is found by its title. Call it each time that window opens. It does nothing
+/// when no window has the title.
+pub fn square_window_titled(title: &str) {
+    #[cfg(windows)]
+    {
+        let hwnd = win::find(title);
+        if !hwnd.is_null() {
+            win::square(hwnd);
+        }
+    }
+    #[cfg(not(windows))]
+    let _ = title;
+}
+
+/// The calls to Windows.
+#[cfg(windows)]
+mod win {
+    use std::ffi::c_void;
+
+    // DWMWA_WINDOW_CORNER_PREFERENCE with DWMWCP_DONOTROUND, and DWMWA_BORDER_COLOR with
+    // DWMWA_COLOR_NONE.
+    const CORNER_PREFERENCE: u32 = 33;
+    const DO_NOT_ROUND: u32 = 1;
+    const BORDER_COLOR: u32 = 34;
+    const NO_COLOR: u32 = 0xFFFF_FFFE;
+
+    #[link(name = "dwmapi")]
+    unsafe extern "system" {
+        fn DwmSetWindowAttribute(hwnd: *mut c_void, attribute: u32, value: *const u32, size: u32) -> i32;
+    }
+
+    #[link(name = "user32")]
+    unsafe extern "system" {
+        fn FindWindowW(class: *const u16, title: *const u16) -> *mut c_void;
+    }
+
+    /// Set the corners and the border of the window.
+    pub fn square(hwnd: *mut c_void) {
+        // SAFETY: `hwnd` is the handle of a window of this app. Each value is a `u32` of 4 bytes.
         // A call has no effect, and returns an error code, where the system has no such attribute.
         unsafe {
             DwmSetWindowAttribute(hwnd, CORNER_PREFERENCE, &DO_NOT_ROUND, 4);
             DwmSetWindowAttribute(hwnd, BORDER_COLOR, &NO_COLOR, 4);
         }
     }
-    #[cfg(not(windows))]
-    let _ = frame;
+
+    /// The handle of the top-level window with this title, or null.
+    pub fn find(title: &str) -> *mut c_void {
+        let wide: Vec<u16> = title.encode_utf16().chain(std::iter::once(0)).collect();
+        // SAFETY: `wide` ends with a zero, and lives until the call returns. A null class matches any class.
+        unsafe { FindWindowW(std::ptr::null(), wide.as_ptr()) }
+    }
 }
 
 /// Start a resize when the pilot presses the primary button at the edge of the window. The OS
