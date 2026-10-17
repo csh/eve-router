@@ -100,28 +100,23 @@ fn api_base(cfg: &NexumConfig) -> Option<String> {
     Some(format!("{}/api/v1", cfg.url.as_deref()?.trim_end_matches('/')))
 }
 
-/// The URL of the configured map.
-pub fn map_url(cfg: &NexumConfig) -> Option<String> {
-    Some(format!("{}/maps/{}", api_base(cfg)?, cfg.map_id.as_deref()?))
+/// The URL of the map `id`.
+pub fn map_url(cfg: &NexumConfig, id: &str) -> Option<String> {
+    Some(format!("{}/maps/{id}", api_base(cfg)?))
 }
 
-/// The text of the map row in the settings. The order: the name in the map list `maps`, then
-/// the name in the Nexum data of the current map, then the map ID. "none" if no map is set.
-pub fn map_label(cfg: &NexumConfig, maps: &[MapInfo], data: &[SourceData]) -> String {
-    let Some(id) = &cfg.map_id else { return "none".into() };
-    if let Some(map) = maps.iter().find(|m| &m.id == id) {
-        return map.name.clone();
-    }
-    let origin = map_url(cfg);
-    data.iter()
-        .find(|d| d.source == SourceId::Nexum && d.origin.is_some() && d.origin == origin)
-        .and_then(|d| d.name.clone())
-        .unwrap_or_else(|| id.clone())
+/// The origin of the Nexum data: the URL of each map that is on, sorted, with a space between
+/// them. A cache is for one origin only. `None` when no map is on, or the URL is not set.
+pub fn origin(cfg: &NexumConfig) -> Option<String> {
+    let mut urls: Vec<String> = cfg.map_ids.iter().filter_map(|id| map_url(cfg, id)).collect();
+    urls.sort();
+    urls.dedup();
+    (!urls.is_empty()).then(|| urls.join(" "))
 }
 
-/// GET the configured map, as text. The caller parses it after the SDE loads.
-pub fn fetch_map(cfg: &NexumConfig, timeout: Duration) -> Result<String, FetchError> {
-    let (url, key) = (map_url(cfg), cfg.key.as_ref());
+/// GET the map `id`, as text. The caller parses it after the SDE loads.
+pub fn fetch_map(cfg: &NexumConfig, id: &str, timeout: Duration) -> Result<String, FetchError> {
+    let (url, key) = (map_url(cfg, id), cfg.key.as_ref());
     let (Some(url), Some(key)) = (url, key) else {
         return Err(FetchError::Offline("the Nexum settings are not complete".into()));
     };
@@ -147,8 +142,8 @@ pub fn sig_systems(map: &NexumMap) -> Vec<String> {
 
 /// GET the signatures of each system in `ids`, with `SIG_WORKERS` requests at a time.
 /// Return the signatures, and the number of systems with a failed request.
-pub fn fetch_sigs(cfg: &NexumConfig, ids: &[String], timeout: Duration) -> (SystemSigs, usize) {
-    let (Some(map), Some(key)) = (map_url(cfg), cfg.key.as_ref()) else {
+pub fn fetch_sigs(cfg: &NexumConfig, map_id: &str, ids: &[String], timeout: Duration) -> (SystemSigs, usize) {
+    let (Some(map), Some(key)) = (map_url(cfg, map_id), cfg.key.as_ref()) else {
         return (SystemSigs::new(), ids.len());
     };
     // One agent for all workers, so the requests reuse the connections.
@@ -204,12 +199,29 @@ pub struct NexumReport {
     pub expired: usize,
     /// Times in a format that the parser does not know.
     pub bad_time: usize,
+    /// Connections with no known signature at either end.
+    pub no_signature: usize,
 }
 
 impl NexumReport {
+    /// Add the counts of the report of another map.
+    pub fn add(&mut self, other: NexumReport) {
+        self.placeholders += other.placeholders;
+        self.missing_end += other.missing_end;
+        self.broken += other.broken;
+        self.expired += other.expired;
+        self.bad_time += other.bad_time;
+        self.no_signature += other.no_signature;
+        for id in other.unknown {
+            if !self.unknown.contains(&id) {
+                self.unknown.push(id);
+            }
+        }
+    }
+
     /// The count for the sidebar "Skipped" line.
     pub fn skipped(&self) -> usize {
-        self.broken + self.expired + self.missing_end
+        self.broken + self.expired + self.missing_end + self.no_signature
     }
 }
 
@@ -390,23 +402,58 @@ pub enum Pending {
         origin: Option<String>,
         cache: Option<SourceData>,
         cache_path: PathBuf,
+        /// Drop a connection with no known signature at either end.
+        skip_unsigned: bool,
     },
 }
 
-/// The result of the fetch thread: the map, and the signatures of its wormhole ends.
+/// The result of the fetch thread: each map, and the signatures of its wormhole ends.
 pub struct Fetched {
-    map: NexumMap,
-    sigs: SystemSigs,
-    /// The number of systems with a failed signature request.
+    maps: Vec<(NexumMap, SystemSigs)>,
+    /// The number of systems with a failed signature request, in all maps.
     sig_failures: usize,
 }
 
-/// GET the map, then the signatures of its wormhole ends. A failed signature request
-/// drops only the signatures of that system.
+/// GET each map that is on, then the signatures of its wormhole ends. A failed signature request
+/// drops only the signatures of that system. A failed map fails the whole fetch.
 fn fetch_all(cfg: &NexumConfig) -> Result<Fetched, FetchError> {
-    let map = parse_map(&fetch_map(cfg, sources::TIMEOUT)?).map_err(|e| FetchError::Offline(format!("Nexum map: {e}")))?;
-    let (sigs, sig_failures) = fetch_sigs(cfg, &sig_systems(&map), sources::TIMEOUT);
-    Ok(Fetched { map, sigs, sig_failures })
+    let mut maps = Vec::new();
+    let mut sig_failures = 0;
+    let mut ids = cfg.map_ids.clone();
+    ids.dedup();
+    for id in &ids {
+        let map = parse_map(&fetch_map(cfg, id, sources::TIMEOUT)?).map_err(|e| FetchError::Offline(format!("Nexum map: {e}")))?;
+        let (sigs, failed) = fetch_sigs(cfg, id, &sig_systems(&map), sources::TIMEOUT);
+        sig_failures += failed;
+        maps.push((map, sigs));
+    }
+    Ok(Fetched { maps, sig_failures })
+}
+
+/// Convert each map, and join them. A wormhole that two maps both show counts one time.
+fn convert_all(
+    f: &Fetched,
+    known: impl Fn(u32) -> bool,
+    types: &WormholeTypes,
+    fetched_at: u64,
+    skip_unsigned: bool,
+) -> (SourceData, NexumReport) {
+    let mut report = NexumReport::default();
+    let mut parts = Vec::new();
+    for (map, sigs) in &f.maps {
+        let (mut data, r) = convert(map, sigs, &known, types, fetched_at);
+        report.add(r);
+        if skip_unsigned {
+            let before = data.holes.len();
+            data.holes.retain(|h| h.sig_a.is_some() || h.sig_b.is_some());
+            report.no_signature += before - data.holes.len();
+        }
+        parts.push(data);
+    }
+    let names: Vec<&str> = parts.iter().filter_map(|d| d.name.as_deref()).collect();
+    let name = (!names.is_empty()).then(|| names.join(", "));
+    let holes = crate::wormhole::merge(&parts, 0);
+    (SourceData { source: SourceId::Nexum, fetched_at, origin: None, name, holes }, report)
 }
 
 /// Start the Nexum load: a fresh cache, else a fetch on a thread.
@@ -426,14 +473,15 @@ fn start_with(cfg: &NexumConfig, cache_path: PathBuf, now: u64, use_fresh: bool)
         return Pending::None;
     }
     // A cache is for one map. Another source, another map or no origin counts as no cache.
-    let origin = map_url(cfg);
+    let origin = origin(cfg);
     let cache = sources::read_cache(&cache_path).filter(|d| d.source == SourceId::Nexum && d.origin == origin);
     if use_fresh && let Some(data) = cache.as_ref().filter(|d| sources::cache_is_fresh(d, now)) {
         return Pending::Cache(data.clone());
     }
+    let skip_unsigned = !cfg.keep_unsigned;
     let cfg = cfg.clone();
     let thread = std::thread::spawn(move || fetch_all(&cfg));
-    Pending::Fetch { thread, started: now, origin, cache, cache_path }
+    Pending::Fetch { thread, started: now, origin, cache, cache_path, skip_unsigned }
 }
 
 /// Finish the Nexum load after the SDE loads. A fetch problem gives the cache and a warning.
@@ -444,12 +492,12 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
             let log = vec![LogEntry { time: crate::wormhole::now(), op: "nexum.fetch", ok: true, reason: "cache is fresh".into() }];
             Load { data: Some(data), log, ..Load::default() }
         }
-        Pending::Fetch { thread, started, origin, cache, cache_path } => {
+        Pending::Fetch { thread, started, origin, cache, cache_path, skip_unsigned } => {
             let fetched = thread.join().unwrap_or_else(|_| Err(FetchError::Offline("the fetch thread failed".into())));
             let mut report = NexumReport::default();
             let mut sig_failures = 0;
             let converted = fetched.map(|f| {
-                let (mut data, r) = convert(&f.map, &f.sigs, &known, types, started);
+                let (mut data, r) = convert_all(&f, &known, types, started, skip_unsigned);
                 data.origin = origin;
                 report = r;
                 sig_failures = f.sig_failures;
@@ -575,7 +623,10 @@ mod tests {
         assert_eq!(data.fetched_at, FETCHED);
         // typed, k162, critical, eol, badtime.
         assert_eq!(data.holes.len(), 5);
-        assert_eq!(report, NexumReport { placeholders: 1, unknown: vec![39_999_999], missing_end: 1, broken: 1, expired: 2, bad_time: 1 });
+        assert_eq!(
+            report,
+            NexumReport { placeholders: 1, unknown: vec![39_999_999], missing_end: 1, broken: 1, expired: 2, bad_time: 1, no_signature: 0 }
+        );
         assert_eq!(report.skipped(), 4);
         // No jumpgate, gate or cyno connection: Perimeter-Amarr, Jita-Perimeter and Jita-Hek are not wormholes.
         for (a, b) in [(30000144, 30002187), (30000142, 30000144), (30000142, 30002053)] {
@@ -700,7 +751,7 @@ mod tests {
     use std::time::Duration;
 
     fn cfg(url: &str) -> NexumConfig {
-        NexumConfig { url: Some(url.into()), key: Some(ApiKey("nxm_test".into())), map_id: Some("m1".into()) }
+        NexumConfig { url: Some(url.into()), key: Some(ApiKey("nxm_test".into())), map_ids: vec!["m1".into()], keep_unsigned: true }
     }
 
     /// The map URL of `cfg("http://127.0.0.1:9")`.
@@ -882,7 +933,7 @@ mod tests {
         let cached = SourceData {
             source: SourceId::Nexum,
             fetched_at: crate::wormhole::now() - 60,
-            origin: map_url(&cfg(url)),
+            origin: origin(&cfg(url)),
             name: None,
             holes: Vec::new(),
         };
@@ -914,25 +965,68 @@ mod tests {
     }
 
     #[test]
-    fn map_label_order() {
-        let mut cfg = cfg("http://127.0.0.1:9");
-        let named = |origin: &str| SourceData {
-            source: SourceId::Nexum,
-            fetched_at: 0,
-            origin: Some(origin.into()),
-            name: Some("Home".into()),
-            holes: Vec::new(),
-        };
-        let list = [MapInfo { id: "m1".into(), name: "Listed".into() }];
-        // 1. The name in the map list.
-        assert_eq!(map_label(&cfg, &list, &[named(MAP1)]), "Listed");
-        // 2. The name in the Nexum data of the current map.
-        assert_eq!(map_label(&cfg, &[], &[named(MAP1)]), "Home");
-        // 3. The map ID: the data is for another map, or it has no name.
-        assert_eq!(map_label(&cfg, &[], &[named("http://127.0.0.1:9/api/v1/maps/m2")]), "m1");
-        assert_eq!(map_label(&cfg, &[], &[SourceData { name: None, ..named(MAP1) }]), "m1");
-        cfg.map_id = None;
-        assert_eq!(map_label(&cfg, &list, &[named(MAP1)]), "none");
+    fn a_connection_with_one_known_signature_stays() {
+        let text = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
+        let fetched = Fetched { maps: vec![(parse_map(&text).unwrap(), fixture_sigs())], sig_failures: 0 };
+        let known = |id: u32| id != 39_999_999;
+        let (kept_all, _) = convert_all(&fetched, known, &types(), FETCHED, false);
+        let (data, report) = convert_all(&fetched, known, &types(), FETCHED, true);
+        // Both ends known: Jita to J134702.
+        assert_eq!(sig_pair(find(&data, 30000142, 31002230)), (Some("BTA-111"), Some("JIT-202")));
+        // One end known, the other end not scanned: J134702 to Amarr, and Perimeter to Thera.
+        assert_eq!(sig_pair(find(&data, 30002187, 31002230)), (None, Some("KXA-101")));
+        assert_eq!(sig_pair(find(&data, 30000144, 31000005)), (Some("THE-222"), None));
+        // Neither end known: Rens to J134702 has two candidate signatures, so it has none.
+        assert!(!data.holes.iter().any(|h| (h.a, h.b) == (30002510, 31002230)));
+        // Only these connections are dropped, and each one is counted.
+        assert!(report.no_signature >= 1);
+        assert_eq!(data.holes.len() + report.no_signature, kept_all.holes.len());
+        assert!(data.holes.iter().all(|h| h.sig_a.is_some() || h.sig_b.is_some()));
+    }
+
+    #[test]
+    fn a_connection_with_no_signature_at_either_end_is_skipped() {
+        // The server has no signature routes, so no connection has a signature.
+        let body = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
+        let routes = HashMap::from([("/api/v1/maps/m1".to_string(), body)]);
+        let (url, _) = crate::test_support::serve_routes(routes);
+        let (_tmp, path) = temp();
+        let mut skipping = cfg(&url);
+        skipping.keep_unsigned = false;
+        let load = finish(start(&skipping, path.clone(), FETCHED), |id| id != 39_999_999, &types());
+        assert!(load.data.unwrap().holes.is_empty());
+        assert_eq!(
+            (load.report.no_signature, load.report.skipped()),
+            (5, 5 + load.report.broken + load.report.expired + load.report.missing_end)
+        );
+    }
+
+    #[test]
+    fn origin_lists_the_maps_that_are_on() {
+        let mut cfg = cfg("http://127.0.0.1:9/");
+        assert_eq!(origin(&cfg).as_deref(), Some(MAP1));
+        // The order of the maps does not change the origin.
+        cfg.map_ids = vec!["m2".into(), "m1".into()];
+        assert_eq!(origin(&cfg).as_deref(), Some("http://127.0.0.1:9/api/v1/maps/m1 http://127.0.0.1:9/api/v1/maps/m2"));
+        cfg.map_ids.clear();
+        assert_eq!(origin(&cfg), None);
+    }
+
+    #[test]
+    fn two_maps_join_and_a_shared_wormhole_counts_one_time() {
+        let body = std::fs::read_to_string(crate::test_support::fixture("nexum-api.json")).unwrap();
+        let routes = HashMap::from([("/api/v1/maps/m1".to_string(), body.clone()), ("/api/v1/maps/m2".to_string(), body)]);
+        let (url, _) = crate::test_support::serve_routes(routes);
+        let (_tmp, path) = temp();
+        let mut two = cfg(&url);
+        two.map_ids = vec!["m1".into(), "m2".into()];
+        let load = finish(start(&two, path, FETCHED), |id| id != 39_999_999, &types());
+        let data = load.data.unwrap();
+        // Both maps hold the same 5 wormholes.
+        assert_eq!(data.holes.len(), 5);
+        assert_eq!(data.name.as_deref(), Some("Test Map, Test Map"));
+        assert_eq!(data.origin, origin(&two));
+        assert_eq!(load.report.placeholders, 2);
     }
 
     #[test]

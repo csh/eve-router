@@ -16,6 +16,8 @@ use petgraph::graph::EdgeIndex;
 pub struct Shortcuts {
     pub wormholes: usize,
     pub bridges: usize,
+    /// The wormholes from the Nexum map. The pairs also count in `wormholes`.
+    pub nexum: usize,
     /// Broken or expired wormholes that the router did not load.
     pub skipped: usize,
     /// The wormholes with an end in Thera, and in Turnur.
@@ -45,6 +47,7 @@ impl Shortcuts {
         Shortcuts {
             wormholes,
             bridges,
+            nexum: wh.data.iter().flat_map(|d| &d.holes).map(|h| (h.a, h.b)).collect::<std::collections::HashSet<_>>().len(),
             skipped: wh.report.skipped() + scout.report.skipped(),
             thera: uni.hub_count(THERA),
             turnur: uni.hub_count(TURNUR),
@@ -398,5 +401,19 @@ mod tests {
             warning,
             "Bridges: unknown systems: Nowhere · Nexum: unknown system IDs: 1, 2 · EVE-Scout: unknown system IDs: 3 · Nexum offline, map from 14:02 · EVE-Scout offline, feed from 14:02"
         );
+    }
+
+    #[test]
+    fn shortcuts_count_the_nexum_pairs_only() {
+        use crate::sources::{evescout, nexum};
+        use crate::test_support::hole;
+        use crate::wormhole::SourceData;
+        let data = |source, holes| SourceData { source, fetched_at: 0, origin: None, name: None, holes };
+        let uni = crate::test_support::universe();
+        // Two holes between one pair count one time.
+        let wh = nexum::Load { data: Some(data(SourceId::Nexum, vec![hole(1, 2), hole(1, 2), hole(2, 3)])), ..Default::default() };
+        let scout = evescout::Load { data: Some(data(SourceId::EveScout, vec![hole(4, 5)])), ..Default::default() };
+        assert_eq!(Shortcuts::new(uni, &Default::default(), &wh, &scout).nexum, 2);
+        assert_eq!(Shortcuts::new(uni, &Default::default(), &Default::default(), &scout).nexum, 0);
     }
 }

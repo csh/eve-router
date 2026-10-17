@@ -25,8 +25,6 @@ pub struct RouteCosts {
     pub cap_weight: f32,
     /// The extra cost of a wormhole with no known signature at its departure system.
     pub unknown_sig_penalty: f32,
-    /// Drop a wormhole with no known signature, instead of the penalty.
-    pub unknown_sig_broken: bool,
 }
 
 impl Default for RouteCosts {
@@ -34,7 +32,6 @@ impl Default for RouteCosts {
         RouteCosts {
             cap_weight: DEFAULT_CAP_WEIGHT as f32 / JUMP as f32,
             unknown_sig_penalty: DEFAULT_UNKNOWN_SIG_PENALTY as f32 / JUMP as f32,
-            unknown_sig_broken: false,
         }
     }
 }
@@ -50,7 +47,6 @@ impl RouteCosts {
         RouteCosts {
             cap_weight: ok(cfg.cap_weight, default.cap_weight),
             unknown_sig_penalty: ok(cfg.unknown_sig_penalty, default.unknown_sig_penalty),
-            unknown_sig_broken: cfg.unknown_sig_broken,
         }
     }
 
@@ -219,7 +215,6 @@ impl Settings {
             rules: self.rules.clone(),
             cap_weight: RouteCosts::milli(self.costs.cap_weight),
             unknown_sig_penalty: RouteCosts::milli(self.costs.unknown_sig_penalty),
-            unknown_sig_broken: self.costs.unknown_sig_broken,
             now: now + self.min_life * 60,
         };
         let mut router = Router::new(uni, options);
@@ -255,7 +250,6 @@ impl Settings {
         cfg.top = Some(self.top);
         cfg.cap_weight = Some(self.costs.cap_weight);
         cfg.unknown_sig_penalty = Some(self.costs.unknown_sig_penalty);
-        cfg.unknown_sig_broken = self.costs.unknown_sig_broken;
         cfg.eve_scout = self.hubs;
         cfg.favourites = Some(self.favourites.iter().map(|&n| uni.name(n).to_string()).collect());
         cfg.avoid_systems = self.avoid.systems.iter().map(|e| AvoidName::new(uni.name(e.item), e.never)).collect();
@@ -412,7 +406,7 @@ mod tests {
         let mut s = settings(&uni, None);
         assert_eq!(s.costs, RouteCosts::default());
         assert_eq!((s.costs.cap_weight, s.costs.unknown_sig_penalty), (0.6, 4.0));
-        s.costs = RouteCosts { cap_weight: 1.5, unknown_sig_penalty: 2.0, unknown_sig_broken: true };
+        s.costs = RouteCosts { cap_weight: 1.5, unknown_sig_penalty: 2.0 };
         let mut cfg = Config::default();
         s.store(&uni, &mut cfg);
         assert_eq!(Settings::from_config(&cfg, &uni, hulls()).unwrap().costs, s.costs);
@@ -435,8 +429,6 @@ mod tests {
         assert_eq!(cost(&s), Ok(1000 + WORMHOLE_TIE + 4000));
         s.costs.unknown_sig_penalty = 1.5;
         assert_eq!(cost(&s), Ok(1000 + WORMHOLE_TIE + 1500));
-        s.costs.unknown_sig_broken = true;
-        assert!(cost(&s).is_err());
     }
 
     /// The route of Jita to Dodixie, and the first system on it that is in another region than both ends.

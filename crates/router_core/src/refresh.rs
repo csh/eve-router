@@ -263,7 +263,7 @@ impl Worker {
         let mut scout = evescout::finish(scout_pending, known, &s.types);
         // A failed fetch with no cache keeps the data of the last refresh. As for the cache,
         // the data of another Nexum map does not count. Incomplete settings are not a failed fetch.
-        let origin = nexum::map_url(&s.nexum);
+        let origin = nexum::origin(&s.nexum);
         let complete = s.nexum.complete().is_some();
         wh.data = wh.data.take().or_else(|| self.last_nexum.take().filter(|d| complete && d.origin == origin));
         scout.data = scout.data.take().or_else(|| self.last_scout.take());
@@ -490,12 +490,13 @@ mod tests {
         let (url, _) = serve_routes(HashMap::from([("/api/v1/maps/m1".to_string(), map)]));
         // One hour: a snapshot in this test comes from the message, not from the interval.
         let (setup, _tmp) = setup(format!("{url}/scout"), Duration::from_secs(3600));
-        let cfg = NexumConfig { url: Some(url.clone()), key: Some(ApiKey("nxm_test".into())), map_id: Some("m1".into()) };
+        let cfg =
+            NexumConfig { url: Some(url.clone()), key: Some(ApiKey("nxm_test".into())), map_ids: vec!["m1".into()], keep_unsigned: true };
         // A fresh cache of the same map, with no wormholes. A normal start uses it.
         let cached = SourceData {
             source: SourceId::Nexum,
             fetched_at: FIXTURE_TIME - 60,
-            origin: nexum::map_url(&cfg),
+            origin: nexum::origin(&cfg),
             name: None,
             holes: Vec::new(),
         };
@@ -560,7 +561,8 @@ mod tests {
         let (url, _) = serve_routes(HashMap::new());
         let (setup, _tmp) = setup(format!("{url}/scout"), INTERVAL);
         let mut worker = Worker::new(setup);
-        worker.setup.nexum = NexumConfig { url: Some(url.clone()), key: Some(ApiKey("nxm_test".into())), map_id: Some("m1".into()) };
+        worker.setup.nexum =
+            NexumConfig { url: Some(url.clone()), key: Some(ApiKey("nxm_test".into())), map_ids: vec!["m1".into()], keep_unsigned: true };
         let kept = |map: &str| SourceData {
             source: SourceId::Nexum,
             fetched_at: FIXTURE_TIME,

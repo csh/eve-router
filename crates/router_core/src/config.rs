@@ -143,19 +143,50 @@ impl AvoidName {
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
-#[serde(default)]
+#[serde(from = "NexumFile")]
 pub struct NexumConfig {
     /// For example "https://nexum.example".
     pub url: Option<String>,
     /// A key with the `read` scope is enough.
     pub key: Option<ApiKey>,
-    pub map_id: Option<String>,
+    /// The maps that the router reads. The router joins their wormholes.
+    pub map_ids: Vec<String>,
+    /// Keep a connection that has no known signature at either end. A file without this value
+    /// skips these connections, because their data is the least reliable.
+    pub keep_unsigned: bool,
+}
+
+/// The Nexum part of the config file. An old file has one `map_id`, a new file has `map_ids`.
+#[derive(Deserialize, Default)]
+#[serde(default)]
+struct NexumFile {
+    url: Option<String>,
+    key: Option<ApiKey>,
+    map_id: Option<String>,
+    map_ids: Vec<String>,
+    keep_unsigned: bool,
+}
+
+impl From<NexumFile> for NexumConfig {
+    fn from(file: NexumFile) -> Self {
+        let mut map_ids = file.map_ids;
+        if let Some(id) = file.map_id
+            && !map_ids.contains(&id)
+        {
+            map_ids.insert(0, id);
+        }
+        NexumConfig { url: file.url, key: file.key, map_ids, keep_unsigned: file.keep_unsigned }
+    }
 }
 
 impl NexumConfig {
-    /// The URL, the key and the map ID, when all three are set.
-    pub fn complete(&self) -> Option<(&str, &str, &str)> {
-        Some((self.url.as_deref()?, self.key.as_ref()?.0.as_str(), self.map_id.as_deref()?))
+    /// The URL, the key and the map IDs, when the URL and the key are set and at least one map is on.
+    pub fn complete(&self) -> Option<(&str, &str, &[String])> {
+        let ids = self.map_ids.as_slice();
+        if ids.is_empty() {
+            return None;
+        }
+        Some((self.url.as_deref()?, self.key.as_ref()?.0.as_str(), ids))
     }
 }
 
@@ -182,8 +213,6 @@ pub struct Config {
     pub cap_weight: Option<f32>,
     /// The extra cost, in jumps, of a wormhole with no known signature. `None` gives the default.
     pub unknown_sig_penalty: Option<f32>,
-    /// Drop a wormhole with no known signature, instead of a penalty.
-    pub unknown_sig_broken: bool,
     /// The systems that a route avoids, by name.
     pub avoid_systems: Vec<AvoidName>,
     /// The regions that a route avoids, by name.
@@ -290,13 +319,13 @@ mod tests {
             top: Some(3),
             cap_weight: Some(0.6),
             unknown_sig_penalty: Some(4.0),
-            unknown_sig_broken: true,
             avoid_systems: vec![AvoidName::new("Rens", true)],
             avoid_regions: vec![AvoidName::new("Lonetrek", false)],
             nexum: NexumConfig {
                 url: Some("https://nexum.example".into()),
                 key: Some(ApiKey("nxm_key".into())),
-                map_id: Some("m1".into()),
+                map_ids: vec!["m1".into()],
+                keep_unsigned: true,
             },
             eve_scout: Hubs { thera: false, turnur: true },
             theme: None,
@@ -337,7 +366,8 @@ mod tests {
             nexum: NexumConfig {
                 url: Some("https://nexum.example".into()),
                 key: Some(ApiKey("nxm_TESTKEY_0000000000000000xyz".into())),
-                map_id: Some("m1".into()),
+                map_ids: vec!["m1".into()],
+                ..NexumConfig::default()
             },
             ..Config::default()
         };
@@ -347,9 +377,27 @@ mod tests {
         assert_eq!(ApiKey("abc".into()).masked(), "…");
         // A key with multi-byte characters does not split a character.
         assert_eq!(ApiKey("ééééééééé".into()).masked(), "éééé…ééé");
-        assert_eq!(cfg.nexum.complete(), Some(("https://nexum.example", "nxm_TESTKEY_0000000000000000xyz", "m1")));
+        assert_eq!(cfg.nexum.complete(), Some(("https://nexum.example", "nxm_TESTKEY_0000000000000000xyz", &["m1".to_string()][..])));
+        cfg.nexum.map_ids.clear();
+        assert_eq!(cfg.nexum.complete(), None);
+        cfg.nexum.map_ids = vec!["m1".into()];
         cfg.nexum.key = None;
         assert_eq!(cfg.nexum.complete(), None);
+    }
+
+    #[test]
+    fn an_old_file_with_a_removed_setting_still_loads() {
+        let cfg: Config = serde_json::from_str(r#"{"unknown_sig_broken": true, "unknown_sig_penalty": 2.0}"#).unwrap();
+        assert_eq!(cfg.unknown_sig_penalty, Some(2.0));
+    }
+
+    #[test]
+    fn an_old_file_with_one_map_id_gives_one_map() {
+        let old: NexumConfig = serde_json::from_str(r#"{"url":"https://nexum.example","map_id":"m1"}"#).unwrap();
+        assert_eq!(old.map_ids, vec!["m1".to_string()]);
+        let new: NexumConfig = serde_json::from_str(r#"{"map_ids":["m2","m1"],"map_id":"m1"}"#).unwrap();
+        assert_eq!(new.map_ids, vec!["m2".to_string(), "m1".to_string()]);
+        assert_eq!(serde_json::from_str::<NexumConfig>("{}").unwrap(), NexumConfig::default());
     }
 
     #[test]

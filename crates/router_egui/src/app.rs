@@ -14,7 +14,7 @@ use router_core::log::{self, LogEntry};
 use router_core::refresh::{self, Refresher, Setup, Snapshot, kept_route, route_note};
 use router_core::route::{Route, Stop};
 use router_core::settings::{Settings, split_systems};
-use router_core::sources::nexum::{self, MapInfo};
+use router_core::sources::nexum::MapInfo;
 use router_core::startup::StartupError;
 use router_core::universe::Universe;
 use router_core::wormhole::SourceData;
@@ -439,12 +439,6 @@ impl Session {
         self.status = REFRESHING.into();
     }
 
-    /// The text of the Nexum map row: the name in the map list, else the name in the Nexum
-    /// data of the current map, else the map ID.
-    pub fn map_name(&self) -> String {
-        nexum::map_label(&self.cfg.nexum, &self.map_names, &self.wormhole_data)
-    }
-
     /// Add a waypoint at the end. The same system two times in a row is not a waypoint.
     pub fn add_waypoint(&mut self, node: NodeIndex) {
         if self.waypoints.last() == Some(&node) {
@@ -628,6 +622,7 @@ impl eframe::App for RouterApp {
             State::Failed(e) => crate::view::splash(ui, Some(e), None),
             State::Ready(session, view) => view.show(ui, session),
         }
+        crate::chrome::drag_through_modal(ui.ctx());
         crate::chrome::paint_border(ui.ctx(), theme::accent(ui));
         crate::chrome::resize_edges(ui.ctx());
     }
@@ -640,12 +635,11 @@ impl eframe::App for RouterApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use router_core::config::NexumConfig;
     use router_core::labels::{jumps_label, route_extras};
     use router_core::log::LogEntry;
     use router_core::refresh::{Control, NEXUM_LOADING, STOPPED};
     use router_core::test_support::{FIXTURE_TIME, fake_refresher, hole, overlay_universe, settings, snapshot};
-    use router_core::wormhole::{SourceData, SourceId, Wormhole};
+    use router_core::wormhole::Wormhole;
 
     /// A session that writes its config to a new temporary directory. Keep the directory until the test ends.
     fn session() -> (Session, tempfile::TempDir) {
@@ -877,16 +871,6 @@ mod tests {
         assert_eq!(s.status, NEXUM_LOADING);
         let Ok(Control::Nexum(sent)) = control.try_recv() else { panic!("no Nexum message") };
         assert_eq!(sent.url.as_deref(), Some("https://nexum.example"));
-    }
-
-    #[test]
-    fn map_name_uses_the_name_in_the_wormhole_data() {
-        let (mut s, _tmp) = session();
-        s.cfg.nexum = NexumConfig { url: Some("https://nexum.example".into()), key: None, map_id: Some("m1".into()) };
-        assert_eq!(s.map_name(), "m1");
-        let origin = router_core::sources::nexum::map_url(&s.cfg.nexum);
-        s.wormhole_data = vec![SourceData { source: SourceId::Nexum, fetched_at: 0, origin, name: Some("Home".into()), holes: Vec::new() }];
-        assert_eq!(s.map_name(), "Home");
     }
 
     #[test]

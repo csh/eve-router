@@ -168,8 +168,6 @@ pub struct RouterOptions {
     pub cap_weight: u32,
     /// The extra cost of a wormhole with no known signature at its departure system, in milli-jumps.
     pub unknown_sig_penalty: u32,
-    /// Drop the wormholes with no known signature at their departure system, instead of a penalty.
-    pub unknown_sig_broken: bool,
     /// Unix seconds. It sets which wormholes are expired.
     pub now: u64,
 }
@@ -184,7 +182,6 @@ impl Default for RouterOptions {
             rules: BridgeRules::default(),
             cap_weight: DEFAULT_CAP_WEIGHT,
             unknown_sig_penalty: DEFAULT_UNKNOWN_SIG_PENALTY,
-            unknown_sig_broken: false,
             now: 0,
         }
     }
@@ -239,7 +236,7 @@ impl<'a> Router<'a> {
     /// Calculate the node costs and the edge permissions one time, in parallel.
     /// Each search then reads them instead of calculating them again.
     pub fn new(uni: &'a Universe, options: RouterOptions) -> Self {
-        let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, unknown_sig_penalty, unknown_sig_broken, now } = options;
+        let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, unknown_sig_penalty, now } = options;
         let graph = &uni.graph;
         let node_cost = graph
             .raw_nodes()
@@ -260,9 +257,7 @@ impl<'a> Router<'a> {
             .par_iter()
             .map(|e| match &e.weight {
                 Link::Stargate => true,
-                Link::Wormhole(w) => {
-                    wormholes && hubs.allows(w) && w.usable(now, hull_kg) && !(unknown_sig_broken && sig_unknown(uni, w, e.source()))
-                }
+                Link::Wormhole(w) => wormholes && hubs.allows(w) && w.usable(now, hull_kg),
                 Link::JumpBridge => bridges && rules.allowed(uni, e.source()),
             })
             .collect();
@@ -1097,13 +1092,6 @@ mod tests {
     fn a_big_penalty_sends_the_route_over_the_gates() {
         let route = jita_amarr(RouterOptions { unknown_sig_penalty: u32::MAX, ..Default::default() });
         assert_eq!((route.wormholes, route.unknown_sigs), (0, 0));
-        assert!(route.jumps > 1);
-    }
-
-    #[test]
-    fn broken_drops_a_wormhole_with_no_signature() {
-        let route = jita_amarr(RouterOptions { unknown_sig_broken: true, ..Default::default() });
-        assert_eq!(route.wormholes, 0);
         assert!(route.jumps > 1);
     }
 

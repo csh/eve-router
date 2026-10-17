@@ -138,7 +138,7 @@ mod tests {
     const MAPS: &str = r#"{"maps":[{"id":"m1","name":"Home","isCorpMap":false},{"id":"m2","name":"Scanning"}]}"#;
 
     fn nexum(url: &str) -> NexumConfig {
-        NexumConfig { url: Some(url.into()), key: Some(ApiKey("nxm_test".into())), map_id: Some("m1".into()) }
+        NexumConfig { url: Some(url.into()), key: Some(ApiKey("nxm_test".into())), map_ids: vec!["m1".into()], keep_unsigned: true }
     }
 
     #[test]
@@ -184,11 +184,11 @@ mod tests {
     #[test]
     fn map_url_has_one_slash() {
         let mut cfg = nexum("https://nexum.example/");
-        assert_eq!(nexum::map_url(&cfg).as_deref(), Some("https://nexum.example/api/v1/maps/m1"));
+        assert_eq!(nexum::map_url(&cfg, "m1").as_deref(), Some("https://nexum.example/api/v1/maps/m1"));
         cfg.url = Some("https://nexum.example".into());
-        assert_eq!(nexum::map_url(&cfg).as_deref(), Some("https://nexum.example/api/v1/maps/m1"));
-        cfg.map_id = None;
-        assert_eq!(nexum::map_url(&cfg), None);
+        assert_eq!(nexum::map_url(&cfg, "m1").as_deref(), Some("https://nexum.example/api/v1/maps/m1"));
+        cfg.url = None;
+        assert_eq!(nexum::map_url(&cfg, "m1"), None);
     }
 
     #[test]

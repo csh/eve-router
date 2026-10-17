@@ -70,6 +70,25 @@ pub fn title_bar(ui: &mut Ui, title: &str, detail: &str) {
     });
 }
 
+/// Let the pilot drag the window by the title bar while a modal window is open. The modal covers
+/// the screen and takes the pointer, so the drag area of `title_bar` gets no input. Call it once
+/// in each frame, after the modal windows.
+pub fn drag_through_modal(ctx: &Context) {
+    if ctx.memory(|m| m.top_modal_layer()).is_none() {
+        return;
+    }
+    let screen = ctx.content_rect();
+    // The top 5 px belong to the resize edge. The window buttons are at the right.
+    let bar = Rect::from_min_max(
+        Pos2::new(screen.left(), screen.top() + 5.0),
+        Pos2::new(screen.right() - 8.0 - BUTTON_WIDTH * 3.0, screen.top() + TITLE_HEIGHT),
+    );
+    let pressed = ctx.input(|i| i.pointer.primary_pressed() && i.pointer.interact_pos().is_some_and(|p| bar.contains(p)));
+    if pressed {
+        ctx.send_viewport_cmd(ViewportCommand::StartDrag);
+    }
+}
+
 /// The mark of the app: three stops joined by a route line.
 fn paint_logo(painter: &egui::Painter, center: Pos2, accent: Color32) {
     let stops = [center + vec2(-6.0, 3.0), center + vec2(0.0, -4.0), center + vec2(6.0, 3.0)];
