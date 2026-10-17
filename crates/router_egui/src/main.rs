@@ -22,16 +22,13 @@ use app::RouterApp;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> eframe::Result {
-    // The window needs the setting before it opens. A config that does not load gives the default.
-    let chrome =
-        router_core::config::Config::load(&router_core::config::AppPaths::detect().config).map(|cfg| !cfg.os_frame).unwrap_or(true);
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("EVE Router")
-            .with_decorations(!chrome)
+            .with_decorations(false)
             .with_inner_size([1280.0, 820.0])
             .with_min_inner_size([320.0, 420.0]),
         ..Default::default()
     };
-    eframe::run_native("EVE Router", options, Box::new(|cc| Ok(Box::new(RouterApp::new(cc.egui_ctx.clone(), chrome)))))
+    eframe::run_native("EVE Router", options, Box::new(|cc| Ok(Box::new(RouterApp::new(cc.egui_ctx.clone())))))
 }

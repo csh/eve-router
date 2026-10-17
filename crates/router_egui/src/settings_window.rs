@@ -620,15 +620,6 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                 }
             });
             ui.end_row();
-
-            row_label(ui, narrow, "Window Frame");
-            ui.horizontal_wrapped(|ui| {
-                let mut custom = s.custom_chrome();
-                if ui.app_checkbox(&mut custom, "Draw the window frame in the app (Rift style)").changed() {
-                    s.set_custom_chrome(custom, ui.ctx());
-                }
-            });
-            ui.end_row();
         });
     });
 

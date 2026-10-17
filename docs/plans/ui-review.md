@@ -344,7 +344,7 @@ Order for step 7, from the cheapest: underline tabs (done, `4c02933`, user appro
 The Rift Kotlin app (Photon style) is the reference for step 7.
 
 - **Palette:** the neutrals and the Caldari accent (`#58A7BF`) are the Rift values. The other factions keep their accents. `theme::accent_dark` and `theme::accent_light` give the shades.
-- **Window frame:** the app draws its own frame by default (`chrome.rs`): a 32 px title bar, window buttons as bare icons with a glow, a 1 px border, a lit top edge, and edge zones for resize. The config key `os_frame` brings back the OS frame. The window reads it before it opens.
+- **Window frame:** the app always draws its own frame (`chrome.rs`): a 32 px title bar, window buttons as bare icons with a glow, a 1 px border, a lit top edge, and edge zones for resize. The setting for the OS frame is gone.
 - **Buttons:** `AppButton` in `widgets.rs`. A primary button has an accent fill. The user dropped the cut corner after a trial, so all corners are square.
 - **Other controls:** floating scrollbar, a 0.5 s tooltip delay, a glow under the active tab, square toasts.
 - **Left:** a left rail, a transparent overlay, and a text field with an icon.

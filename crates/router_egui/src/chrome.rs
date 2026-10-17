@@ -128,35 +128,36 @@ pub fn paint_border(ctx: &Context, accent: Color32) {
     }
 }
 
-/// Tell Windows 11 whether to round the corners of the window. The app frame is square, so the
+/// Tell Windows 11 not to round the corners of the window. The app frame is square, so the
 /// rounding of the OS cuts into the border. Other systems and Windows 10 ignore the call. The
-/// function acts only when `round` differs from the last call.
-pub fn round_corners(frame: &eframe::Frame, round: bool) {
+/// function acts one time, when the window has a handle.
+pub fn square_corners(frame: &eframe::Frame) {
     #[cfg(windows)]
     {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
-        use std::sync::atomic::{AtomicU8, Ordering};
+        use std::sync::atomic::{AtomicBool, Ordering};
 
-        // DWMWA_WINDOW_CORNER_PREFERENCE, with DWMWCP_DEFAULT and DWMWCP_DONOTROUND.
+        // DWMWA_WINDOW_CORNER_PREFERENCE, and the value DWMWCP_DONOTROUND.
         const ATTRIBUTE: u32 = 33;
-        static LAST: AtomicU8 = AtomicU8::new(u8::MAX);
+        const DO_NOT_ROUND: u32 = 1;
+        static DONE: AtomicBool = AtomicBool::new(false);
         #[link(name = "dwmapi")]
         unsafe extern "system" {
             fn DwmSetWindowAttribute(hwnd: *mut std::ffi::c_void, attribute: u32, value: *const u32, size: u32) -> i32;
         }
 
-        if LAST.swap(round as u8, Ordering::Relaxed) == round as u8 {
+        if DONE.load(Ordering::Relaxed) {
             return;
         }
         let Ok(handle) = frame.window_handle() else { return };
         let RawWindowHandle::Win32(window) = handle.as_raw() else { return };
-        let preference: u32 = if round { 0 } else { 1 };
+        DONE.store(true, Ordering::Relaxed);
         // SAFETY: the handle is the live window of this frame. The value is a `u32` of 4 bytes.
         // The call has no effect, and returns an error code, where the system has no such attribute.
-        unsafe { DwmSetWindowAttribute(window.hwnd.get() as *mut std::ffi::c_void, ATTRIBUTE, &preference, 4) };
+        unsafe { DwmSetWindowAttribute(window.hwnd.get() as *mut std::ffi::c_void, ATTRIBUTE, &DO_NOT_ROUND, 4) };
     }
     #[cfg(not(windows))]
-    let _ = (frame, round);
+    let _ = frame;
 }
 
 /// Start a resize when the pilot presses the primary button at the edge of the window. The OS
