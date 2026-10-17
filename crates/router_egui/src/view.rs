@@ -681,7 +681,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                         }
                     });
                     row.col(|ui| {
-                        _ = ui.label(RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)))
+                        _ = ui.label(RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)));
                     });
                     row.col(|ui| _ = ui.add(Label::new(RichText::new(&sys.region).color(theme::TEXT_DIM)).truncate()));
                     row.col(|ui| _ = ui.add(Label::new(RichText::new(&via).color(via_color)).truncate()));
@@ -921,9 +921,9 @@ pub fn splash(ui: &mut Ui, error: Option<&str>, step: Option<&router_core::start
                             None => {
                                 ui.add(egui::Spinner::new().size(28.0).color(theme::accent(ui)));
                                 ui.add_space(8.0);
-                                let text = step.map_or_else(|| "Starting…".to_string(), |step| step.text());
+                                let text = step.map_or_else(|| "Starting…".to_string(), router_core::startup::Progress::text);
                                 ui.label(RichText::new(text).color(theme::TEXT));
-                                if let Some(fraction) = step.and_then(|step| step.fraction()) {
+                                if let Some(fraction) = step.and_then(router_core::startup::Progress::fraction) {
                                     ui.add_space(6.0);
                                     ui.add(egui::ProgressBar::new(fraction).fill(theme::accent(ui)).desired_width(300.0));
                                 }

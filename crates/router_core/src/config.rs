@@ -15,7 +15,7 @@ const FILE_NAME: &str = "eve-router.json";
 
 /// The three places that the router reads and writes: the config file, the SDE directory and the
 /// wormhole cache directory. `detect` finds them one time at the start. A test uses `in_dir`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct AppPaths {
     pub config: PathBuf,
     pub sde: PathBuf,
@@ -142,7 +142,7 @@ impl AvoidName {
     }
 }
 
-#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, Eq)]
 #[serde(from = "NexumFile")]
 pub struct NexumConfig {
     /// For example "https://nexum.example".

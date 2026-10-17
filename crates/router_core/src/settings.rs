@@ -60,7 +60,7 @@ impl RouteCosts {
 pub const NO_ROUTE_HINT: &str = "Your avoid list might be in the way.";
 
 /// One entry of the avoid list.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Entry<T> {
     pub item: T,
     /// True: no route crosses it, and a trip to it finds no route. False: a route crosses it
@@ -70,7 +70,7 @@ pub struct Entry<T> {
 
 /// The systems and the regions that a route avoids. A jump into a "prefer" entry costs as much
 /// as `PENALTY`. A jump into a "never" entry is not possible.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Avoid {
     pub systems: Vec<Entry<NodeIndex>>,
     pub regions: Vec<Entry<String>>,
@@ -584,7 +584,7 @@ mod tests {
     #[test]
     fn a_system_name_gives_a_typed_error() {
         let uni = overlay_universe();
-        let names = |list: &[&str]| list.iter().map(|s| s.to_string()).collect::<Vec<_>>();
+        let names = |list: &[&str]| list.iter().map(std::string::ToString::to_string).collect::<Vec<_>>();
         assert_eq!(resolve_all(&uni, &names(&["Nowhere"])), Err(RouteError::UnknownSystem("Nowhere".into())));
         assert_eq!(resolve_all(&uni, &names(&["Nowhere"])).unwrap_err().to_string(), "Unknown system \"Nowhere\"");
         // "A" is the first letter of many system names.

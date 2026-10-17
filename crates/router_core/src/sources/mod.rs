@@ -17,7 +17,7 @@ pub const CACHE_FRESH_SECS: u64 = 300;
 /// The largest response body. A large alliance map is a few MB.
 const MAX_BODY: u64 = 64 * 1024 * 1024;
 
-#[derive(Debug, PartialEq, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum FetchError {
     /// 401 or 403: the key is wrong, or it has no access to the map.
     #[error("the server refused the request")]

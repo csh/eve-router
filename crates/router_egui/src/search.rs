@@ -121,7 +121,7 @@ impl SearchBox {
                         false
                     }
                     _ => true,
-                })
+                });
             });
         }
 

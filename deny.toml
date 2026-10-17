@@ -5,6 +5,14 @@
 # A crate that is unmaintained or yanked also fails the check.
 unmaintained = "all"
 yanked = "deny"
+# The Linux D-Bus stack (zbus) comes in through keyring and accesskit on Linux. Its crates are
+# marked unmaintained, and no safe upgrade exists. They carry no vulnerability. Remove these
+# lines when keyring and accesskit move to a maintained D-Bus crate.
+ignore = [
+    "RUSTSEC-2026-0370", # zvariant
+    "RUSTSEC-2026-0371", # zbus_names
+    "RUSTSEC-2026-0372", # zvariant_derive
+]
 
 [licenses]
 allow = [

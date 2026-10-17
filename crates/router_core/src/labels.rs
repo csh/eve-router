@@ -377,7 +377,7 @@ mod tests {
         };
         assert_eq!(wormhole_label(&w, 1, now), "Wormhole · Sig. Unknown · Large · Expires in 3h 10m · Critical");
         // The signature in the system that the jump leaves: "ABC" from system 1, "DEF" from system 2.
-        let signed = Wormhole { sig_a: Some("ABC-123".into()), sig_b: Some("def".into()), ..w.clone() };
+        let signed = Wormhole { sig_a: Some("ABC-123".into()), sig_b: Some("def".into()), ..w };
         assert_eq!(wormhole_label(&signed, 1, now), "Wormhole · Sig. ABC · Large · Expires in 3h 10m · Critical");
         assert_eq!(wormhole_label(&signed, 2, now), "Wormhole · Sig. DEF · Large · Expires in 3h 10m · Critical");
         // A stable mass shows no text. The label never shows the type: the hull check uses it.

@@ -84,7 +84,7 @@ pub fn parse_map(text: &str) -> Result<NexumMap, serde_json::Error> {
 }
 
 /// One map in `GET /api/v1/maps`.
-#[derive(Deserialize, Clone, Debug, PartialEq)]
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct MapInfo {
     pub id: String,
     pub name: String,
@@ -186,7 +186,7 @@ pub fn fetch_maps(cfg: &NexumConfig, timeout: Duration) -> Result<Vec<MapInfo>, 
 }
 
 /// The connections that the converter did not use, by reason.
-#[derive(Default, Debug, PartialEq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub struct NexumReport {
     /// Connections with a placeholder system at one end.
     pub placeholders: usize,
@@ -779,7 +779,7 @@ mod tests {
             SourceData { source: SourceId::Nexum, fetched_at: FETCHED - 60, origin: Some(MAP1.into()), name: None, holes: Vec::new() };
         crate::sources::write_cache(&path, &cached).unwrap();
         // Port 9 has no server, so a fetch would fail.
-        let pending = start(&cfg("http://127.0.0.1:9"), path.clone(), FETCHED);
+        let pending = start(&cfg("http://127.0.0.1:9"), path, FETCHED);
         let load = finish(pending, |_| true, &types());
         assert_eq!(load.data, Some(cached));
         assert_eq!(load.warning, None);
@@ -879,7 +879,7 @@ mod tests {
         let text = std::fs::read_to_string(crate::test_support::fixture("nexum-sigs.json")).unwrap();
         let sigs: HashMap<String, serde_json::Value> = serde_json::from_str(&text).unwrap();
         for id in ["s-amarr", "s-hek", "s-j134702", "s-jita", "s-perimeter", "s-rens", "s-thera", "s-unknown"] {
-            let body = sigs.get(id).map_or("[]".to_string(), |v| v.to_string());
+            let body = sigs.get(id).map_or("[]".to_string(), std::string::ToString::to_string);
             routes.insert(format!("/api/v1/maps/m1/systems/{id}/signatures"), body);
         }
         routes
@@ -993,7 +993,7 @@ mod tests {
         let (_tmp, path) = temp();
         let mut skipping = cfg(&url);
         skipping.keep_unsigned = false;
-        let load = finish(start(&skipping, path.clone(), FETCHED), |id| id != 39_999_999, &types());
+        let load = finish(start(&skipping, path, FETCHED), |id| id != 39_999_999, &types());
         assert!(load.data.unwrap().holes.is_empty());
         assert_eq!(
             (load.report.no_signature, load.report.skipped()),

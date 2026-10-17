@@ -64,7 +64,7 @@ pub enum ListenError {
     Bind { port: u16, source: io::Error },
 }
 
-#[derive(Debug, PartialEq, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum LoginError {
     /// SSO sent an `error` to the callback, for example when the user cancels the login.
     #[error("EVE SSO did not give access ({0}). Start the login again.")]

@@ -108,7 +108,7 @@ impl TokenStore for MemoryStore {
 }
 
 /// One row of `characters.json`. It holds no token.
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct CharacterEntry {
     pub id: u64,
     pub name: String,

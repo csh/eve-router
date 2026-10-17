@@ -131,7 +131,7 @@ pub struct Wormhole {
 
 /// The three letters of a signature, in capitals: "abc-123" gives "ABC". Empty text gives `None`.
 pub fn sig_letters(sig: &str) -> Option<String> {
-    let letters: String = sig.trim().chars().take_while(|c| c.is_ascii_alphabetic()).take(3).collect();
+    let letters: String = sig.trim().chars().take_while(char::is_ascii_alphabetic).take(3).collect();
     (!letters.is_empty()).then(|| letters.to_ascii_uppercase())
 }
 

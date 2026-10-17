@@ -188,7 +188,7 @@ impl Default for RouterOptions {
 }
 
 /// Why a route cannot be found, or why the waypoints are not valid.
-#[derive(Clone, Debug, PartialEq, thiserror::Error)]
+#[derive(Clone, Debug, PartialEq, Eq, thiserror::Error)]
 pub enum RouteError {
     #[error("Give two or more systems")]
     TooFewSystems,

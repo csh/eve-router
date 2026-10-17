@@ -53,7 +53,7 @@ impl Hop {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct Step {
     pub system: u32,
     pub hop: Hop,
@@ -65,7 +65,7 @@ pub struct Step {
 }
 
 /// What a location means for the route.
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum Observation {
     /// No change of the progress.
     Same,
@@ -79,7 +79,7 @@ pub enum Observation {
     OffRoute { system: u32 },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
 pub struct ActiveRoute {
     /// The route number in the list, for "Route #1".
     pub number: usize,

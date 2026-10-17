@@ -60,7 +60,7 @@ impl Level {
 }
 
 /// A message for the pilot.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Notice {
     pub level: Level,
     pub text: String,

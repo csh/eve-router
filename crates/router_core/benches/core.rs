@@ -38,7 +38,7 @@ fn bench(c: &mut Criterion) {
     g.sample_size(20);
     g.bench_function("sde_parse", |b| b.iter(|| router_core::sde::load(&sde_dir()).unwrap()));
     g.bench_function("universe_build", |b| {
-        b.iter_batched(|| router_core::sde::load(&sde_dir()).unwrap(), Universe::from_sde, BatchSize::LargeInput)
+        b.iter_batched(|| router_core::sde::load(&sde_dir()).unwrap(), Universe::from_sde, BatchSize::LargeInput);
     });
     g.finish();
 

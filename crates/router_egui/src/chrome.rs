@@ -74,7 +74,7 @@ pub fn title_bar(ui: &mut Ui, title: &str, detail: &str) {
 /// the screen and takes the pointer, so the drag area of `title_bar` gets no input. Call it once
 /// in each frame, after the modal windows.
 pub fn drag_through_modal(ctx: &Context) {
-    if ctx.memory(|m| m.top_modal_layer()).is_none() {
+    if ctx.memory(egui::Memory::top_modal_layer).is_none() {
         return;
     }
     let screen = ctx.content_rect();

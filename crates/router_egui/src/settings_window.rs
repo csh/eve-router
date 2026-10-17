@@ -84,12 +84,12 @@ fn fetch_map_list(s: &Session, ctx: &egui::Context) -> std::sync::mpsc::Receiver
     rx
 }
 
-pub(crate) fn modal_frame() -> Frame {
+pub fn modal_frame() -> Frame {
     Frame::new().fill(theme::PANEL).stroke(Stroke::new(1.0, theme::LINE)).inner_margin(Margin::same(14))
 }
 
 /// The title of a modal window, with an accent line below it.
-pub(crate) fn title(ui: &mut Ui, text: &str) {
+pub fn title(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text.to_uppercase()).family(theme::bold()).color(theme::accent(ui)).extra_letter_spacing(2.0));
     let rect = ui.available_rect_before_wrap();
     ui.painter().line_segment([rect.left_top(), rect.left_top() + vec2(rect.width(), 0.0)], Stroke::new(1.0, theme::LINE));
@@ -556,9 +556,7 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
             let mut skip = !s.cfg.nexum.keep_unsigned;
             let changed = ui
                 .app_checkbox(&mut skip, "Skip connections with no known signatures")
-                .on_hover_text(
-                    "A wormhole whose two ends have no known signature is considered unreliable data.",
-                )
+                .on_hover_text("A wormhole whose two ends have no known signature is considered unreliable data.")
                 .changed();
             (changed, skip)
         });
@@ -579,7 +577,8 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
     egui::Grid::new("settings-scout").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         // The EVE-Scout hub switches act at route time.
         let mut changed = false;
-        for (name, on) in [("Allow travel via Thera", &mut s.settings.hubs.thera), ("Allow travel via Turnur", &mut s.settings.hubs.turnur)] {
+        for (name, on) in [("Allow travel via Thera", &mut s.settings.hubs.thera), ("Allow travel via Turnur", &mut s.settings.hubs.turnur)]
+        {
             label(ui, name);
             let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(on, "").changed());
             changed |= row.inner;

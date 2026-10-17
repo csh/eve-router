@@ -16,7 +16,7 @@ use crate::{ansiblex, sde, wormhole_types};
 use std::sync::Arc;
 
 /// A step of the load, for the splash screen.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Progress {
     /// Ask the server for the latest SDE build.
     CheckingSde,

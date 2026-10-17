@@ -37,7 +37,7 @@ pub fn parse(text: &str) -> Result<Vec<Signature>, serde_json::Error> {
 }
 
 /// The entries that the converter did not use, by reason.
-#[derive(Default, Debug, PartialEq)]
+#[derive(Default, Debug, PartialEq, Eq)]
 pub struct EveScoutReport {
     /// EVE system IDs that are not in the SDE.
     pub unknown: Vec<u32>,

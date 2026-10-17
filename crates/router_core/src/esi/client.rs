@@ -45,7 +45,7 @@ pub struct Online {
 }
 
 /// A response value, with the cache and error-budget headers.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Fetched<T> {
     pub value: T,
     /// ESI has no new data before this time.
@@ -54,7 +54,7 @@ pub struct Fetched<T> {
     pub errors_left: Option<u32>,
 }
 
-#[derive(Debug, PartialEq, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum EsiError {
     /// 401 or 403: the token is expired, revoked or has no scope for the call.
     #[error("ESI refused the login")]

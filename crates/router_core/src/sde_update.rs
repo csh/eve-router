@@ -298,7 +298,7 @@ pub(crate) fn download(src: &dyn RangeSource, dir: &Path, on_bytes: OnBytes) -> 
     on_bytes(0, total);
     // The lock covers the report, so the reports come in order and `done` never goes back.
     let step = |part: u64| {
-        let mut done = done.lock().unwrap_or_else(|e| e.into_inner());
+        let mut done = done.lock().unwrap_or_else(std::sync::PoisonError::into_inner);
         *done += part;
         on_bytes(*done, total);
     };

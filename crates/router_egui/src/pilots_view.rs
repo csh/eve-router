@@ -384,7 +384,7 @@ impl PilotsUi {
                     self.characters_open = false;
                 }
             });
-            if s.pilots.accounts.as_ref().is_some_and(|a| a.is_session_only()) {
+            if s.pilots.accounts.as_ref().is_some_and(router_core::esi::store::Accounts::is_session_only) {
                 ui.label(RichText::new("Session only: the logins end when the app closes.").color(theme::TEXT_DIM).small());
             }
         });

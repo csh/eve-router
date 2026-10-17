@@ -25,7 +25,7 @@ use std::sync::mpsc::{self, Receiver};
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
 
 /// The live data of one pilot. A value is `None` until the first poll.
-#[derive(Clone, Debug, Default, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PilotState {
     pub system: Option<u32>,
     pub ship: Option<Ship>,
@@ -35,7 +35,7 @@ pub struct PilotState {
 }
 
 /// One row of the character list.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct PilotView {
     pub id: u64,
     pub name: String,
@@ -61,7 +61,7 @@ impl LoginFlow {
 }
 
 /// A waypoint send in progress, or one that failed.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SendState {
     pub character: u64,
     pub systems: Vec<u32>,
@@ -71,7 +71,7 @@ pub struct SendState {
 }
 
 /// Why a route start, a re-route or a login cannot go on.
-#[derive(Debug, PartialEq, thiserror::Error)]
+#[derive(Debug, PartialEq, Eq, thiserror::Error)]
 pub enum PilotError {
     /// The router cannot log in. The text says why.
     #[error("{0}")]

@@ -456,10 +456,10 @@ pub(crate) mod fake {
 
     /// A fake API. Each call goes into `calls`. The location comes from `system`.
     #[derive(Clone, Default)]
-    pub(crate) struct Fake(pub Arc<Mutex<FakeState>>);
+    pub struct Fake(pub Arc<Mutex<FakeState>>);
 
     #[derive(Default)]
-    pub(crate) struct FakeState {
+    pub struct FakeState {
         pub calls: Vec<String>,
         pub system: u32,
         pub refresh_rejected: bool,
@@ -472,7 +472,7 @@ pub(crate) mod fake {
         pub panic: bool,
     }
 
-    pub(crate) fn fetched<T>(value: T, errors_left: Option<u32>) -> Fetched<T> {
+    pub fn fetched<T>(value: T, errors_left: Option<u32>) -> Fetched<T> {
         Fetched { value, expires: None, errors_left }
     }
 
