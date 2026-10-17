@@ -133,9 +133,14 @@ pub fn accent_dark(ui: &Ui) -> Color32 {
     mix(Color32::BLACK, accent(ui), 0.22)
 }
 
-/// The fill of the top bar and the status bar: a faint accent, lighter than a panel header.
+/// The fill of a panel header, and the line of the top bar and the status bar.
+pub fn header_fill(ui: &Ui) -> Color32 {
+    mix(Color32::BLACK, accent(ui), 0.15)
+}
+
+/// The fill of the top bar and the status bar: a faint accent, darker than a panel header.
 pub fn bar_fill(ui: &Ui) -> Color32 {
-    mix(Color32::BLACK, accent(ui), 0.10)
+    mix(Color32::BLACK, accent(ui), 0.065)
 }
 
 /// The accent in a middle shade: the fill of a primary button under the pointer.
@@ -319,7 +324,7 @@ pub fn panel_with<R>(ui: &mut Ui, title: &str, header: impl FnOnce(&mut Ui), fil
     let response = frame.show(ui, |ui| {
         ui.set_min_width(ui.available_width());
         let header_margin = if is_compact(ui) { Margin::symmetric(6, 2) } else { Margin::symmetric(8, 4) };
-        Frame::new().fill(accent_dark(ui)).inner_margin(header_margin).show(ui, |ui| {
+        Frame::new().fill(header_fill(ui)).inner_margin(header_margin).show(ui, |ui| {
             ui.set_min_width(ui.available_width());
             ui.horizontal(|ui| {
                 ui.label(panel_title(title));

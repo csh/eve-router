@@ -234,7 +234,7 @@ impl View {
 
         let class = WidthClass::of(ui.ctx().content_rect().width());
         let bar =
-            Frame::new().fill(theme::bar_fill(ui)).inner_margin(Margin::symmetric(12, 6)).stroke(Stroke::new(1.0, theme::accent_dark(ui)));
+            Frame::new().fill(theme::bar_fill(ui)).inner_margin(Margin::symmetric(12, 6)).stroke(Stroke::new(1.0, theme::header_fill(ui)));
         egui::Panel::top("top-bar").frame(bar).show(ui, |ui| self.top_bar(ui, s, class));
         egui::Panel::bottom("status-bar").frame(bar).show(ui, |ui| status_bar(ui, s, &mut self.log_open, class == WidthClass::Sidebar));
         let active = s.pilots.active.is_some();
@@ -396,7 +396,6 @@ impl View {
             if ui.add(Button::selectable(self.drawer_open, icons::LIST.as_str())).on_hover_text(hint).clicked() {
                 self.drawer_open = !self.drawer_open;
             }
-            ui.label(RichText::new("EVE ROUTER").family(theme::bold()).size(16.0).color(theme::accent(ui)).extra_letter_spacing(3.0));
             // While a route is active, the controls that change the route are hidden.
             if !locked {
                 mode_combo(ui, s, 150.0);
@@ -465,9 +464,6 @@ impl View {
 
     fn top_bar_full(&mut self, ui: &mut Ui, s: &mut Session) {
         ui.horizontal(|ui| {
-            let title = RichText::new("EVE ROUTER").family(theme::bold()).size(16.0).color(theme::accent(ui)).extra_letter_spacing(3.0);
-            ui.label(title);
-
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // The right-to-left layout draws the Settings button first, so it sits at the right edge.
                 if ui.app_button(icon_label(ui, icons::GEAR.fill(), "Settings")).clicked() {
