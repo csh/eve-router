@@ -191,18 +191,17 @@ pub fn route_summary(route: &Route) -> String {
 }
 
 /// The route as tab-separated values: one header row, then one row for each step. The columns are
-/// `Step`, `Stop`, `System`, `Sec`, `Region` and `Via`. Slack and spreadsheets paste this text as a
+/// `Step`, `System`, `Sec`, `Region` and `Via`. Slack and spreadsheets paste this text as a
 /// table. The text has no final line break.
 pub fn route_tsv(uni: &Universe, rules: &BridgeRules, route: &Route, now: u64) -> String {
-    let mut lines = vec!["Step\tStop\tSystem\tSec\tRegion\tVia".to_string()];
+    let mut lines = vec!["Step\tSystem\tSec\tRegion\tVia".to_string()];
     for (step, &node) in route.path.nodes.iter().enumerate() {
         let sys = uni.system(node);
         let via = match step.checked_sub(1).map(|s| route.path.edges[s]) {
             Some(e) => link_label(uni, rules, e, now),
             None => String::new(),
         };
-        let stop = route.stop_at(step).map(|s| s.label()).unwrap_or_default();
-        lines.push(format!("{step}\t{stop}\t{}\t{:.1}\t{}\t{via}", sys.name, display_sec(sys.security), sys.region));
+        lines.push(format!("{step}\t{}\t{:.1}\t{}\t{via}", sys.name, display_sec(sys.security), sys.region));
     }
     lines.join("\n")
 }
@@ -295,7 +294,7 @@ mod tests {
                 out.push_str("\n\n");
             }
         }
-        assert!(out.lines().all(|l| l.is_empty() || l.split('\t').count() == 6), "every row has six cells");
+        assert!(out.lines().all(|l| l.is_empty() || l.split('\t').count() == 5), "every row has five cells");
         crate::assert_snapshot!("route_tsv", out);
     }
 
