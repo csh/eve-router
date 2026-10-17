@@ -66,6 +66,9 @@ pub struct Notice {
     pub text: String,
 }
 
+/// The fill of a toast: darker than the panels, so a toast stands out from the content under it.
+const TOAST_FILL: Color32 = Color32::from_rgb(0x09, 0x09, 0x09);
+
 /// The widest toast, in points. A longer text wraps.
 const TOAST_WIDTH: f32 = 380.0;
 
