@@ -37,6 +37,11 @@ pub struct SettingsForm {
     capital: SearchBox,
     favourite: SearchBox,
     max_cap: String,
+    /// The pasted SMT list, and the lines of the last import that gave no bridge.
+    bridge_text: String,
+    bridge_problems: Vec<String>,
+    /// True while the window asks to remove all bridges.
+    bridge_confirm: bool,
     url: String,
     /// The key field starts empty, so the key never shows on the screen.
     key: String,
@@ -52,6 +57,9 @@ impl SettingsForm {
             capital: SearchBox::new("capital-search"),
             favourite: SearchBox::new("favourite-search"),
             max_cap: s.settings.rules.max_cap.map(|m| m.to_string()).unwrap_or_default(),
+            bridge_text: String::new(),
+            bridge_problems: Vec::new(),
+            bridge_confirm: false,
             url: s.cfg.nexum.url.clone().unwrap_or_default(),
             key: String::new(),
             error: None,
@@ -331,17 +339,19 @@ pub enum Page {
     Favourites,
     Theme,
     Wormholes,
+    Ansiblex,
     Engine,
 }
 
 impl Page {
-    pub const ALL: [Page; 4] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Engine];
+    pub const ALL: [Page; 5] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Ansiblex, Page::Engine];
 
     pub fn label(self) -> &'static str {
         match self {
             Page::Favourites => "Favourites",
             Page::Theme => "Theme",
             Page::Wormholes => "Wormholes",
+            Page::Ansiblex => "Ansiblex",
             Page::Engine => "Engine",
         }
     }
@@ -397,6 +407,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                 Page::Favourites => favourites_page(ui, form, s),
                 Page::Theme => theme_page(ui, s),
                 Page::Wormholes => action = wormholes_page(ui, form, s, locked, loading),
+                Page::Ansiblex => ansiblex_page(ui, form, s, locked),
                 Page::Engine => engine_page(ui, form, s, locked),
             });
         });
@@ -670,10 +681,13 @@ fn maps_list(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool
     action
 }
 
-fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool) {
+/// The Ansiblex page: the alliance capital, a box to import a list, and the bridges. A bridge works
+/// in both directions, so each row shows A <-> B one time. The zone of an end is the zone of a jump
+/// that leaves from that end.
+fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool) {
     let field = FIELD;
-    egui::Grid::new("settings-engine").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        // The alliance capital.
+    group(ui, "Alliance capital");
+    egui::Grid::new("settings-ansiblex").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         label(ui, "Alliance capital");
         ui.add_enabled_ui(!locked, |ui| {
             // The name and Clear while a capital is set, else the search box.
@@ -695,6 +709,112 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
         .response
         .on_disabled_hover_text(LOCKED);
         ui.end_row();
+    });
+    ui.add_space(14.0);
+    group(ui, "Import");
+    ui.label(RichText::new("Paste a list in SMT format: one line for each bridge, like \"0 A --> B\".").color(theme::TEXT_DIM));
+    ui.add_space(4.0);
+    ui.add_enabled_ui(!locked, |ui| {
+        let edit = TextEdit::multiline(&mut form.bridge_text).hint_text("0 UALX-3 --> IL-YTR").desired_rows(5).desired_width(f32::INFINITY);
+        ui.add(edit);
+        for p in &form.bridge_problems {
+            ui.label(RichText::new(p).color(theme::ERROR));
+        }
+        ui.horizontal(|ui| {
+            let empty = form.bridge_text.trim().is_empty();
+            let add = ui.add_enabled(!empty, AppButton::new("Add to list").primary()).clicked();
+            let replace = ui.add_enabled(!empty, AppButton::new("Replace list")).clicked();
+            if add || replace {
+                form.bridge_problems = s.import_bridges(&form.bridge_text, replace);
+                if form.bridge_problems.is_empty() {
+                    form.bridge_text.clear();
+                }
+            }
+        });
+    })
+    .response
+    .on_disabled_hover_text(LOCKED);
+    ui.add_space(14.0);
+    group(ui, &format!("Bridges ({})", s.bridges.len()));
+    if s.bridges.is_empty() {
+        ui.label(RichText::new("No bridges. Paste a list above.").color(theme::TEXT_DIM));
+        return;
+    }
+    if s.settings.rules.capital.is_none() {
+        ui.label(RichText::new("Set the alliance capital to see the zones.").color(theme::TEXT_DIM));
+    }
+    let rows: Vec<_> = s.bridges.iter().map(|&(a, b)| (a, b, zone_text(s, a), zone_text(s, b))).collect();
+    let mut remove = None;
+    use egui_extras::Column;
+    egui_extras::TableBuilder::new(ui)
+        .id_salt("ansiblex-bridges")
+        .striped(true)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(Column::remainder().at_least(110.0).clip(true))
+        .column(Column::exact(56.0))
+        .column(Column::exact(30.0))
+        .column(Column::remainder().at_least(110.0).clip(true))
+        .column(Column::exact(56.0))
+        .column(Column::exact(80.0))
+        .max_scroll_height(14.0 * 28.0)
+        .auto_shrink([false, true])
+        .header(22.0, |mut header| {
+            for text in ["System", "Zone", "", "System", "Zone", ""] {
+                header.col(|ui| _ = ui.label(theme::header_text(text)));
+            }
+        })
+        .body(|body| {
+            body.rows(28.0, rows.len(), |mut row| {
+                let index = row.index();
+                let (a, b, za, zb) = &rows[index];
+                for (node, zone) in [(*a, za), (*b, zb)] {
+                    row.col(|ui| _ = ui.label(RichText::new(s.uni.name(node)).color(theme::TEXT)));
+                    row.col(|ui| {
+                        let color = if zone.is_some() { theme::BRIDGE } else { theme::TEXT_DIM };
+                        let (text, hover) = zone.clone().unwrap_or(("-".into(), "Set the alliance capital to see the zone".into()));
+                        ui.label(RichText::new(text).color(color)).on_hover_text(hover);
+                    });
+                    if node == *a {
+                        row.col(|ui| _ = ui.label(RichText::new(icons::ARROWS_LEFT_RIGHT.as_str()).color(theme::BRIDGE)));
+                    }
+                }
+                row.col(|ui| {
+                    if ui.add_enabled(!locked, AppButton::new("Remove")).clicked() {
+                        remove = Some(index);
+                    }
+                });
+            });
+        });
+    ui.add_space(8.0);
+    ui.horizontal(|ui| {
+        if form.bridge_confirm {
+            ui.label(RichText::new(format!("Remove all {} bridges?", s.bridges.len())).color(theme::WARN));
+            if ui.app_button("Clear all").clicked() {
+                s.clear_bridges();
+                form.bridge_confirm = false;
+            }
+            if ui.app_button("Cancel").clicked() {
+                form.bridge_confirm = false;
+            }
+        } else if ui.add_enabled(!locked, AppButton::new("Clear all")).clicked() {
+            form.bridge_confirm = true;
+        }
+    });
+    if let Some(i) = remove {
+        s.remove_bridge(i);
+    }
+}
+
+/// The zone text of a bridge end, for example "Zone 3", and the hover text. `None` without a capital.
+fn zone_text(s: &Session, node: petgraph::graph::NodeIndex) -> Option<(String, String)> {
+    let capital = s.settings.rules.capital?;
+    let ly = s.uni.distance_ly(capital, node);
+    let (zone, multiplier) = router_core::ansiblex::zone(ly);
+    Some((format!("Zone {zone}"), format!("{ly:.1} ly from {}. A jump from here costs {multiplier}x the base cost.", s.uni.name(capital))))
+}
+
+fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool) {
+    egui::Grid::new("settings-engine").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         // The max TJ for one bridge jump.
         label(ui, "Max TJ per bridge jump");
         ui.add_enabled_ui(!locked, |ui| {

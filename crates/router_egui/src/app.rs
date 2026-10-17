@@ -11,6 +11,7 @@ use router_core::esi::store::{Keyring, StoreError, TokenStore};
 use router_core::esi::{self, active::active_path};
 use router_core::labels::Shortcuts;
 use router_core::log::{self, LogEntry};
+use router_core::overlay::{self, OverlayReport, Pair};
 use router_core::refresh::{self, Refresher, Setup, Snapshot, kept_route, route_note};
 use router_core::route::{Route, Stop};
 use router_core::settings::{Settings, split_systems};
@@ -135,11 +136,13 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     let settings = Settings::from_config(&cfg, &uni, hulls)?;
     // The worker gets the wormholes again each 5 minutes, and wakes the window after each refresh.
     let wake = ctx.clone();
+    let pairs = report.pairs.clone();
     let mut setup = Setup::new(base, report, types, cfg.nexum.clone(), &paths);
     setup.last = all.clone();
     let refresher = Refresher::start(setup, router_core::wormhole::now, move || wake.request_repaint());
     let mut session = Session::new(uni, settings, cfg, paths.config.clone(), shortcuts);
     session.wormhole_data = all;
+    session.bridges = pairs;
     session.log = log;
     session.refresher = Some(refresher);
     for line in startup_lines {
@@ -164,6 +167,8 @@ pub struct Session {
     pub shortcuts: Shortcuts,
     /// The wormhole data of each source, from the startup or the last refresh.
     pub wormhole_data: Vec<SourceData>,
+    /// The jump bridges, one pair for each bridge, in the order of the names.
+    pub bridges: Vec<Pair>,
     /// The rows of the Log window: the fetches since the start, newest last.
     pub log: Vec<LogEntry>,
     /// The refresh worker. `None` in the tests, and after the worker stops.
@@ -213,6 +218,7 @@ impl Session {
             cfg_path: cfg_path.clone(),
             shortcuts,
             wormhole_data: Vec::new(),
+            bridges: Vec::new(),
             log: Vec::new(),
             refresher: None,
             refreshed_at: None,
@@ -330,6 +336,55 @@ impl Session {
     fn avoid_changed(&mut self) {
         self.recompute();
         self.save_quietly();
+    }
+
+    /// Add the bridges of a pasted SMT list to the list, or replace the list with them. Save the
+    /// list, and give the map to the refresh worker. Return the lines that did not give a bridge.
+    pub fn import_bridges(&mut self, text: &str, replace: bool) -> Vec<String> {
+        let report = overlay::parse_bridges(&self.uni, text);
+        let mut problems: Vec<String> = report.unknown.iter().map(|name| format!("Unknown system \"{name}\"")).collect();
+        problems.extend(report.same.iter().map(|name| format!("{name} cannot bridge to itself")));
+        let before = if replace { Vec::new() } else { self.bridges.clone() };
+        let mut pairs = before.clone();
+        pairs.extend(report.pairs.iter().filter(|p| !before.contains(p)));
+        let added = pairs.len() - before.len();
+        self.set_bridges(pairs);
+        let s = if added == 1 { "" } else { "s" };
+        let level = if problems.is_empty() { Level::Info } else { Level::Warning };
+        self.notify(level, format!("Added {added} jump bridge{s}"));
+        problems
+    }
+
+    /// Take the bridge at row `i` off the list.
+    pub fn remove_bridge(&mut self, i: usize) {
+        if i < self.bridges.len() {
+            let mut pairs = self.bridges.clone();
+            pairs.remove(i);
+            self.set_bridges(pairs);
+        }
+    }
+
+    /// Empty the list of bridges.
+    pub fn clear_bridges(&mut self) {
+        self.set_bridges(Vec::new());
+    }
+
+    /// Keep `pairs` as the bridges: write the bridge file, and tell the worker, which builds the new map.
+    /// Without a worker, the new bridges load at the next start.
+    fn set_bridges(&mut self, mut pairs: Vec<Pair>) {
+        pairs.sort_by_cached_key(|&(a, b)| (self.uni.name(a).to_lowercase(), self.uni.name(b).to_lowercase()));
+        let path = self.cfg_path.with_file_name(router_core::config::BRIDGES_FILE);
+        if let Err(e) = overlay::save_bridges(&path, &self.uni, &pairs) {
+            self.notify(Level::Error, e.to_string());
+            return;
+        }
+        self.bridges = pairs;
+        match &self.refresher {
+            Some(refresher) => {
+                refresher.bridges(OverlayReport { bridges: self.bridges.len() * 2, pairs: self.bridges.clone(), ..Default::default() });
+            }
+            None => self.notify(Level::Info, "Jump bridges saved. Restart to load them."),
+        }
     }
 
     /// Find the routes and the favourite distances again.
@@ -803,6 +858,29 @@ mod tests {
         // After the gap, the call sends a message again.
         s.refresh_now(start + REFRESH_GAP);
         assert!(matches!(control.try_recv(), Ok(Control::Refresh)));
+    }
+
+    #[test]
+    fn an_import_keeps_one_pair_for_a_bridge_in_both_directions_and_tells_the_worker() {
+        let (mut s, tmp) = session();
+        let (refresher, _snapshots, control) = fake_refresher();
+        s.refresher = Some(refresher);
+        let problems = s.import_bridges("0 Jita --> Perimeter\n0 Perimeter --> Jita\n0 Jita --> Jita\n0 Jita --> Nowhere\n", true);
+        assert_eq!(problems, ["Unknown system \"Nowhere\"", "Jita cannot bridge to itself"]);
+        assert_eq!(s.bridges.len(), 1);
+        let Ok(Control::Bridges(report)) = control.try_recv() else { panic!("no bridge message") };
+        assert_eq!((report.pairs, report.bridges), (s.bridges.clone(), 2));
+        // The file holds both directions.
+        let text = std::fs::read_to_string(tmp.path().join("ansiblex.txt")).unwrap();
+        assert_eq!(text.lines().filter(|l| l.contains("-->")).count(), 2);
+        // A second import of the same bridge adds nothing. Replace drops the old list.
+        assert!(s.import_bridges("0 Perimeter --> Jita", false).is_empty());
+        assert_eq!(s.bridges.len(), 1);
+        s.import_bridges("0 Jita --> Amarr", true);
+        assert_eq!(s.bridges.len(), 1);
+        assert_eq!((s.uni.name(s.bridges[0].0), s.uni.name(s.bridges[0].1)), ("Amarr", "Jita"));
+        s.remove_bridge(0);
+        assert!(s.bridges.is_empty());
     }
 
     #[test]

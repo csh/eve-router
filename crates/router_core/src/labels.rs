@@ -36,6 +36,9 @@ impl Shortcuts {
         if !report.unknown.is_empty() {
             warnings.push(format!("Bridges: unknown systems: {}", report.unknown.join(", ")));
         }
+        if !report.same.is_empty() {
+            warnings.push(format!("Bridges: same system at both ends: {}", report.same.join(", ")));
+        }
         for (source, unknown) in [(SourceId::Nexum, &wh.report.unknown), (SourceId::EveScout, &scout.report.unknown)] {
             if !unknown.is_empty() {
                 let ids: Vec<String> = unknown.iter().map(u32::to_string).collect();
@@ -391,7 +394,7 @@ mod tests {
     fn shortcuts_warning_text() {
         use crate::sources::{evescout, nexum};
         let uni = crate::test_support::universe();
-        let report = OverlayReport { bridges: 0, unknown: vec!["Nowhere".into()] };
+        let report = OverlayReport { unknown: vec!["Nowhere".into()], ..Default::default() };
         let mut wh = nexum::Load { warning: Some("Nexum offline, map from 14:02".into()), ..Default::default() };
         wh.report.unknown = vec![1, 2];
         let mut scout = evescout::Load { warning: Some("EVE-Scout offline, feed from 14:02".into()), ..Default::default() };

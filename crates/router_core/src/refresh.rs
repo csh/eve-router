@@ -4,7 +4,7 @@
 use crate::config::{AppPaths, NexumConfig};
 use crate::labels::Shortcuts;
 use crate::log::LogEntry;
-use crate::overlay::OverlayReport;
+use crate::overlay::{self, OverlayReport};
 use crate::route::{Path, Route};
 use crate::sources::{self, evescout, nexum};
 use crate::universe::{Link, Universe};
@@ -157,6 +157,8 @@ impl Setup {
 
 /// A message from the app to the worker.
 pub enum Control {
+    /// Use these jump bridges, and build the map again. A fresh cache stays in use.
+    Bridges(OverlayReport),
     /// Use these Nexum settings. Refresh at once with no fresh-cache check, then start a new interval.
     Nexum(NexumConfig),
     /// Refresh at once with no fresh-cache check, then start a new interval.
@@ -189,6 +191,11 @@ impl Refresher {
     /// Use new Nexum settings, and refresh at once. A stopped worker ignores the message.
     pub fn nexum(&self, cfg: NexumConfig) {
         let _ = self.control.send(Control::Nexum(cfg));
+    }
+
+    /// Use new jump bridges. The worker builds the map again at once. A stopped worker ignores the message.
+    pub fn bridges(&self, report: OverlayReport) {
+        let _ = self.control.send(Control::Bridges(report));
     }
 
     /// Refresh at once, also when a cache is fresh. A stopped worker ignores the message.
@@ -229,6 +236,13 @@ impl Worker {
     fn run(mut self, control: Receiver<Control>, snapshots: Sender<Snapshot>, clock: impl Fn() -> u64, wake: impl Fn()) {
         loop {
             let force = match control.recv_timeout(self.setup.interval) {
+                Ok(Control::Bridges(report)) => {
+                    let mut base = (*self.setup.base).clone();
+                    overlay::set_bridges(&mut base, &report.pairs);
+                    self.setup.base = Arc::new(base);
+                    self.setup.report = report;
+                    false
+                }
                 Ok(Control::Nexum(cfg)) => {
                     self.setup.nexum = cfg;
                     true
