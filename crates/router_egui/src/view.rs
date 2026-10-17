@@ -463,7 +463,20 @@ impl View {
     }
 
     fn top_bar_full(&mut self, ui: &mut Ui, s: &mut Session) {
+        let locked = s.pilots.active.is_some();
         ui.horizontal(|ui| {
+            // The route options start at the left edge. While a route is active, they are hidden.
+            if !locked {
+                ui.label(theme::header_text("Mode"));
+                mode_combo(ui, s, 150.0);
+                optimize_box(ui, s);
+                ui.separator();
+                wormholes_toggle(ui, s);
+                bridges_toggle(ui, s);
+                ui.separator();
+                ui.label(theme::header_text("Show up to"));
+                count_stepper(ui, s);
+            }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // The right-to-left layout draws the Settings button first, so it sits at the right edge.
                 if ui.app_button(icon_label(ui, icons::GEAR.fill(), "Settings")).clicked() {
@@ -473,27 +486,12 @@ impl View {
                     0 => "Avoid".to_string(),
                     n => format!("Avoid ({n})"),
                 };
-                let locked = s.pilots.active.is_some();
                 let button = ui.add_enabled(!locked, AppButton::new(avoid)).on_hover_text("Systems and regions that routes avoid");
                 if button.clicked() {
                     self.popup = Some(Popup::Avoid { confirm: false, search: SearchBox::new("avoid-search"), region: String::new() });
                 }
                 button.on_disabled_hover_text(settings_window::LOCKED);
                 self.pilots.characters_button(ui, s);
-                // While a route is active, the controls that change the route are hidden.
-                if locked {
-                    return;
-                }
-                ui.separator();
-                count_stepper(ui, s);
-                ui.label(theme::header_text("Show up to"));
-                ui.separator();
-                bridges_toggle(ui, s);
-                wormholes_toggle(ui, s);
-                ui.separator();
-                optimize_box(ui, s);
-                mode_combo(ui, s, 150.0);
-                ui.label(theme::header_text("Mode"));
             });
         });
     }
