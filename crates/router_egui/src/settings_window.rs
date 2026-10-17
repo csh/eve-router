@@ -421,8 +421,6 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
     ui.add_space(10.0);
     if let Some(e) = &form.error {
         ui.label(RichText::new(e).color(theme::ERROR));
-    } else if !s.status.is_empty() {
-        ui.add(egui::Label::new(RichText::new(&s.status).color(theme::WARN)).wrap());
     }
     ui.horizontal(|ui| {
         ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
@@ -1003,7 +1001,7 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
         None => return false,
     }
     s.recompute();
-    s.save_quietly();
+    s.save();
     true
 }
 

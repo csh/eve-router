@@ -185,16 +185,16 @@ impl PilotsUi {
         s.pilots.update();
         match s.pilots.sync_hull(&mut s.settings) {
             HullSync::None => {}
-            HullSync::Source => s.save_quietly(),
+            HullSync::Source => s.save(),
             // The active route stays as it is. The pilot chooses when to re-route.
             HullSync::Hull if s.pilots.active.is_some() => {
                 let kind = s.settings.rules.hull.as_ref().map_or("an unknown ship".into(), |h| h.name.clone());
                 s.notify(Level::Info, format!("Ship changed to {kind}. The routes update when this route ends."));
-                s.save_quietly();
+                s.save();
             }
             HullSync::Hull => {
                 s.recompute();
-                s.save_quietly();
+                s.save();
             }
         }
         for text in std::mem::take(&mut s.pilots.notices) {
@@ -533,7 +533,7 @@ impl PilotsUi {
             s.settings.hull_source = HullSource::Pilot(id);
             s.pilots.sync_hull(&mut s.settings);
             s.recompute();
-            s.save_quietly();
+            s.save();
             s.notify(Level::Info, format!("Routes planned for the {kind}. Start the route again."));
         }
         if let Some((route, id)) = next {

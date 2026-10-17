@@ -439,14 +439,14 @@ fn count_stepper(ui: &mut Ui, s: &mut Session) {
         if ui.add_enabled(s.settings.top > 1, AppButton::new("−")).clicked() {
             s.settings.top -= 1;
             s.recompute();
-            s.save_quietly();
+            s.save();
         }
     };
     let plus = |ui: &mut Ui, s: &mut Session| {
         if ui.app_button("+").clicked() {
             s.settings.top += 1;
             s.recompute();
-            s.save_quietly();
+            s.save();
         }
     };
     if rtl {
@@ -487,7 +487,7 @@ fn optimize_box(ui: &mut Ui, s: &mut Session) {
     if ui.app_checkbox(&mut s.settings.optimize, "Optimize order").on_hover_text("Visit each system once, in the cheapest order").changed()
     {
         s.recompute();
-        s.save_quietly();
+        s.save();
     }
 }
 
@@ -501,7 +501,7 @@ fn mode_combo(ui: &mut Ui, s: &mut Session, width: f32) {
     if mode != s.settings.mode {
         s.settings.mode = mode;
         s.recompute();
-        s.save_quietly();
+        s.save();
     }
 }
 

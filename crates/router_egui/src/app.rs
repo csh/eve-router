@@ -335,7 +335,7 @@ impl Session {
     /// just made the change, and the route table shows the result.
     fn avoid_changed(&mut self) {
         self.recompute();
-        self.save_quietly();
+        self.save();
     }
 
     /// Add the bridges of a pasted SMT list to the list, or replace the list with them. Save the
@@ -592,16 +592,9 @@ impl Session {
         true
     }
 
-    /// Save the config, and show the result on the status line.
+    /// Save the config. A save that works gives no message: the pilot just made the change.
+    /// Only an error gives a notice.
     pub fn save(&mut self) {
-        match self.write_config() {
-            Ok(()) => self.notify(Level::Success, "Config saved!"),
-            Err(e) => self.notify(Level::Error, e.to_string()),
-        }
-    }
-
-    /// Save the config. Show only an error on the status line.
-    pub fn save_quietly(&mut self) {
         if let Err(e) = self.write_config() {
             self.notify(Level::Error, e.to_string());
         }
@@ -631,7 +624,7 @@ impl Session {
     pub fn set_faction_theme(&mut self, theme: theme::FactionTheme, ctx: &egui::Context) {
         self.cfg.theme = Some(theme.name().to_string());
         theme::apply(ctx, theme, self.cfg.compact);
-        self.save_quietly();
+        self.save();
     }
 
     /// Whether compact UI mode is active.
@@ -643,7 +636,7 @@ impl Session {
     pub fn set_compact_mode(&mut self, compact: bool, ctx: &egui::Context) {
         self.cfg.compact = compact;
         theme::apply(ctx, self.faction_theme(), compact);
-        self.save_quietly();
+        self.save();
     }
 
     /// Apply the theme and compact mode from config to the egui context.
@@ -1008,7 +1001,7 @@ mod tests {
         assert!(s.notices.is_empty(), "no search yet");
         assert!(!s.cfg_path.exists(), "no write yet");
         assert_eq!(s.apply_due(start + APPLY_DELAY + Duration::from_millis(300)), None);
-        assert_eq!(last(&s), Some((Level::Success, "Config saved!")));
+        assert!(s.notices.is_empty(), "a save that works is quiet");
         assert!(std::fs::read_to_string(&s.cfg_path).unwrap().contains("2.0"));
         // Nothing waits now.
         s.notices.clear();
