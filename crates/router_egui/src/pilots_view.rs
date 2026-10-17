@@ -711,7 +711,7 @@ impl PilotsUi {
             }
             table
                 .header(20.0, |mut row| {
-                    for text in ["", "#", "Stop", "System", "Security", "Pilots", "Region", "Via"] {
+                    for text in ["", "#", "Role", "System", "Security", "Pilots", "Region", "Via"] {
                         row.col(|ui| header(ui, text));
                     }
                 })

@@ -47,13 +47,7 @@ enum State {
 
 pub struct RouterApp {
     state: State,
-    /// The start of the last frame, for the frame cap.
-    last_frame: Option<Instant>,
 }
-
-/// The shortest time between two frames: about 60 frames per second at most. eframe draws a frame
-/// only after input or a repaint request, so the window draws no frames while it is idle.
-const MIN_FRAME_TIME: Duration = Duration::from_millis(16);
 
 /// The quiet time after the last change of a dragged value, before the app searches and saves.
 pub const APPLY_DELAY: Duration = Duration::from_millis(500);
@@ -78,7 +72,7 @@ impl RouterApp {
             let _ = tx.send(LoadMsg::Done(Box::new(result)));
             ctx.request_repaint();
         });
-        RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None }
+        RouterApp { state: State::Loading(Loading { rx, step: None }) }
     }
 
     /// Take the load result, if the thread sent it.
@@ -617,12 +611,6 @@ impl Session {
 
 impl eframe::App for RouterApp {
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
-        if let Some(elapsed) = self.last_frame.map(|t| t.elapsed())
-            && elapsed < MIN_FRAME_TIME
-        {
-            std::thread::sleep(MIN_FRAME_TIME - elapsed);
-        }
-        self.last_frame = Some(Instant::now());
         self.poll(ui.ctx());
         // The refresh worker sends a new map each 5 minutes.
         if let State::Ready(session, _) = &mut self.state {
@@ -997,7 +985,7 @@ mod tests {
     fn a_lost_load_thread_shows_an_error() {
         let (tx, rx) = mpsc::channel::<LoadMsg>();
         drop(tx);
-        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None };
+        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }) };
         app.poll(&egui::Context::default());
         let State::Failed(text) = &app.state else { panic!("the state is not Failed") };
         assert_eq!(text, LOAD_STOPPED);
@@ -1006,7 +994,7 @@ mod tests {
     #[test]
     fn the_splash_keeps_the_newest_step() {
         let (tx, rx) = mpsc::channel::<LoadMsg>();
-        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None };
+        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }) };
         tx.send(LoadMsg::Progress(startup::Progress::CheckingSde)).unwrap();
         tx.send(LoadMsg::Progress(startup::Progress::DownloadingSde { done: 5, total: 10 })).unwrap();
         app.poll(&egui::Context::default());

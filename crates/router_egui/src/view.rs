@@ -105,7 +105,7 @@ impl Tab {
     }
 }
 
-/// The width under which the route table drops the columns "#", "Stop" and "Region".
+/// The width under which the route table drops the columns "#", "Role" and "Region".
 const TABLE_COMPACT: f32 = 560.0;
 
 /// How long the status bar shows a status text.
@@ -896,7 +896,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
         table
             .header(20.0, |mut row| {
                 let names: &[&str] =
-                    if compact { &["System", "Security", "Via"] } else { &["#", "Stop", "System", "Security", "Region", "Via"] };
+                    if compact { &["System", "Security", "Via"] } else { &["#", "Role", "System", "Security", "Region", "Via"] };
                 for text in names {
                     row.col(|ui| {
                         header(ui, text);
