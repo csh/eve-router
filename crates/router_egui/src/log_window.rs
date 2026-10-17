@@ -2,7 +2,7 @@
 
 use crate::app::Session;
 use crate::theme;
-use egui::{Align, Context, Frame, Layout, Margin, RichText, ViewportBuilder, ViewportId};
+use egui::{Align, Context, Frame, Id, Layout, Margin, RichText, ViewportBuilder, ViewportId};
 use egui_extras::{Column, TableBuilder};
 use router_core::log::{LogEntry, local_clock_text};
 
@@ -16,12 +16,29 @@ pub fn show(ctx: &Context, open: &mut bool, s: &Session) {
     if !*open {
         return;
     }
-    let builder =
-        ViewportBuilder::default().with_title("EVE Router - Log").with_inner_size([660.0, 380.0]).with_min_inner_size([420.0, 180.0]);
+    // The window starts hidden. The OS shows a new window with its own background and size for
+    // a moment, before the first frame of the app is drawn. The window shows after that frame.
+    let builder = ViewportBuilder::default()
+        .with_title("EVE Router - Log")
+        .with_inner_size([660.0, 380.0])
+        .with_min_inner_size([420.0, 180.0])
+        .with_visible(false);
+    let frames_id = Id::new("log-window-frames");
     ctx.show_viewport_immediate(ViewportId::from_hash_of("log-window"), builder, |ui, _class| {
         if ui.ctx().input(|i| i.viewport().close_requested()) {
             *open = false;
+            ui.ctx().data_mut(|d| d.remove::<u32>(frames_id));
             return;
+        }
+        let frames = ui.ctx().data_mut(|d| {
+            let frames = d.get_temp_mut_or_default::<u32>(frames_id);
+            *frames += 1;
+            *frames
+        });
+        match frames {
+            1 => ui.ctx().request_repaint(),
+            2 => ui.ctx().send_viewport_cmd(egui::ViewportCommand::Visible(true)),
+            _ => {}
         }
         let frame = Frame::new().fill(theme::BG).inner_margin(Margin::same(10));
         egui::CentralPanel::default().frame(frame).show(ui, |ui| table(ui, &s.log));
