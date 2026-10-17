@@ -587,14 +587,20 @@ impl View {
             }
             let mut edit = None;
             let arrow = if open { icons::CARET_DOWN } else { icons::CARET_RIGHT }.as_str();
-            let chain = s.waypoints.iter().map(|&n| s.uni.name(n)).collect::<Vec<_>>().join(" » ");
+            let names: Vec<&str> = s.waypoints.iter().map(|&n| s.uni.name(n)).collect();
+            let chain = names.join(" » ");
+            let summary = waypoint_summary(&names);
             ui.horizontal(|ui| {
                 let hint = if open { "Hide the waypoint list" } else { "Show the waypoint list, to move or remove a waypoint" };
                 if ui.add(Button::new(arrow).small()).on_hover_text(hint).clicked() {
                     self.waypoints_open = Some(!open);
                 }
                 if !open {
-                    ui.add(Label::new(RichText::new(&chain).color(theme::TEXT)).truncate());
+                    let label = ui.add(Label::new(RichText::new(&summary).color(theme::TEXT)).truncate().sense(Sense::hover()));
+                    // A short summary leaves out the midpoints, so the hover text lists them all.
+                    if summary != chain {
+                        label.on_hover_text(&chain);
+                    }
                 }
             });
             if !open {
@@ -805,12 +811,13 @@ fn route_list(ui: &mut Ui, s: &mut Session) {
                 );
                 strip::paint(&painter, &s.uni, route, strip_rect);
                 let names = |k: usize| s.uni.name(route.path.nodes[k]);
-                let mut tip = vec![format!("#{}  {summary_text}", i + 1)];
+                let mut tip = Vec::new();
                 if legs.len() > 1 {
                     tip.extend(legs.iter().map(|&(a, b)| format!("{} » {}: {}", names(a), names(b), jumps_label(b - a))));
                 }
-                let tip = tip.join("\n");
-                if response.on_hover_text(tip).clicked() {
+                // The row shows the summary already, so the tooltip is only for the jumps of each leg.
+                let response = if legs.len() > 1 { response.on_hover_text(tip.join("\n")) } else { response };
+                if response.clicked() {
                     s.selected = i;
                     s.selected_step = None;
                 }
@@ -1145,6 +1152,19 @@ fn connections_panel(ui: &mut Ui, s: &Session) -> bool {
 
 /// The favourites, with the jumps from the first waypoint. `fill` makes the panel as high as the
 /// space that is left.
+/// The collapsed list of waypoints: the whole chain when it is short, else the start and the
+/// destination with the count of the midpoints between them.
+fn waypoint_summary(names: &[&str]) -> String {
+    const MAX_SHOWN: usize = 4;
+    match names {
+        [first, .., last] if names.len() > MAX_SHOWN => {
+            let midpoints = names.len() - 2;
+            format!("{first} » {last} · {midpoints} midpoints")
+        }
+        _ => names.join(" » "),
+    }
+}
+
 fn favourites_panel(ui: &mut Ui, s: &mut Session, fill: bool) {
     let info = s.waypoints.first().map_or(String::new(), |&n| format!("jumps from {}", s.uni.name(n)));
     let mut add = None;
@@ -1302,6 +1322,20 @@ pub fn splash(ui: &mut Ui, error: Option<&str>, step: Option<&router_core::start
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_short_chain_shows_every_waypoint() {
+        assert_eq!(waypoint_summary(&["Jita"]), "Jita");
+        assert_eq!(waypoint_summary(&["Jita", "Amarr"]), "Jita » Amarr");
+        assert_eq!(waypoint_summary(&["A", "B", "C", "D"]), "A » B » C » D");
+    }
+
+    #[test]
+    fn a_long_chain_shows_the_ends_and_counts_the_midpoints() {
+        assert_eq!(waypoint_summary(&["A", "B", "C", "D", "E"]), "A » E · 3 midpoints");
+        let names = vec!["x"; 21];
+        assert_eq!(waypoint_summary(&names), "x » x · 19 midpoints");
+    }
 
     #[test]
     fn the_splash_draws_every_step_and_the_error() {
