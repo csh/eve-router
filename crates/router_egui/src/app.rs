@@ -629,7 +629,7 @@ impl eframe::App for RouterApp {
             session.poll_refresh();
         }
         // The window has no OS frame: the app draws the title bar and the border, on every screen.
-        crate::chrome::square_corners(frame);
+        crate::chrome::square_window(frame);
         let detail = match &self.state {
             State::Ready(session, _) => session.uni.build.map(|build| format!("SDE {build}")).unwrap_or_default(),
             _ => String::new(),

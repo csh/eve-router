@@ -128,18 +128,21 @@ pub fn paint_border(ctx: &Context, accent: Color32) {
     }
 }
 
-/// Tell Windows 11 not to round the corners of the window. The app frame is square, so the
-/// rounding of the OS cuts into the border. Other systems and Windows 10 ignore the call. The
-/// function acts one time, when the window has a handle.
-pub fn square_corners(frame: &eframe::Frame) {
+/// Make the window of Windows 11 square, with no border of its own. The app draws its own
+/// border, so the rounded corners and the light line that the OS adds only cut into it. Other
+/// systems and Windows 10 ignore the calls. The function acts one time, when the window has a handle.
+pub fn square_window(frame: &eframe::Frame) {
     #[cfg(windows)]
     {
         use raw_window_handle::{HasWindowHandle, RawWindowHandle};
         use std::sync::atomic::{AtomicBool, Ordering};
 
-        // DWMWA_WINDOW_CORNER_PREFERENCE, and the value DWMWCP_DONOTROUND.
-        const ATTRIBUTE: u32 = 33;
+        // DWMWA_WINDOW_CORNER_PREFERENCE with DWMWCP_DONOTROUND, and DWMWA_BORDER_COLOR with
+        // DWMWA_COLOR_NONE.
+        const CORNER_PREFERENCE: u32 = 33;
         const DO_NOT_ROUND: u32 = 1;
+        const BORDER_COLOR: u32 = 34;
+        const NO_COLOR: u32 = 0xFFFF_FFFE;
         static DONE: AtomicBool = AtomicBool::new(false);
         #[link(name = "dwmapi")]
         unsafe extern "system" {
@@ -152,9 +155,13 @@ pub fn square_corners(frame: &eframe::Frame) {
         let Ok(handle) = frame.window_handle() else { return };
         let RawWindowHandle::Win32(window) = handle.as_raw() else { return };
         DONE.store(true, Ordering::Relaxed);
-        // SAFETY: the handle is the live window of this frame. The value is a `u32` of 4 bytes.
-        // The call has no effect, and returns an error code, where the system has no such attribute.
-        unsafe { DwmSetWindowAttribute(window.hwnd.get() as *mut std::ffi::c_void, ATTRIBUTE, &DO_NOT_ROUND, 4) };
+        let hwnd = window.hwnd.get() as *mut std::ffi::c_void;
+        // SAFETY: the handle is the live window of this frame. Each value is a `u32` of 4 bytes.
+        // A call has no effect, and returns an error code, where the system has no such attribute.
+        unsafe {
+            DwmSetWindowAttribute(hwnd, CORNER_PREFERENCE, &DO_NOT_ROUND, 4);
+            DwmSetWindowAttribute(hwnd, BORDER_COLOR, &NO_COLOR, 4);
+        }
     }
     #[cfg(not(windows))]
     let _ = frame;
