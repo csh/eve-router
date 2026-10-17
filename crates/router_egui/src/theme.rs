@@ -23,6 +23,8 @@ pub const TEXT_OFF: Color32 = Color32::from_rgb(0x4F, 0x4F, 0x4F);
 pub const OK: Color32 = Color32::from_rgb(0x8D, 0xC1, 0x69);
 pub const WARN: Color32 = Color32::from_rgb(0xF3, 0x90, 0x58);
 pub const ERROR: Color32 = Color32::from_rgb(0xFF, 0x45, 0x4B);
+/// A muted red for the icon of a failure screen. `ERROR` is too bright for a large mark.
+pub const ERROR_SOFT: Color32 = Color32::from_rgb(0xC9, 0x5A, 0x5A);
 pub const WORMHOLE: Color32 = Color32::from_rgb(0xB0, 0x70, 0xE0);
 pub const BRIDGE: Color32 = Color32::from_rgb(0x60, 0xA0, 0xFF);
 

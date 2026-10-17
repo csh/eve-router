@@ -1278,9 +1278,19 @@ pub fn splash(ui: &mut Ui, error: Option<&str>, step: Option<&router_core::start
                                 }
                             }
                             Some(e) => {
-                                ui.label(RichText::new("The load failed").color(theme::ERROR).family(theme::bold()));
                                 ui.add_space(4.0);
-                                ui.label(RichText::new(e).color(theme::TEXT));
+                                ui.label(RichText::new(icons::WARNING_CIRCLE.as_str()).size(30.0).color(theme::ERROR_SOFT));
+                                ui.add_space(10.0);
+                                ui.label(
+                                    RichText::new("Error loading")
+                                        .family(theme::bold())
+                                        .size(18.0)
+                                        .extra_letter_spacing(0.5)
+                                        .color(Color32::WHITE),
+                                );
+                                ui.add_space(8.0);
+                                let message = RichText::new(e).color(theme::TEXT_SOFT).line_height(Some(20.0));
+                                ui.add(Label::new(message).wrap());
                             }
                         }
                         ui.add_space(8.0);
