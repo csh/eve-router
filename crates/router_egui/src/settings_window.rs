@@ -403,11 +403,16 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
         ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0, theme::LINE));
         ui.add_space(pad - ui.spacing().item_spacing.x);
         ui.allocate_ui_with_layout(vec2(page_width, body), egui::Layout::top_down(egui::Align::Min), |ui| {
+            // The Ansiblex page has its own scrolling table, so the page itself stays still.
+            if form.page == Page::Ansiblex {
+                ansiblex_page(ui, form, s, locked);
+                return;
+            }
             ScrollArea::vertical().max_height(body).auto_shrink([false, false]).show(ui, |ui| match form.page {
                 Page::Favourites => favourites_page(ui, form, s),
                 Page::Theme => theme_page(ui, s),
                 Page::Wormholes => action = wormholes_page(ui, form, s, locked, loading),
-                Page::Ansiblex => ansiblex_page(ui, form, s, locked),
+                Page::Ansiblex => {}
                 Page::Engine => engine_page(ui, form, s, locked),
             });
         });
@@ -715,7 +720,7 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
     ui.label(RichText::new("Paste a list in SMT format: one line for each bridge, like \"0 A --> B\".").color(theme::TEXT_DIM));
     ui.add_space(4.0);
     ui.add_enabled_ui(!locked, |ui| {
-        let edit = TextEdit::multiline(&mut form.bridge_text).hint_text("0 UALX-3 --> IL-YTR").desired_rows(5).desired_width(f32::INFINITY);
+        let edit = TextEdit::multiline(&mut form.bridge_text).hint_text("0 UALX-3 --> IL-YTR").desired_rows(3).desired_width(f32::INFINITY);
         ui.add(edit);
         for p in &form.bridge_problems {
             ui.label(RichText::new(p).color(theme::ERROR));
@@ -745,6 +750,8 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
     }
     let rows: Vec<_> = s.bridges.iter().map(|&(a, b)| (a, b, zone_text(s, a), zone_text(s, b))).collect();
     let mut remove = None;
+    // The table takes the height that is left, minus the row of the Clear all button.
+    let table_height = (ui.available_height() - 44.0).max(84.0);
     use egui_extras::Column;
     egui_extras::TableBuilder::new(ui)
         .id_salt("ansiblex-bridges")
@@ -756,8 +763,8 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
         .column(Column::remainder().at_least(110.0).clip(true))
         .column(Column::exact(56.0))
         .column(Column::exact(80.0))
-        .max_scroll_height(14.0 * 28.0)
-        .auto_shrink([false, true])
+        .max_scroll_height(table_height)
+        .auto_shrink([false, false])
         .header(22.0, |mut header| {
             for text in ["System", "Zone", "", "System", "Zone", ""] {
                 header.col(|ui| _ = ui.label(theme::header_text(text)));
