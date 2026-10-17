@@ -1170,7 +1170,7 @@ fn favourites_panel(ui: &mut Ui, s: &mut Session, fill: bool) {
             // A row has a faint fill at rest, so it reads as a button before the pointer comes.
             // Under the pointer the fill is brighter and the row gets the bar of a selected row.
             let hovered = response.hovered();
-            ui.painter().rect_filled(rect, 0.0, accent.gamma_multiply(if hovered { 0.15 } else { 0.07 }));
+            ui.painter().rect_filled(rect, 0.0, accent.gamma_multiply(if hovered { 0.13 } else { 0.045 }));
             if hovered {
                 theme::selection_bar(ui, rect);
             }
