@@ -255,7 +255,7 @@ impl PilotsUi {
             }
             1 => self.confirm(s, route, ids[0]),
             _ => {
-                let chosen = s.pilots.last_used().filter(|id| ids.contains(id)).unwrap_or(ids[0]);
+                let chosen = preselect(s.settings.hull_source, &ids, s.pilots.last_used());
                 self.start = Some(Start::Pick { route: picked, chosen });
             }
         }
@@ -886,6 +886,16 @@ fn ship_row(ui: &mut Ui, pilot: &PilotView, hulls: &router_core::ansiblex::HullT
     });
 }
 
+/// The pilot that the send dialog selects. A pilot that the user picked in the Pilot picker wins.
+/// Else the last pilot to send a route. Else the first one. `ids` lists the pilots that can send.
+fn preselect(source: HullSource, ids: &[u64], last: Option<u64>) -> u64 {
+    let picked = match source {
+        HullSource::Pilot(id) => Some(id),
+        HullSource::Manual => None,
+    };
+    picked.into_iter().chain(last).find(|id| ids.contains(id)).unwrap_or(ids[0])
+}
+
 /// The index of the chosen route in the route list. Set `ROUTE_GONE` if there is none.
 fn resolve(s: &mut Session, chosen: &ChosenRoute) -> Option<usize> {
     let route = kept_route(&s.routes, &s.uni, &chosen.uni, &chosen.path);
@@ -1007,5 +1017,15 @@ mod tests {
         ui.continue_after_login(&mut s);
         assert!(ui.start_after_login.is_none() && ui.start.is_none());
         assert_eq!(s.notices.last().map(|n| n.text.as_str()), Some(ROUTE_GONE));
+    }
+
+    #[test]
+    fn a_picked_pilot_beats_the_last_sender() {
+        let ids = [1, 2, 3];
+        assert_eq!(preselect(HullSource::Pilot(2), &ids, Some(3)), 2);
+        assert_eq!(preselect(HullSource::Manual, &ids, Some(3)), 3);
+        // A picked pilot that cannot send now (offline) gives way to the last sender.
+        assert_eq!(preselect(HullSource::Pilot(9), &ids, Some(3)), 3);
+        assert_eq!(preselect(HullSource::Manual, &ids, None), 1);
     }
 }
