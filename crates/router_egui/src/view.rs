@@ -8,7 +8,7 @@ use crate::search::{Pick, SearchBox};
 use crate::settings_window::{self, Popup, SettingsForm};
 use crate::strip;
 use crate::theme::{self, panel};
-use crate::widgets::{AppButton, UiExt};
+use crate::widgets::{AppButton, UiExt, icon_label};
 use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor_icons::icons;
@@ -456,7 +456,7 @@ impl View {
         }
         button.on_disabled_hover_text(settings_window::LOCKED);
         self.pilots.characters_button(ui, s);
-        let settings = ui.app_button(if short { icons::GEAR.as_str().to_string() } else { format!("{} Settings", icons::GEAR.as_str()) });
+        let settings = ui.app_button(icon_label(ui, icons::GEAR.fill(), if short { "" } else { "Settings" }));
         let settings = if short { settings.on_hover_text("Settings") } else { settings };
         if settings.clicked() {
             self.settings = Some(SettingsForm::new(s));
@@ -470,7 +470,7 @@ impl View {
 
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 // The right-to-left layout draws the Settings button first, so it sits at the right edge.
-                if ui.app_button(format!("{} Settings", icons::GEAR.as_str())).clicked() {
+                if ui.app_button(icon_label(ui, icons::GEAR.fill(), "Settings")).clicked() {
                     self.settings = Some(SettingsForm::new(s));
                 }
                 let avoid = match s.settings.avoid.len() {
@@ -730,7 +730,8 @@ fn wormholes_toggle(ui: &mut Ui, s: &mut Session) {
 }
 
 fn optimize_box(ui: &mut Ui, s: &mut Session) {
-    if ui.checkbox(&mut s.settings.optimize, "Optimize order").on_hover_text("Visit each system once, in the cheapest order").changed() {
+    if ui.app_checkbox(&mut s.settings.optimize, "Optimize order").on_hover_text("Visit each system once, in the cheapest order").changed()
+    {
         s.recompute();
         s.save_quietly();
     }
@@ -1176,14 +1177,15 @@ fn favourites_panel(ui: &mut Ui, s: &mut Session, fill: bool) {
             }
             let font = egui::TextStyle::Body.resolve(ui.style());
             let sys = s.uni.system(fav);
-            let p = ui.painter();
-            p.text(
-                rect.left_center() + vec2(10.0, 0.0),
-                egui::Align2::LEFT_CENTER,
-                icons::STAR.as_str(),
-                font.clone(),
-                accent.gamma_multiply(0.6),
+            // The star is the filled icon, so it reads as a mark, not as an outline.
+            let star = egui::WidgetText::from(icons::STAR.fill()).into_galley(
+                ui,
+                Some(egui::TextWrapMode::Extend),
+                f32::INFINITY,
+                egui::TextStyle::Body,
             );
+            let p = ui.painter();
+            p.galley(rect.left_center() + vec2(10.0, -star.size().y / 2.0), star, accent.gamma_multiply(0.7));
             p.text(rect.left_center() + vec2(30.0, 0.0), egui::Align2::LEFT_CENTER, &sys.name, font.clone(), theme::TEXT);
             // The plus at the right edge tells that a click adds the system. It is dim at rest.
             let plus = if hovered { accent } else { accent.gamma_multiply(0.5) };

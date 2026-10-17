@@ -458,7 +458,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                     }
                     let costs = &mut s.settings.costs;
                     if ui
-                        .checkbox(&mut costs.unknown_sig_broken, "Skip these wormholes instead")
+                        .app_checkbox(&mut costs.unknown_sig_broken, "Skip these wormholes instead")
                         .on_hover_text("Never route through a wormhole with no known signature. Stale data can then cut the map")
                         .changed()
                     {
@@ -585,9 +585,9 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                 ui.horizontal_wrapped(|ui| {
                     let hubs = &mut s.settings.hubs;
                     let thera_text = format!("Thera: {}", on_off(hubs.thera));
-                    let thera = ui.checkbox(&mut hubs.thera, thera_text).changed();
+                    let thera = ui.app_checkbox(&mut hubs.thera, thera_text).changed();
                     let turnur_text = format!("Turnur: {}", on_off(hubs.turnur));
-                    let turnur = ui.checkbox(&mut hubs.turnur, turnur_text).changed();
+                    let turnur = ui.app_checkbox(&mut hubs.turnur, turnur_text).changed();
                     if thera || turnur {
                         s.recompute();
                         s.save();
@@ -615,7 +615,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             row_label(ui, narrow, "Layout Density");
             ui.horizontal_wrapped(|ui| {
                 let mut compact = s.compact_mode();
-                if ui.checkbox(&mut compact, "Compact Mode (dense rows and padding)").changed() {
+                if ui.app_checkbox(&mut compact, "Compact Mode (dense rows and padding)").changed() {
                     s.set_compact_mode(compact, ui.ctx());
                 }
             });
@@ -624,7 +624,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             row_label(ui, narrow, "Window Frame");
             ui.horizontal_wrapped(|ui| {
                 let mut custom = s.custom_chrome();
-                if ui.checkbox(&mut custom, "Draw the window frame in the app (Rift style)").changed() {
+                if ui.app_checkbox(&mut custom, "Draw the window frame in the app (Rift style)").changed() {
                     s.set_custom_chrome(custom, ui.ctx());
                 }
             });

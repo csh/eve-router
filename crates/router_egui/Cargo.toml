@@ -15,7 +15,7 @@ eframe = { version = "0.36.2", default-features = false, features = ["glow", "de
 egui = "0.36.2"
 egui-toast = "0.22.0"
 egui_extras = "0.36.2"
-egui_phosphor_icons = { version = "0.5.0", default-features = false }
+egui_phosphor_icons = { version = "0.5.0", default-features = false, features = ["fill"] }
 image = { version = "0.25.10", default-features = false, features = ["jpeg", "png"] }
 mimalloc.workspace = true
 petgraph.workspace = true

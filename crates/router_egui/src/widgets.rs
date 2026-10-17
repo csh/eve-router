@@ -5,6 +5,9 @@ use egui::{
 };
 
 use crate::theme;
+use egui::text::LayoutJob;
+use egui::{Align, FontSelection, RichText};
+use egui_phosphor_icons::icons;
 
 /// The kind of a button. A primary button is the main action of a view.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -85,14 +88,80 @@ impl Widget for AppButton {
     }
 }
 
+/// A checkbox in the style of the app: a square with a dark accent line, a check mark in the accent
+/// when on, and the label at the right. The label takes the click too.
+pub struct AppCheckbox<'a> {
+    checked: &'a mut bool,
+    text: WidgetText,
+}
+
+/// The side of the box of a checkbox.
+const CHECK_BOX: f32 = 16.0;
+
+impl Widget for AppCheckbox<'_> {
+    fn ui(self, ui: &mut Ui) -> Response {
+        let galley = self.text.into_galley(ui, Some(TextWrapMode::Extend), f32::INFINITY, TextStyle::Body);
+        let gap = 8.0;
+        let size = vec2(CHECK_BOX + gap + galley.size().x, CHECK_BOX.max(galley.size().y).max(ui.spacing().interact_size.y));
+        let (rect, mut response) = ui.allocate_exact_size(size, Sense::click());
+        if response.clicked() {
+            *self.checked = !*self.checked;
+            response.mark_changed();
+        }
+        let checked = *self.checked;
+        let enabled = ui.is_enabled();
+        response.widget_info(|| WidgetInfo::selected(WidgetType::Checkbox, enabled, checked, galley.text()));
+        if ui.is_rect_visible(rect) {
+            let accent = theme::accent(ui);
+            let hovered = response.hovered() && enabled;
+            let boxed =
+                egui::Rect::from_min_size(egui::Pos2::new(rect.left(), rect.center().y - CHECK_BOX / 2.0), vec2(CHECK_BOX, CHECK_BOX));
+            let (fill, line, text) = if !enabled {
+                (Color32::TRANSPARENT, theme::LINE, theme::TEXT_OFF)
+            } else if hovered {
+                (if checked { theme::accent_mid(ui) } else { theme::accent_dark(ui) }, theme::accent_light(ui), Color32::WHITE)
+            } else {
+                (if checked { theme::accent_dark(ui) } else { Color32::TRANSPARENT }, theme::accent_line(ui), theme::TEXT)
+            };
+            ui.painter().rect(boxed, 0.0, fill, Stroke::new(1.0, line), StrokeKind::Inside);
+            if checked {
+                let mark = RichText::new(icons::CHECK.as_str()).size(13.0).color(if enabled { accent } else { theme::TEXT_OFF });
+                let mark = WidgetText::from(mark).into_galley(ui, Some(TextWrapMode::Extend), f32::INFINITY, TextStyle::Body);
+                ui.painter().galley(boxed.center() - mark.size() / 2.0, mark, accent);
+            }
+            let pos = egui::Pos2::new(rect.left() + CHECK_BOX + gap, rect.center().y - galley.size().y / 2.0);
+            ui.painter().galley(pos, galley, text);
+        }
+        response
+    }
+}
+
+/// The label of a button: `icon`, then `text`. An empty text gives the icon alone. The icon keeps
+/// its own font face, so a filled icon can stand next to the text.
+pub fn icon_label(ui: &Ui, icon: RichText, text: &str) -> WidgetText {
+    let mut job = LayoutJob::default();
+    let font = FontSelection::Style(TextStyle::Button);
+    icon.append_to(&mut job, ui.style(), font.clone(), Align::Center);
+    if !text.is_empty() {
+        RichText::new(format!(" {text}")).append_to(&mut job, ui.style(), font, Align::Center);
+    }
+    job.into()
+}
+
 /// The short ways to add a button of the app.
 pub trait UiExt {
     /// A button.
     fn app_button(&mut self, text: impl Into<WidgetText>) -> Response;
+    /// A checkbox.
+    fn app_checkbox(&mut self, checked: &mut bool, text: impl Into<WidgetText>) -> Response;
 }
 
 impl UiExt for Ui {
     fn app_button(&mut self, text: impl Into<WidgetText>) -> Response {
         self.add(AppButton::new(text))
+    }
+
+    fn app_checkbox(&mut self, checked: &mut bool, text: impl Into<WidgetText>) -> Response {
+        self.add(AppCheckbox { checked, text: text.into() })
     }
 }
