@@ -12,6 +12,8 @@ pub const BG: Color32 = Color32::from_rgb(0x07, 0x07, 0x07);
 pub const PANEL: Color32 = Color32::from_rgba_premultiplied(0x0D, 0x0D, 0x0D, 0xEB);
 pub const HEADER: Color32 = Color32::from_rgb(0x14, 0x14, 0x14);
 pub const LINE: Color32 = Color32::from_rgb(0x2A, 0x2A, 0x2A);
+/// The 1 px border of the window: darker than the lines inside it.
+pub const WINDOW_BORDER: Color32 = Color32::from_rgb(0x17, 0x17, 0x17);
 pub const TEXT: Color32 = Color32::from_rgb(0xC1, 0xC1, 0xC1);
 /// Between `TEXT` and `TEXT_DIM`: the summary of a route in the route list.
 pub const TEXT_SOFT: Color32 = Color32::from_rgb(0xA0, 0xA0, 0xA0);
@@ -127,6 +129,11 @@ fn mix(a: Color32, b: Color32, t: f32) -> Color32 {
 /// The accent in a dark shade: the fill of a panel header and of a primary button at rest.
 pub fn accent_dark(ui: &Ui) -> Color32 {
     mix(Color32::BLACK, accent(ui), 0.22)
+}
+
+/// The fill of the top bar and the status bar: a faint accent, lighter than a panel header.
+pub fn bar_fill(ui: &Ui) -> Color32 {
+    mix(Color32::BLACK, accent(ui), 0.10)
 }
 
 /// The accent in a middle shade: the fill of a primary button under the pointer.

@@ -233,7 +233,8 @@ impl View {
         }
 
         let class = WidthClass::of(ui.ctx().content_rect().width());
-        let bar = Frame::new().fill(theme::HEADER).inner_margin(Margin::symmetric(12, 6)).stroke(Stroke::new(1.0, theme::LINE));
+        let bar =
+            Frame::new().fill(theme::bar_fill(ui)).inner_margin(Margin::symmetric(12, 6)).stroke(Stroke::new(1.0, theme::accent_dark(ui)));
         egui::Panel::top("top-bar").frame(bar).show(ui, |ui| self.top_bar(ui, s, class));
         egui::Panel::bottom("status-bar").frame(bar).show(ui, |ui| status_bar(ui, s, &mut self.log_open, class == WidthClass::Sidebar));
         let active = s.pilots.active.is_some();
@@ -1156,7 +1157,10 @@ fn favourites_panel(ui: &mut Ui, s: &mut Session, fill: bool) {
             return;
         }
         if s.waypoints.is_empty() {
-            ui.label(RichText::new("Add a waypoint to see the jumps to each favourite.").color(theme::TEXT_DIM));
+            ui.label(
+                RichText::new("Click a favourite to add it as a waypoint. The jumps to each one show once you have a waypoint.")
+                    .color(theme::TEXT_DIM),
+            );
             ui.add_space(6.0);
         }
         for &fav in &s.settings.favourites {
@@ -1169,13 +1173,23 @@ fn favourites_panel(ui: &mut Ui, s: &mut Session, fill: bool) {
             let font = egui::TextStyle::Body.resolve(ui.style());
             let sys = s.uni.system(fav);
             let p = ui.painter();
-            p.text(rect.left_center() + vec2(10.0, 0.0), egui::Align2::LEFT_CENTER, &sys.name, font.clone(), theme::TEXT);
+            let accent = theme::accent(ui);
+            p.text(
+                rect.left_center() + vec2(8.0, 0.0),
+                egui::Align2::LEFT_CENTER,
+                icons::STAR.as_str(),
+                font.clone(),
+                accent.gamma_multiply(0.6),
+            );
+            p.text(rect.left_center() + vec2(28.0, 0.0), egui::Align2::LEFT_CENTER, &sys.name, font.clone(), theme::TEXT);
             let jumps = match jumps {
                 Some(Some(j)) => j.to_string(),
                 Some(None) => "-".into(),
                 None => String::new(),
             };
-            p.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, jumps, font, theme::accent(ui));
+            // With no jump count, the plus under the pointer tells that a click adds the system.
+            let jumps = if jumps.is_empty() && response.hovered() { icons::PLUS.as_str().to_string() } else { jumps };
+            p.text(rect.right_center() - vec2(8.0, 0.0), egui::Align2::RIGHT_CENTER, jumps, font, accent);
             if response.on_hover_text("Click to add as a waypoint").clicked() {
                 add = Some(fav);
             }

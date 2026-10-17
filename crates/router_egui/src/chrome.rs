@@ -118,7 +118,7 @@ fn caption_button(ui: &mut Ui, rect: Rect, name: &str, icon: Icon) -> bool {
 pub fn paint_border(ctx: &Context, accent: Color32) {
     let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("window-border")));
     let rect = ctx.content_rect();
-    painter.rect_stroke(rect, 0.0, Stroke::new(1.0, theme::LINE), StrokeKind::Inside);
+    painter.rect_stroke(rect, 0.0, Stroke::new(1.0, theme::WINDOW_BORDER), StrokeKind::Inside);
     if ctx.input(|i| i.viewport().focused).unwrap_or(true) {
         let top = |y: f32| [Pos2::new(rect.left(), rect.top() + y), Pos2::new(rect.right(), rect.top() + y)];
         painter.line_segment(top(0.5), Stroke::new(1.0, accent));
