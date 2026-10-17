@@ -76,21 +76,11 @@ impl RouterApp {
         theme::apply_default(&ctx);
         theme::set_font(&ctx);
         let (tx, rx) = mpsc::channel();
-        match std::env::var(DEMO_VAR) {
-            Ok(kind) => {
-                // A demo shows the splash screen in the theme that the second variable names.
-                let theme = theme::FactionTheme::from_name(&std::env::var(DEMO_THEME_VAR).unwrap_or_default());
-                theme::apply(&ctx, theme, false);
-                std::thread::spawn(move || demo(&ctx, &tx, &kind));
-            }
-            Err(_) => {
-                std::thread::spawn(move || {
-                    let result = load(ctx.clone(), &tx).map_err(|e| e.to_string());
-                    let _ = tx.send(LoadMsg::Done(Box::new(result)));
-                    ctx.request_repaint();
-                });
-            }
-        }
+        std::thread::spawn(move || {
+            let result = load(ctx.clone(), &tx).map_err(|e| e.to_string());
+            let _ = tx.send(LoadMsg::Done(Box::new(result)));
+            ctx.request_repaint();
+        });
         RouterApp { state: State::Loading(Loading { rx, step: None }), last_frame: None, chrome }
     }
 
@@ -136,39 +126,6 @@ fn env_flag(name: &str) -> bool {
 fn client_id() -> Option<String> {
     let runtime = std::env::var(esi::CLIENT_ID_VAR).ok();
     runtime.or_else(|| option_env!("EVE_ROUTER_CLIENT_ID").map(str::to_owned)).map(|id| id.trim().to_owned()).filter(|id| !id.is_empty())
-}
-
-/// The env var that starts a demo of the splash screen in place of the load: "loading" never
-/// ends, "download" shows a progress bar that fills again and again, and "error" shows the failure.
-const DEMO_VAR: &str = "EVE_ROUTER_DEMO";
-/// The env var that sets the faction theme of a demo, for example "amarr".
-const DEMO_THEME_VAR: &str = "EVE_ROUTER_DEMO_THEME";
-
-/// The demo of the splash screen. It never loads the app, and it never ends, except for "error",
-/// which fails at once. An unknown kind gives "loading".
-fn demo(ctx: &egui::Context, tx: &mpsc::Sender<LoadMsg>, kind: &str) {
-    match kind {
-        "error" => {
-            let _ = tx.send(LoadMsg::Done(Box::new(Err("The SDE file is missing. This is a demo of the error screen.".into()))));
-            ctx.request_repaint();
-        }
-        "download" => {
-            let total = 31_000_000;
-            for done in (0..=total).step_by(250_000).cycle() {
-                let _ = tx.send(LoadMsg::Progress(startup::Progress::DownloadingSde { done, total }));
-                ctx.request_repaint();
-                std::thread::sleep(Duration::from_millis(60));
-            }
-        }
-        _ => {
-            let _ = tx.send(LoadMsg::Progress(startup::Progress::LoadingMap));
-            ctx.request_repaint();
-            // The thread keeps the sender, so the window sees a load that never ends.
-            loop {
-                std::thread::park();
-            }
-        }
-    }
 }
 
 /// The startup load, with the config file and the default SDE directory. The arguments
