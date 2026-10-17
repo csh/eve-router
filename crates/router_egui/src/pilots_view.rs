@@ -188,13 +188,19 @@ impl PilotsUi {
             HullSync::Source => s.save(),
             // The active route stays as it is. The pilot chooses when to re-route.
             HullSync::Hull if s.pilots.active.is_some() => {
-                let kind = s.settings.rules.hull.as_ref().map_or("an unknown ship".into(), |h| h.name.clone());
+                let kind = ship_kind(s);
                 s.notify(Level::Info, format!("Ship changed to {kind}. The routes update when this route ends."));
                 s.save();
             }
             HullSync::Hull => {
+                // The routes change with no action from the pilot, so say why. With no routes, nothing changes.
+                let had_routes = !s.routes.is_empty();
                 s.recompute();
                 s.save();
+                if had_routes {
+                    let kind = ship_kind(s);
+                    s.notify(Level::Warning, format!("Ship changed to {kind}. The routes are planned again."));
+                }
             }
         }
         for text in std::mem::take(&mut s.pilots.notices) {
@@ -884,6 +890,11 @@ fn ship_row(ui: &mut Ui, pilot: &PilotView, hulls: &router_core::ansiblex::HullT
             ui.label(RichText::new(" · no bridges").color(theme::WARN).small());
         }
     });
+}
+
+/// The name of the hull that the pilot flies now, for a notice.
+fn ship_kind(s: &Session) -> String {
+    s.settings.rules.hull.as_ref().map_or("an unknown ship".into(), |h| h.name.clone())
 }
 
 /// The pilot that the send dialog selects. A pilot that the user picked in the Pilot picker wins.
