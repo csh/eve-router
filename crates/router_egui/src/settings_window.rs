@@ -720,7 +720,8 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
     ui.label(RichText::new("Paste a list in SMT format: one line for each bridge, like \"0 A --> B\".").color(theme::TEXT_DIM));
     ui.add_space(4.0);
     ui.add_enabled_ui(!locked, |ui| {
-        let edit = TextEdit::multiline(&mut form.bridge_text).hint_text("0 UALX-3 --> IL-YTR").desired_rows(3).desired_width(f32::INFINITY);
+        let edit =
+            TextEdit::multiline(&mut form.bridge_text).hint_text("0 Jita --> Perimeter").desired_rows(3).desired_width(f32::INFINITY);
         ui.add(edit);
         for p in &form.bridge_problems {
             ui.label(RichText::new(p).color(theme::ERROR));

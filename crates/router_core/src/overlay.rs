@@ -131,7 +131,7 @@ mod tests {
     fn one_line_makes_both_directions_and_a_repeat_adds_nothing() {
         let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
         let before = uni.graph.edge_count();
-        let report = add_bridges(&mut uni, "0 UALX-3 --> IL-YTR\n0 IL-YTR --> UALX-3\n0 ualx-3 --> il-ytr\n");
+        let report = add_bridges(&mut uni, "0 Jita --> Perimeter\n0 Perimeter --> Jita\n0 jita --> perimeter\n");
         assert_eq!(report.pairs.len(), 1);
         assert_eq!(uni.graph.edge_count(), before + 2);
     }
@@ -140,7 +140,7 @@ mod tests {
     fn a_bridge_needs_two_different_systems() {
         let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
         let before = uni.graph.edge_count();
-        let report = add_bridges(&mut uni, "0 UALX-3 --> UALX-3\n0 ualx-3 --> UALX-3\n");
+        let report = add_bridges(&mut uni, "0 Jita --> Jita\n0 jita --> Jita\n");
         assert!(report.pairs.is_empty());
         assert_eq!(report.same.len(), 2);
         assert_eq!(uni.graph.edge_count(), before);
@@ -150,8 +150,8 @@ mod tests {
     fn set_bridges_replaces_the_old_bridges() {
         let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
         let before = uni.graph.edge_count();
-        let first = add_bridges(&mut uni, "0 UALX-3 --> IL-YTR\n");
-        let other = parse_bridges(&uni, "0 KW-OAM --> TY2X-C\n");
+        let first = add_bridges(&mut uni, "0 Jita --> Perimeter\n");
+        let other = parse_bridges(&uni, "0 Amarr --> Dodixie\n");
         set_bridges(&mut uni, &other.pairs);
         assert_eq!(uni.graph.edge_count(), before + 2);
         assert_ne!(first.pairs, other.pairs);
