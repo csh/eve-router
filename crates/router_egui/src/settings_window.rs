@@ -17,7 +17,7 @@ use router_core::sources::{
     nexum::{self, MapInfo},
 };
 use router_core::universe::display_sec;
-use std::time::Instant;
+use std::time::{Duration, Instant};
 
 pub enum Popup {
     /// The Pilot picker. The rows are `Pilots::pilot_rows(filter)`.
@@ -46,9 +46,31 @@ pub struct SettingsForm {
     /// The key field starts empty, so the key never shows on the screen.
     key: String,
     error: Option<String>,
+    /// The field that the pilot saved last, and when. "Saved" shows next to it for `SAVED_TIME`.
+    saved: Option<(Saved, Instant)>,
 }
 
+/// A field with a Save or Apply button.
+#[derive(Clone, Copy, PartialEq)]
+enum Saved {
+    Url,
+    Key,
+    MaxCap,
+}
+
+const SAVED_TIME: Duration = Duration::from_secs(3);
+
 impl SettingsForm {
+    /// Show "Saved" after a button, for a short time, when `field` was saved last.
+    fn saved_label(&self, ui: &mut Ui, field: Saved) {
+        let Some((last, at)) = self.saved else { return };
+        let left = SAVED_TIME.saturating_sub(at.elapsed());
+        if last == field && !left.is_zero() {
+            ui.label(RichText::new("Saved").color(theme::TEXT_DIM));
+            ui.ctx().request_repaint_after(left);
+        }
+    }
+
     pub fn new(s: &Session, page: Page) -> Self {
         SettingsForm {
             page,
@@ -63,6 +85,7 @@ impl SettingsForm {
             url: s.cfg.nexum.url.clone().unwrap_or_default(),
             key: String::new(),
             error: None,
+            saved: None,
         }
     }
 }
@@ -524,10 +547,12 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
                             form.error = None;
                             form.maps_stale(s);
                             s.nexum_saved();
+                            form.saved = Some((Saved::Url, Instant::now()));
                         }
                         Err(e) => form.error = Some(e.to_string()),
                     }
                 }
+                form.saved_label(ui, Saved::Url);
             })
         })
         .response
@@ -557,8 +582,10 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
                         form.key.clear();
                         form.maps_stale(s);
                         s.nexum_saved();
+                        form.saved = Some((Saved::Key, Instant::now()));
                     }
                 }
+                form.saved_label(ui, Saved::Key);
             })
         })
         .response
@@ -777,7 +804,7 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
                     row.col(|ui| _ = ui.label(RichText::new(s.uni.name(node)).color(theme::TEXT)));
                     row.col(|ui| {
                         let color = if zone.is_some() { theme::BRIDGE } else { theme::TEXT_DIM };
-                        let (text, hover) = zone.clone().unwrap_or(("-".into(), "Set the alliance capital to see the zone".into()));
+                        let (text, hover) = zone.clone().unwrap_or(("-".into(), "You must set a capital system to calculate ansiblex zones.".into()));
                         ui.label(RichText::new(text).color(color)).on_hover_text(hover);
                     });
                     if node == *a {
@@ -834,10 +861,12 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
                             form.error = None;
                             s.recompute();
                             s.save();
+                            form.saved = Some((Saved::MaxCap, Instant::now()));
                         }
                         Err(e) => form.error = Some(e.to_string()),
                     }
                 }
+                form.saved_label(ui, Saved::MaxCap);
             })
         })
         .response
@@ -853,7 +882,7 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
                 .suffix(" jumps per 1% of a gate");
             if ui
                 .add(drag)
-                .on_hover_text("A bridge jump with a hull costs this much for each percent of the gate capacitor it uses")
+                .on_hover_text("Raise this to make routes avoid bridge jumps that use much gate capacitor. At 0.5, a jump that uses 20% counts as 10 extra jumps.")
                 .changed()
             {
                 s.apply_later(Instant::now());

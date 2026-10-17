@@ -83,7 +83,8 @@ fn decode(bytes: &[u8]) -> Option<ColorImage> {
     Some(ColorImage::from_rgba_unmultiplied(size, image.as_raw()))
 }
 
-/// One avatar, with the name on hover. The active pilot has an accent ring. An offline pilot
+/// One avatar. The name is not on hover, because the name shows beside the avatar. The route
+/// table has no name beside it, so `avatar_row` adds the hover. The active pilot has an accent ring. An offline pilot
 /// shows at 40 % alpha. Before the portrait loads, the initials show.
 pub fn avatar(ui: &mut Ui, portraits: &mut Portraits, pilot: &PilotView, size: f32) -> egui::Response {
     let tint = if pilot.live.online == Some(false) { Color32::from_white_alpha(102) } else { Color32::WHITE };
@@ -109,7 +110,7 @@ pub fn avatar(ui: &mut Ui, portraits: &mut Portraits, pilot: &PilotView, size: f
     if pilot.active {
         ui.painter().rect_stroke(response.rect, radius, Stroke::new(1.0, theme::accent(ui)), StrokeKind::Outside);
     }
-    response.on_hover_text(&pilot.name)
+    response
 }
 
 /// The avatars of the pilots in one system: at most `MAX_AVATARS`, then "+n other characters".
@@ -117,7 +118,7 @@ pub fn avatar(ui: &mut Ui, portraits: &mut Portraits, pilot: &PilotView, size: f
 pub fn avatar_row(ui: &mut Ui, portraits: &mut Portraits, here: &[PilotView]) {
     ui.spacing_mut().item_spacing.x = 4.0;
     for pilot in here.iter().take(MAX_AVATARS) {
-        avatar(ui, portraits, pilot, AVATAR);
+        avatar(ui, portraits, pilot, AVATAR).on_hover_text(&pilot.name);
     }
     if here.len() > MAX_AVATARS {
         let size = egui::TextStyle::Body.resolve(ui.style()).size * 0.85;

@@ -350,8 +350,10 @@ impl Session {
         let added = pairs.len() - before.len();
         self.set_bridges(pairs);
         let s = if added == 1 { "" } else { "s" };
-        let level = if problems.is_empty() { Level::Info } else { Level::Warning };
-        self.notify(level, format!("Added {added} jump bridge{s}"));
+        // The dialog shows each problem line, so the toast shows only a clean import.
+        if problems.is_empty() {
+            self.notify(Level::Info, format!("Added {added} jump bridge{s}"));
+        }
         problems
     }
 
@@ -473,7 +475,7 @@ impl Session {
     }
 
     /// Take the newest map from the refresh worker, if it sent one. Call this each frame.
-    /// A stopped worker gives a note one time, and the map stays.
+    /// A stopped worker gives a toast one time, and the map stays.
     pub fn poll_refresh(&mut self) {
         let Some(refresher) = &self.refresher else { return };
         match refresher.try_recv() {
@@ -481,7 +483,7 @@ impl Session {
             Err(TryRecvError::Empty) => {}
             Err(TryRecvError::Disconnected) => {
                 self.refresher = None;
-                self.note = refresh::STOPPED.into();
+                self.notify(Level::Error, REFRESH_STOPPED);
                 let row = LogEntry { time: router_core::wormhole::now(), op: "refresh", ok: false, reason: "the worker stopped".into() };
                 log::push(&mut self.log, [row]);
             }
@@ -696,7 +698,7 @@ mod tests {
     use super::*;
     use router_core::labels::{jumps_label, route_extras};
     use router_core::log::LogEntry;
-    use router_core::refresh::{Control, NEXUM_LOADING, STOPPED};
+    use router_core::refresh::{Control, NEXUM_LOADING};
     use router_core::test_support::{FIXTURE_TIME, fake_refresher, hole, overlay_universe, settings, snapshot};
     use router_core::wormhole::Wormhole;
 
@@ -818,7 +820,7 @@ mod tests {
         assert_eq!(s.shortcuts.wormholes, 1);
         drop(snapshots);
         s.poll_refresh();
-        assert_eq!(s.note, STOPPED);
+        assert_eq!(last(&s), Some((Level::Error, REFRESH_STOPPED)));
         assert!(s.refresher.is_none());
     }
 
