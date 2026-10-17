@@ -111,7 +111,7 @@ impl Toaster {
 fn toast_contents(ui: &mut Ui, toast: &mut Toast, level: Level) -> Response {
     // The info level takes the accent of the theme, so it follows the faction.
     let color = if level == Level::Info { theme::accent(ui) } else { level.color() };
-    let frame = Frame::new().fill(theme::HEADER).stroke(Stroke::new(1.0, theme::LINE)).inner_margin(Margin {
+    let frame = Frame::new().fill(TOAST_FILL).stroke(Stroke::new(1.0, theme::LINE)).inner_margin(Margin {
         left: 16,
         right: 32,
         top: 10,
