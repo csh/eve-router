@@ -833,34 +833,6 @@ fn fit_text(painter: &egui::Painter, text: &str, font: egui::FontId, color: Colo
     painter.layout_job(job)
 }
 
-/// A row of the route table: a step, or the heading of a leg.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-enum TableItem {
-    Leg(usize),
-    Step(usize),
-}
-
-/// The rows of the table. A route with two or more legs gets a heading before each leg. The stop
-/// that ends a leg stays in that leg, and the next leg starts with the step after it.
-fn table_items(route: &router_core::route::Route) -> Vec<TableItem> {
-    let steps = route.path.nodes.len();
-    let legs = route.legs();
-    let mut items = Vec::new();
-    if legs.len() > 1 {
-        for (k, &(from, to)) in legs.iter().enumerate() {
-            items.push(TableItem::Leg(k));
-            let first = if k == 0 { from } else { from + 1 };
-            items.extend((first..=to).map(TableItem::Step));
-        }
-    }
-    // One leg, or stops that do not cover the steps: the plain list.
-    let covered = items.iter().filter(|i| matches!(i, TableItem::Step(_))).count();
-    if covered != steps {
-        items = (0..steps).map(TableItem::Step).collect();
-    }
-    items
-}
-
 fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: bool) {
     let Some(route) = s.selected_route() else {
         panel(ui, "Route", "", true, |_| {});
@@ -899,8 +871,6 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
     };
     theme::panel_with(ui, &title, header, true, |ui| {
         let uni = &s.uni;
-        let table_clip =
-            egui::Rect::from_x_y_ranges(ui.min_rect().left()..=ui.available_rect_before_wrap().right(), ui.clip_rect().y_range());
         let header = |ui: &mut Ui, text: &str| _ = ui.label(theme::header_text(text));
         let mut table = TableBuilder::new(ui)
             .id_salt("route-table")
@@ -937,36 +907,8 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi, compact: boo
                 }
             })
             .body(|body| {
-                let items = table_items(route);
-                let heights: Vec<f32> = items.iter().map(|item| if matches!(item, TableItem::Leg(_)) { 28.0 } else { 22.0 }).collect();
-                body.heterogeneous_rows(heights.into_iter(), |mut row| {
-                    let step = match items[row.index()] {
-                        TableItem::Step(step) => step,
-                        TableItem::Leg(k) => {
-                            // A heading for the leg: where it starts, where it ends and how many jumps it has.
-                            let (from, to) = route.legs()[k];
-                            let text = format!(
-                                "{} » {}  ·  {}",
-                                uni.name(route.path.nodes[from]),
-                                uni.name(route.path.nodes[to]),
-                                jumps_label(to - from)
-                            );
-                            // A table cell clips its text. The heading is wider than the first column, so
-                            // it draws on the layer of the cell with the clip of the whole table row.
-                            row.col(|ui| {
-                                let cell = ui.max_rect();
-                                let clip = egui::Rect::from_x_y_ranges(table_clip.x_range(), ui.clip_rect().y_range());
-                                let painter = ui.ctx().layer_painter(ui.layer_id()).with_clip_rect(clip);
-                                if k > 0 {
-                                    painter.hline(table_clip.x_range(), cell.top() + 1.0, egui::Stroke::new(1.0, theme::LINE));
-                                }
-                                let font = egui::FontId::proportional(11.0);
-                                let at = egui::pos2(cell.left(), cell.center().y + 3.0);
-                                painter.text(at, egui::Align2::LEFT_CENTER, text.to_uppercase(), font, theme::TEXT_DIM);
-                            });
-                            return;
-                        }
-                    };
+                body.rows(22.0, route.path.nodes.len(), |mut row| {
+                    let step = row.index();
                     let sys = uni.system(route.path.nodes[step]);
                     let via = match step.checked_sub(1).map(|i| route.path.edges[i]) {
                         // Oxanium and the egui fallback fonts have no right arrow glyph. Oxanium has "»".
@@ -1354,37 +1296,6 @@ mod tests {
             draw(None, step.as_ref());
         }
         draw(Some("Cannot read the config"), None);
-    }
-
-    fn route_with_stops(steps: usize, stops: Vec<usize>) -> router_core::route::Route {
-        use router_core::route::{Path, Route};
-        let nodes = (0..steps).map(NodeIndex::new).collect();
-        let path = Path { nodes, edges: Vec::new(), cost: 0 };
-        Route {
-            path,
-            jumps: steps - 1,
-            wormholes: 0,
-            bridges: 0,
-            bridge_tj: None,
-            bridge_cap_pct: None,
-            unknown_sigs: 0,
-            avoided: 0,
-            stops,
-        }
-    }
-
-    #[test]
-    fn the_table_groups_the_steps_by_leg() {
-        use TableItem::{Leg, Step};
-        // Two legs: the stop in the middle ends the first leg.
-        let items = table_items(&route_with_stops(5, vec![0, 2, 4]));
-        assert_eq!(items, [Leg(0), Step(0), Step(1), Step(2), Leg(1), Step(3), Step(4)]);
-        // One leg: no heading.
-        let items = table_items(&route_with_stops(3, vec![0, 2]));
-        assert_eq!(items, [Step(0), Step(1), Step(2)]);
-        // Stops that do not reach the last step: the plain list.
-        let items = table_items(&route_with_stops(5, vec![0, 2, 3]));
-        assert_eq!(items, [Step(0), Step(1), Step(2), Step(3), Step(4)]);
     }
 
     #[test]
