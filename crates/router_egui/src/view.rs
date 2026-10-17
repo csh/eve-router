@@ -470,6 +470,7 @@ fn bridges_toggle(ui: &mut Ui, s: &mut Session) {
     if response.clicked() {
         s.settings.bridges = !s.settings.bridges;
         s.recompute();
+        s.save();
     }
     if let Some(reason) = blocked {
         response.on_hover_text(reason);
@@ -480,6 +481,7 @@ fn wormholes_toggle(ui: &mut Ui, s: &mut Session) {
     if ui.add(AppButton::new(format!("Wormholes: {}", on_off(s.settings.wormholes))).selected(s.settings.wormholes)).clicked() {
         s.settings.wormholes = !s.settings.wormholes;
         s.recompute();
+        s.save();
     }
 }
 

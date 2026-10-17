@@ -10,6 +10,8 @@
   "mode": "prefer-highsec",
   "optimize": true,
   "top": 3,
+  "wormholes": false,
+  "bridges": true,
   "cap_weight": 0.6,
   "unknown_sig_penalty": 4.0,
   "avoid_systems": [

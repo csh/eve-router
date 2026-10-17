@@ -209,6 +209,12 @@ pub struct Config {
     /// Visit each system one time, in the cheapest order.
     pub optimize: bool,
     pub top: Option<usize>,
+    /// The wormholes switch of the top bar. `None` gives on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub wormholes: Option<bool>,
+    /// The jump bridges switch of the top bar. `None` gives on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bridges: Option<bool>,
     /// The cost of 1% of the Ansiblex capacitor, in jumps. `None` gives the default.
     pub cap_weight: Option<f32>,
     /// The extra cost, in jumps, of a wormhole with no known signature. `None` gives the default.
@@ -317,6 +323,8 @@ mod tests {
             mode: Some(Mode::PreferHighsec),
             optimize: true,
             top: Some(3),
+            wormholes: Some(false),
+            bridges: Some(true),
             cap_weight: Some(0.6),
             unknown_sig_penalty: Some(4.0),
             avoid_systems: vec![AvoidName::new("Rens", true)],

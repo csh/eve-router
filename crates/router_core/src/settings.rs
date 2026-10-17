@@ -192,9 +192,9 @@ impl Settings {
             mode: cfg.mode.unwrap_or(Mode::Shortest),
             optimize: cfg.optimize,
             top: cfg.top.unwrap_or(5).max(1),
-            wormholes: true,
+            wormholes: cfg.wormholes.unwrap_or(true),
             hubs: cfg.eve_scout,
-            bridges: true,
+            bridges: cfg.bridges.unwrap_or(true),
             rules: BridgeRules { capital, hull, max_cap: cfg.max_cap_tj },
             costs: RouteCosts::from_config(cfg),
             hull_source: cfg.pilot.map_or(HullSource::Manual, HullSource::Pilot),
@@ -248,6 +248,8 @@ impl Settings {
         cfg.mode = Some(self.mode);
         cfg.optimize = self.optimize;
         cfg.top = Some(self.top);
+        cfg.wormholes = Some(self.wormholes);
+        cfg.bridges = Some(self.bridges);
         cfg.cap_weight = Some(self.costs.cap_weight);
         cfg.unknown_sig_penalty = Some(self.costs.unknown_sig_penalty);
         cfg.eve_scout = self.hubs;
@@ -398,6 +400,18 @@ mod tests {
         s.hull_source = HullSource::Manual;
         s.store(&uni, &mut cfg);
         assert_eq!(cfg.pilot, None);
+    }
+
+    #[test]
+    fn the_wormhole_and_bridge_switches_round_trip_and_default_to_on() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        assert!(Settings::from_config(&Config::default(), &uni, hulls()).unwrap().wormholes);
+        (s.wormholes, s.bridges) = (false, false);
+        let mut cfg = Config::default();
+        s.store(&uni, &mut cfg);
+        let back = Settings::from_config(&cfg, &uni, hulls()).unwrap();
+        assert_eq!((back.wormholes, back.bridges), (false, false));
     }
 
     #[test]
