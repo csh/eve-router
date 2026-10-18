@@ -614,7 +614,8 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
             let text = if has_pilot { format!("Start route #{}", s.selected + 1) } else { "Log in to start".to_string() };
             let button =
                 Button::new(RichText::new(text).size(11.0).color(Color32::WHITE)).fill(theme::accent(ui).gamma_multiply(0.35)).small();
-            start = ui.add(button).on_hover_text("Send the waypoints of this route to a character in the game").clicked();
+            let tip = if has_pilot { "Send this route to a character ingame." } else { "Log in to send this route to a character ingame." };
+            start = ui.add(button).on_hover_text(tip).clicked();
             ui.add_space(6.0);
         }
         let button = Button::new(RichText::new("Copy route").size(11.0)).small();
