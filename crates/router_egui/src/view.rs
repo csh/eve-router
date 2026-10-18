@@ -879,7 +879,11 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool) {
         // The Log button shows in the warning color while the newest row is a failure.
         let failed = s.log.last().is_some_and(|e| !e.ok);
         let log_text = RichText::new("Log").small().color(if failed { theme::WARN } else { theme::TEXT });
-        if ui.add(Button::new(log_text).small()).on_hover_text(if failed { "Show the fetch log. The last fetch failed." } else { "Show the fetch log in a window" }).clicked() {
+        if ui
+            .add(Button::new(log_text).small())
+            .on_hover_text(if failed { "Show the fetch log. The last fetch failed." } else { "Show the fetch log in a window" })
+            .clicked()
+        {
             *log_open = true;
         }
         if ui.add(Button::new(RichText::new("Refresh").small()).small()).on_hover_text("Fetch the wormholes now (F5)").clicked() {

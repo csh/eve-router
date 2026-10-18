@@ -819,7 +819,8 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
                     row.col(|ui| _ = ui.label(RichText::new(s.uni.name(node)).color(theme::TEXT)));
                     row.col(|ui| {
                         let color = if zone.is_some() { theme::BRIDGE } else { theme::TEXT_DIM };
-                        let (text, hover) = zone.clone().unwrap_or(("-".into(), "You must set a capital system to calculate ansiblex zones.".into()));
+                        let (text, hover) =
+                            zone.clone().unwrap_or(("-".into(), "You must set a capital system to calculate ansiblex zones.".into()));
                         ui.label(RichText::new(text).color(color)).on_hover_text(hover);
                     });
                     if node == *a {
