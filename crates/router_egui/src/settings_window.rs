@@ -654,17 +654,15 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
 /// The Clades group of the Pochven page: a switch for each clade. Filament travel needs no
 /// client ID, unlike EVE Metro, so it always shows.
 fn clades_group(ui: &mut Ui, s: &mut Session, locked: bool) {
-    group(ui, "Access");
+    group(ui, "Pochven");
     ui.label(
-        RichText::new(
-            "A filament puts a pilot at a random system of a clade, at the average cost. This switch also gives EVE Metro's wormhole routes into Pochven.",
-        )
-        .color(theme::TEXT_DIM),
+        RichText::new("Filaments transport one or more pilots to a random system of a clade, assuming an average number of jumps.")
+            .color(theme::TEXT_DIM),
     );
     ui.add_space(4.0);
     egui::Grid::new("settings-filaments").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        label(ui, "Pochven");
-        let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(&mut s.settings.clades.pochven, "Allow travel via Pochven").changed());
+        label(ui, "Allow travel via Pochven");
+        let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(&mut s.settings.clades.pochven, "").changed());
         row.response.on_disabled_hover_text(LOCKED);
         if row.inner {
             s.recompute();
@@ -785,18 +783,13 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
     let disabled = locked || pochven_off;
     let disabled_hover = if locked { LOCKED } else { ACCESS_OFF };
     group(ui, "EVE Metro");
-    ui.horizontal_wrapped(|ui| {
-        ui.label(dim("An"));
-        ui.hyperlink_to("evemetro.com", "https://evemetro.com/");
-        ui.label(dim("subscription is required. This is a third-party service."));
-    });
     ui.label(dim("Activation can take a few minutes after the ingame payment arrives."));
     ui.add_space(4.0);
     egui::Grid::new("settings-metro").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        label(ui, "Source");
+        label(ui, "Enable");
         let row = ui.add_enabled_ui(!disabled, |ui| {
             let mut on = s.cfg.eve_metro.enabled;
-            let changed = ui.app_checkbox(&mut on, "Load the Pochven wormhole map").changed();
+            let changed = ui.app_checkbox(&mut on, "").changed();
             (changed, on)
         });
         row.response.on_disabled_hover_text(disabled_hover);
@@ -806,7 +799,7 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
         }
         ui.end_row();
 
-        label(ui, "Key");
+        label(ui, "API Key");
         ui.add_enabled_ui(!disabled, |ui| {
             // The masked key and Clear while a key is set, else the input and Save.
             ui.horizontal_wrapped(|ui| {
@@ -836,7 +829,11 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
     });
     ui.add_space(14.0);
     group(ui, "Character");
-    ui.label(dim("The selected character, or its corporation or its alliance, must have a valid EVE Metro subscription."));
+    ui.horizontal_wrapped(|ui| {
+        ui.label(dim("The selected character, or its corporation or its alliance, must have a valid"));
+        ui.hyperlink_to("EVE Metro", "https://evemetro.com/");
+        ui.label(dim("subscription, a third-party service."));
+    });
     ui.add_space(4.0);
     let pilots = s.pilots.characters();
     if pilots.is_empty() {
