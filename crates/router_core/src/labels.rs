@@ -230,6 +230,12 @@ pub fn link_label(uni: &Universe, rules: &BridgeRules, edge: EdgeIndex, now: u64
             }
             parts.join(" · ")
         }
+        Link::Filament(f) => match f.expected_jumps {
+            // The hub-to-system edge: the average travel from a random landing system of the clade.
+            Some(avg) => format!("Filament · {} · ~{} jumps (avg)", f.clade.label(), avg.round() as i64),
+            // The activation edge: the system to the virtual hub of the clade.
+            None => format!("Filament · {} · activate", f.clade.label()),
+        },
     }
 }
 

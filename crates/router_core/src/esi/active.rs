@@ -44,12 +44,14 @@ pub enum Hop {
     Wormhole,
     /// An Ansiblex. The autopilot takes it when the pilot is on the access list of the gate.
     Bridge,
+    /// A Triglavian filament. The autopilot cannot activate it, so it is also a manual hop.
+    Filament,
 }
 
 impl Hop {
-    /// True for a hop that the autopilot cannot make. Only a wormhole is manual.
+    /// True for a hop that the autopilot cannot make: a wormhole or a filament.
     pub fn is_manual(self) -> bool {
-        self == Hop::Wormhole
+        matches!(self, Hop::Wormhole | Hop::Filament)
     }
 }
 
@@ -122,6 +124,7 @@ impl ActiveRoute {
                     Link::Stargate => (Hop::Gate, None),
                     Link::Wormhole(w) => (Hop::Wormhole, w.sig_at(uni.system(route.path.nodes[i - 1]).id)),
                     Link::JumpBridge => (Hop::Bridge, None),
+                    Link::Filament(_) => (Hop::Filament, None),
                 };
                 Step { system, hop, via: link_label(uni, rules, edge, now), sig }
             })

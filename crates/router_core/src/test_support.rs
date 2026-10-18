@@ -82,6 +82,7 @@ pub fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
         hubs: Default::default(),
         bridges: true,
         rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| hulls().find(h).unwrap()), max_cap: None },
+        clades: Default::default(),
         hull_source: HullSource::Manual,
         min_life: 0,
         costs: Default::default(),

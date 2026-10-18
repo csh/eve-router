@@ -26,6 +26,8 @@ pub struct SdeSystem {
     pub name: Names,
     #[serde(rename = "regionID")]
     pub region_id: u32,
+    #[serde(rename = "constellationID")]
+    pub constellation_id: u32,
     #[serde(rename = "securityStatus")]
     pub security: f64,
     pub position: Position,

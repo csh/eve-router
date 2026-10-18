@@ -190,6 +190,26 @@ impl NexumConfig {
     }
 }
 
+/// The clade switches: which Pochven clades a filament can reach. All off by default, because the
+/// feature is new and a filament can leave a pilot with a long way back.
+#[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct Clades {
+    pub perun: bool,
+    pub svarog: bool,
+    pub veles: bool,
+}
+
+impl Clades {
+    pub fn allows(self, clade: crate::universe::Clade) -> bool {
+        match clade {
+            crate::universe::Clade::Perun => self.perun,
+            crate::universe::Clade::Svarog => self.svarog,
+            crate::universe::Clade::Veles => self.veles,
+        }
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
@@ -226,6 +246,7 @@ pub struct Config {
     pub nexum: NexumConfig,
     /// The Thera and Turnur switches. Both are on in a file without them.
     pub eve_scout: Hubs,
+    pub clades: Clades,
     /// The Photon UI faction theme: "caldari", "amarr", "gallente", "minmatar".
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub theme: Option<String>,
@@ -336,6 +357,7 @@ mod tests {
                 keep_unsigned: true,
             },
             eve_scout: Hubs { thera: false, turnur: true },
+            clades: Clades { perun: true, svarog: false, veles: true },
             theme: None,
             compact: false,
         };

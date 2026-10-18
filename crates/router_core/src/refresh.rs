@@ -61,7 +61,17 @@ pub struct RouteKey {
 enum LinkKey {
     Stargate,
     JumpBridge,
-    Wormhole { sig_a: Option<String>, sig_b: Option<String>, sources: Vec<SourceId> },
+    Wormhole {
+        sig_a: Option<String>,
+        sig_b: Option<String>,
+        sources: Vec<SourceId>,
+    },
+    /// A filament edge is static for the life of the map, so the clade and the leg (activation,
+    /// or the system that it lands on) are enough to identify it.
+    Filament {
+        clade: crate::universe::Clade,
+        expected_jumps: Option<i64>,
+    },
 }
 
 impl RouteKey {
@@ -74,6 +84,7 @@ impl RouteKey {
                 Link::Stargate => LinkKey::Stargate,
                 Link::JumpBridge => LinkKey::JumpBridge,
                 Link::Wormhole(w) => LinkKey::Wormhole { sig_a: w.sig_a.clone(), sig_b: w.sig_b.clone(), sources: w.sources.clone() },
+                Link::Filament(f) => LinkKey::Filament { clade: f.clade, expected_jumps: f.expected_jumps.map(|j| j.round() as i64) },
             })
             .collect();
         RouteKey { nodes: path.nodes.clone(), links }

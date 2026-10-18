@@ -37,5 +37,10 @@
   "eve_scout": {
     "thera": false,
     "turnur": true
+  },
+  "clades": {
+    "perun": true,
+    "svarog": false,
+    "veles": true
   }
 }

@@ -1,6 +1,7 @@
 //! Route costs, k-shortest paths (Yen's algorithm) and waypoint chains.
 
-use crate::ansiblex::BridgeRules;
+use crate::ansiblex::{BridgeRules, Hull};
+use crate::config::Clades;
 use crate::universe::{Band, Link, Universe, band};
 use crate::wormhole::{Hubs, Wormhole};
 use petgraph::algo::{astar, dijkstra};
@@ -27,6 +28,26 @@ pub const MAX_SHARED: f64 = 0.7;
 /// cost, the route with fewer wormholes costs less. It is far below any soft cost, and a route
 /// needs 1000 wormholes before these costs add up to one jump.
 pub const WORMHOLE_TIE: u64 = 1;
+
+/// Ship groups that cannot activate a Triglavian filament, confirmed in game 2026-10-18
+/// (SDE type list 135, "InvalidShipGroupsForRandomJump").
+const FILAMENT_BANNED_GROUPS: [&str; 10] = [
+    "Freighter",
+    "Jump Freighter",
+    "Force Auxiliary",
+    "Supercarrier",
+    "Titan",
+    "Carrier",
+    "Dreadnought",
+    "Capital Industrial Ship",
+    "Lancer Dreadnought",
+    "Command Carrier",
+];
+
+/// True if the hull can activate a filament. No hull set: allow it, as the wormhole size check does.
+fn hull_allows_filament(hull: Option<&Hull>) -> bool {
+    hull.is_none_or(|h| !FILAMENT_BANNED_GROUPS.contains(&h.group.as_str()))
+}
 
 /// The cost that each link of a route found earlier adds while the search looks for another route.
 const REUSE_COST: u64 = JUMP / 2;
@@ -168,6 +189,8 @@ pub struct RouterOptions {
     pub cap_weight: u32,
     /// The extra cost of a wormhole with no known signature at its departure system, in milli-jumps.
     pub unknown_sig_penalty: u32,
+    /// Which Pochven clades a filament can reach.
+    pub clades: Clades,
     /// Unix seconds. It sets which wormholes are expired.
     pub now: u64,
 }
@@ -182,6 +205,7 @@ impl Default for RouterOptions {
             rules: BridgeRules::default(),
             cap_weight: DEFAULT_CAP_WEIGHT,
             unknown_sig_penalty: DEFAULT_UNKNOWN_SIG_PENALTY,
+            clades: Clades::default(),
             now: 0,
         }
     }
@@ -236,7 +260,7 @@ impl<'a> Router<'a> {
     /// Calculate the node costs and the edge permissions one time, in parallel.
     /// Each search then reads them instead of calculating them again.
     pub fn new(uni: &'a Universe, options: RouterOptions) -> Self {
-        let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, unknown_sig_penalty, now } = options;
+        let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, unknown_sig_penalty, clades, now } = options;
         let graph = &uni.graph;
         let node_cost = graph
             .raw_nodes()
@@ -252,6 +276,7 @@ impl<'a> Router<'a> {
             })
             .collect();
         let hull_kg = rules.hull.as_ref().and_then(|h| h.mass_kg);
+        let filament_hull_ok = hull_allows_filament(rules.hull.as_deref());
         let edge_ok = graph
             .raw_edges()
             .par_iter()
@@ -259,6 +284,7 @@ impl<'a> Router<'a> {
                 Link::Stargate => true,
                 Link::Wormhole(w) => wormholes && hubs.allows(w) && w.usable(now, hull_kg),
                 Link::JumpBridge => bridges && rules.allowed(uni, e.source()),
+                Link::Filament(f) => clades.allows(f.clade) && filament_hull_ok,
             })
             .collect();
         // A bridge jump with a hull costs more as it uses more of the gate capacitor.
@@ -272,6 +298,11 @@ impl<'a> Router<'a> {
                 }
                 Link::Wormhole(ref w) if wormholes => {
                     WORMHOLE_TIE + if sig_unknown(uni, w, e.source()) { u64::from(unknown_sig_penalty) } else { 0 }
+                }
+                // The hub-to-system edge carries the average extra travel. `node_cost` already adds
+                // one `JUMP` for the step, so this tops it up to the expected total (never below it).
+                Link::Filament(crate::universe::Filament { expected_jumps: Some(avg), .. }) => {
+                    ((avg * JUMP as f32).round() as u64).saturating_sub(JUMP)
                 }
                 _ => 0,
             })
@@ -329,6 +360,7 @@ impl<'a> Router<'a> {
                     Link::Stargate => 0,
                     Link::JumpBridge => 1,
                     Link::Wormhole(_) => 2,
+                    Link::Filament(_) => 3,
                 };
                 (self.step_cost(*e) + reuse_cost(reuse, e.id()), rank)
             })
@@ -637,7 +669,7 @@ impl<'a> Router<'a> {
                     tj = tj.zip(cost.and_then(|c| c.tj)).map(|(a, b)| a + b);
                     cap_pct = cap_pct.zip(cost.and_then(|c| c.cap_pct)).map(|(a, b)| a + b);
                 }
-                Link::Stargate => {}
+                Link::Stargate | Link::Filament(_) => {}
             }
         }
         route.bridge_tj = if route.bridges > 0 { tj } else { None };
@@ -1133,5 +1165,58 @@ mod tests {
         // A later call replaces the earlier danger: zero danger gives the first route back.
         r.set_danger(vec![0; uni.graph.node_count()]);
         assert_eq!(r.routes(&nodes, 1).unwrap()[0].path, best.path);
+    }
+
+    /// Pochven has no stargate to the rest of New Eden, so a route into it needs a filament
+    /// (or an overlay wormhole, which this test does not add).
+    #[test]
+    fn with_no_clade_on_pochven_has_no_route() {
+        let uni = universe();
+        let r = Router::new(uni, RouterOptions::default());
+        let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
+        // The hub itself has no destination system to resolve by name, so route to one of its
+        // systems: the first edge out of the hub.
+        use petgraph::visit::EdgeRef;
+        let target = uni.graph.edges(perun).next().unwrap().target();
+        assert!(r.routes(&[node("Jita"), target], 1).is_err());
+    }
+
+    #[test]
+    fn a_filament_opens_a_route_into_its_clade() {
+        let uni = universe();
+        use petgraph::visit::EdgeRef;
+        let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
+        let target = uni.graph.edges(perun).next().unwrap().target();
+        let clades = crate::config::Clades { perun: true, ..Default::default() };
+        let r = Router::new(uni, RouterOptions { clades, ..Default::default() });
+        let route = r.routes(&[node("Jita"), target], 1).unwrap().remove(0);
+        // Two filament edges: the activation, and the jump from the hub into the clade.
+        assert_eq!(route.jumps, 2);
+        let filaments = route.path.edges.iter().filter(|&&e| matches!(uni.graph[e], Link::Filament(_))).count();
+        assert_eq!(filaments, 2);
+    }
+
+    #[test]
+    fn a_banned_hull_cannot_use_a_filament() {
+        let uni = universe();
+        use petgraph::visit::EdgeRef;
+        let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
+        let target = uni.graph.edges(perun).next().unwrap().target();
+        let clades = crate::config::Clades { perun: true, ..Default::default() };
+        // A Titan is on the banned list. No hull set still allows the filament.
+        let banned = RouterOptions {
+            clades,
+            rules: BridgeRules { capital: None, hull: hulls().find("Titan"), max_cap: None },
+            ..Default::default()
+        };
+        assert!(Router::new(uni, banned).routes(&[node("Jita"), target], 1).is_err());
+        let allowed = RouterOptions {
+            clades,
+            rules: BridgeRules { capital: None, hull: hulls().find("Rifter"), max_cap: None },
+            ..Default::default()
+        };
+        assert!(Router::new(uni, allowed).routes(&[node("Jita"), target], 1).is_ok());
+        let no_hull = RouterOptions { clades, ..Default::default() };
+        assert!(Router::new(uni, no_hull).routes(&[node("Jita"), target], 1).is_ok());
     }
 }

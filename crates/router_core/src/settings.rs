@@ -1,7 +1,7 @@
 //! The route settings, and the system names of the user input.
 
 use crate::ansiblex::{BridgeRules, HullTable, same_hull};
-use crate::config::{self, AvoidName, Config, ConfigError};
+use crate::config::{self, AvoidName, Clades, Config, ConfigError};
 use crate::route::{DEFAULT_CAP_WEIGHT, DEFAULT_UNKNOWN_SIG_PENALTY, JUMP, Mode, PENALTY, RouteError, Router, RouterOptions};
 use crate::universe::Universe;
 use crate::wormhole;
@@ -167,6 +167,8 @@ pub struct Settings {
     pub bridges: bool,
     pub rules: BridgeRules,
     pub costs: RouteCosts,
+    /// Which Pochven clades a filament can reach.
+    pub clades: Clades,
     /// With `Pilot`, `follow` sets `rules.hull`.
     pub hull_source: HullSource,
     /// The minimum time (minutes) that a wormhole must have left. The router skips other wormholes.
@@ -197,6 +199,7 @@ impl Settings {
             bridges: cfg.bridges.unwrap_or(true),
             rules: BridgeRules { capital, hull, max_cap: cfg.max_cap_tj },
             costs: RouteCosts::from_config(cfg),
+            clades: cfg.clades,
             hull_source: cfg.pilot.map_or(HullSource::Manual, HullSource::Pilot),
             min_life: cfg.min_life_min.unwrap_or(config::DEFAULT_MIN_LIFE_MIN),
             favourites: resolve_all(uni, &favourite_names(cfg))?,
@@ -215,6 +218,7 @@ impl Settings {
             rules: self.rules.clone(),
             cap_weight: RouteCosts::milli(self.costs.cap_weight),
             unknown_sig_penalty: RouteCosts::milli(self.costs.unknown_sig_penalty),
+            clades: self.clades,
             now: now + self.min_life * 60,
         };
         let mut router = Router::new(uni, options);
@@ -253,6 +257,7 @@ impl Settings {
         cfg.cap_weight = Some(self.costs.cap_weight);
         cfg.unknown_sig_penalty = Some(self.costs.unknown_sig_penalty);
         cfg.eve_scout = self.hubs;
+        cfg.clades = self.clades;
         cfg.favourites = Some(self.favourites.iter().map(|&n| uni.name(n).to_string()).collect());
         cfg.avoid_systems = self.avoid.systems.iter().map(|e| AvoidName::new(uni.name(e.item), e.never)).collect();
         cfg.avoid_regions = self.avoid.regions.iter().map(|e| AvoidName::new(&e.item, e.never)).collect();
