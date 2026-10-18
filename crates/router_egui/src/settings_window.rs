@@ -42,6 +42,7 @@ pub struct SettingsForm {
     bridge_problems: Vec<String>,
     /// True while the window asks to remove all bridges.
     bridge_confirm: bool,
+    replace_confirm: bool,
     url: String,
     /// The key field starts empty, so the key never shows on the screen.
     key: String,
@@ -82,6 +83,7 @@ impl SettingsForm {
             bridge_text: String::new(),
             bridge_problems: Vec::new(),
             bridge_confirm: false,
+            replace_confirm: false,
             url: s.cfg.nexum.url.clone().unwrap_or_default(),
             key: String::new(),
             error: None,
@@ -753,8 +755,21 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
         }
         ui.horizontal(|ui| {
             let empty = form.bridge_text.trim().is_empty();
-            let add = ui.add_enabled(!empty, AppButton::new("Add to list").primary()).clicked();
-            let replace = ui.add_enabled(!empty, AppButton::new("Replace list")).clicked();
+            let (mut add, mut replace) = (false, false);
+            if form.replace_confirm {
+                ui.label(RichText::new(format!("Remove the {} bridges in the list?", s.bridges.len())).color(theme::WARN));
+                replace = ui.app_button("Replace list").clicked();
+                if ui.app_button("Cancel").clicked() || replace {
+                    form.replace_confirm = false;
+                }
+            } else {
+                add = ui.add_enabled(!empty, AppButton::new("Add to list").primary()).clicked();
+                if ui.add_enabled(!empty, AppButton::new("Replace list")).clicked() {
+                    // An empty list loses nothing, so it needs no confirmation.
+                    form.replace_confirm = !s.bridges.is_empty();
+                    replace = !form.replace_confirm;
+                }
+            }
             if add || replace {
                 form.bridge_problems = s.import_bridges(&form.bridge_text, replace);
                 if form.bridge_problems.is_empty() {
