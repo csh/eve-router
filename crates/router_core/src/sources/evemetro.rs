@@ -126,16 +126,18 @@ impl MetroReport {
 fn parse_mass(mass: &str) -> Option<MassStatus> {
     match mass {
         "stable" => Some(MassStatus::Stable),
+        "destabilized" => Some(MassStatus::Destabilized),
         "critical" => Some(MassStatus::Critical),
         _ => None,
     }
 }
 
-/// The type of the end that is not a K162. A wormhole with two K162 ends or no type gives `None`.
+/// The type of the end that is not a K162, for the life rule and the size. Two K162 ends, neither
+/// identified yet, give `None`.
 fn pick_type<'a>(src: &'a Option<String>, dst: &'a Option<String>) -> Option<&'a str> {
     let clean = |t: &'a Option<String>| t.as_deref().map(str::trim).filter(|t| !t.is_empty());
     let real = |t: &&str| !t.eq_ignore_ascii_case("K162");
-    clean(src).filter(real).or(clean(dst).filter(real)).or(clean(src)).or(clean(dst))
+    clean(src).filter(real).or(clean(dst).filter(real))
 }
 
 /// The text of a signature, or `None` for an empty text.
@@ -276,17 +278,21 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
                 report = r;
                 Ok(data)
             });
+            // A reply that denies access is a successful fetch with no wormholes. It must not
+            // replace a good cache with nothing, so it is treated like a fetch failure for the
+            // cache: the cache stays as it was, with its own warning and log row.
+            if report.no_access {
+                let warning = Some("EVE Metro: this character has no access".to_string());
+                let log = vec![LogEntry { time: started, op: "evemetro.fetch", ok: false, reason: "no access".into() }];
+                return Load { data: cache, report, warning, log };
+            }
             let chosen = sources::choose(SourceId::EveMetro, converted, cache, &cache_path);
-            // A reply with no access is a success for the cache, but the user must know.
-            let denied = chosen.error.is_none() && report.no_access;
-            let warning = if denied { Some("EVE Metro: this character has no access".to_string()) } else { chosen.warning };
-            let (ok, reason) = match (&chosen.error, denied) {
-                (Some(cause), _) => (false, cause.clone()),
-                (None, true) => (false, "no access".to_string()),
-                (None, false) => (true, log::loaded(chosen.data.as_ref().map_or(0, |d| d.holes.len()))),
+            let (ok, reason) = match &chosen.error {
+                Some(cause) => (false, cause.clone()),
+                None => (true, log::loaded(chosen.data.as_ref().map_or(0, |d| d.holes.len()))),
             };
             let log = vec![LogEntry { time: started, op: "evemetro.fetch", ok, reason }];
-            Load { data: chosen.data, report, warning, log }
+            Load { data: chosen.data, report, warning: chosen.warning, log }
         }
     }
 }
@@ -361,6 +367,32 @@ mod tests {
         assert_eq!((hole.size, hole.max_jump_kg), (Some(Size::Large), Some(375_000_000.0)));
         // Created at 11:00, and the life of a B274 is 24 h.
         assert_eq!(hole.expiry, Some(Expiry { at: FETCHED - HOUR + 24 * HOUR }));
+    }
+
+    #[test]
+    fn destabilized_mass_is_not_dropped() {
+        let reply =
+            parse(r#"{"access":true,"connections":[{"systemId":1,"systemEdges":[{"solarSystemIdDst":2,"wormholeMass":"destabilized"}]}]}"#)
+                .unwrap();
+        let (data, _) = convert(&reply, |_| true, &types(), FETCHED);
+        assert_eq!(data.holes[0].mass, Some(MassStatus::Destabilized));
+    }
+
+    #[test]
+    fn two_k162_ends_give_no_type() {
+        // Neither end has been scanned to a real type yet.
+        let reply = parse(
+            r#"{"access":true,"connections":[{"systemId":1,"systemEdges":[{"solarSystemIdDst":2,"wormholeTypeSrc":"K162","wormholeTypeDst":"K162"}]}]}"#,
+        )
+        .unwrap();
+        let (data, _) = convert(&reply, |_| true, &types(), FETCHED);
+        assert_eq!(data.holes[0].wh_type, None);
+        // One end is K162, the other is not yet known at all: still no real type.
+        let reply =
+            parse(r#"{"access":true,"connections":[{"systemId":1,"systemEdges":[{"solarSystemIdDst":2,"wormholeTypeSrc":"K162"}]}]}"#)
+                .unwrap();
+        let (data, _) = convert(&reply, |_| true, &types(), FETCHED);
+        assert_eq!(data.holes[0].wh_type, None);
     }
 
     #[test]
@@ -457,11 +489,35 @@ mod tests {
     fn no_access_gives_a_warning_and_no_wormholes() {
         let tmp = tempfile::tempdir().unwrap();
         let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "200 OK", r#"{"access":false}"#);
+        // No cache exists yet, so there is nothing to keep.
         let result = load(&cfg(), &esi, &metro, tmp.path().join("eve-metro.json"));
         assert_eq!(result.warning.as_deref(), Some("EVE Metro: this character has no access"));
-        assert_eq!(result.data.map(|d| d.holes.len()), Some(0));
+        assert_eq!(result.data, None);
         assert!(result.report.no_access);
         assert!(!result.log[0].ok);
+    }
+
+    /// A character can lose access for a moment (a late payment, a corp move). The empty reply
+    /// must not overwrite a good cache with nothing, unlike a genuine fetch failure, which already
+    /// falls back to the cache through `sources::choose`.
+    #[test]
+    fn no_access_keeps_a_good_cache() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("eve-metro.json");
+        let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "200 OK", &fixture_text());
+        load(&cfg(), &esi, &metro, path.clone());
+        let before = sources::read_cache(&path).expect("no cache file");
+        assert_eq!(before.holes.len(), 2);
+
+        let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "200 OK", r#"{"access":false}"#);
+        // The cache must be old, else `load` takes it with no fetch, and the test proves nothing.
+        let old = SourceData { fetched_at: FETCHED - 2 * HOUR, origin: Some(origin_at(&metro, 42)), ..before.clone() };
+        sources::write_cache(&path, &old).unwrap();
+        let result = load(&cfg(), &esi, &metro, path.clone());
+        assert_eq!(result.data.as_ref().map(|d| d.holes.len()), Some(2), "the cached map stays");
+        assert_eq!(result.warning.as_deref(), Some("EVE Metro: this character has no access"));
+        // The cache file on disk is untouched too, not just the in-memory result.
+        assert_eq!(sources::read_cache(&path).as_ref().map(|d| d.holes.len()), Some(2));
     }
 
     #[test]
