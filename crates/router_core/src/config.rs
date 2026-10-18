@@ -230,6 +230,13 @@ impl EveMetroConfig {
         }
         Some((self.key.as_ref()?.0.as_str(), self.character?))
     }
+
+    /// The settings that the router uses. EVE Metro needs a logged-in character to identify the
+    /// user, so the source is off while the app has no EVE client ID (`sso_ready` false). The file
+    /// keeps the settings of the user.
+    pub fn gated(&self, sso_ready: bool) -> EveMetroConfig {
+        if sso_ready { self.clone() } else { EveMetroConfig::default() }
+    }
 }
 
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
@@ -437,6 +444,16 @@ mod tests {
         cfg.nexum.map_ids = vec!["m1".into()];
         cfg.nexum.key = None;
         assert_eq!(cfg.nexum.complete(), None);
+    }
+
+    #[test]
+    fn eve_metro_is_off_without_a_client_id() {
+        let cfg = EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(42) };
+        assert_eq!(cfg.gated(true), cfg);
+        assert_eq!(cfg.gated(false), EveMetroConfig::default());
+        assert_eq!(cfg.gated(false).complete(), None);
+        // The gate leaves the settings of the user as they are.
+        assert_eq!(cfg.complete(), Some(("metro_test_key", 42)));
     }
 
     #[test]

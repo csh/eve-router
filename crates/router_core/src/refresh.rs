@@ -1,12 +1,12 @@
 //! The live refresh of the wormhole sources. Each refresh builds a full new map from the base
 //! map. Thus a route of the old map keeps correct edge indices until the app swaps the map.
 
-use crate::config::{AppPaths, NexumConfig};
+use crate::config::{AppPaths, EveMetroConfig, NexumConfig};
 use crate::labels::Shortcuts;
 use crate::log::LogEntry;
 use crate::overlay::{self, OverlayReport};
 use crate::route::{Path, Route};
-use crate::sources::{self, evescout, nexum};
+use crate::sources::{self, evemetro, evescout, nexum};
 use crate::universe::{Link, Universe};
 use crate::wormhole::{self, SourceData, SourceId};
 use crate::wormhole_types::WormholeTypes;
@@ -22,6 +22,8 @@ pub const INTERVAL: Duration = Duration::from_secs(sources::CACHE_FRESH_SECS);
 pub const STOPPED: &str = "Wormhole refresh stopped";
 /// The toast after a Nexum settings change, while the worker loads the new map.
 pub const NEXUM_LOADING: &str = "Rebuilding map of the universe.";
+/// The toast after an EVE Metro settings change, while the worker loads the new map.
+pub const EVE_METRO_LOADING: &str = "Loading the EVE Metro map.";
 
 /// A map with the wormholes of one load.
 pub struct Snapshot {
@@ -35,15 +37,22 @@ pub struct Snapshot {
     pub log: Vec<LogEntry>,
 }
 
-/// Build a map: a copy of `base` with the merged wormholes of `wh` and `scout` at `now`.
+/// Build a map: a copy of `base` with the merged wormholes of `wh`, `scout` and `metro` at `now`.
 /// The startup and each refresh use this function, so both build the same map. The copy keeps
 /// the `NodeIndex` of each system. Return the snapshot, and the count of wormholes that the map got.
-pub fn build(base: &Universe, report: &OverlayReport, wh: &nexum::Load, scout: &evescout::Load, now: u64) -> (Snapshot, usize) {
+pub fn build(
+    base: &Universe,
+    report: &OverlayReport,
+    wh: &nexum::Load,
+    scout: &evescout::Load,
+    metro: &evemetro::Load,
+    now: u64,
+) -> (Snapshot, usize) {
     let mut uni = base.clone();
-    let all: Vec<SourceData> = wh.data.iter().chain(&scout.data).cloned().collect();
+    let all: Vec<SourceData> = wh.data.iter().chain(&scout.data).chain(&metro.data).cloned().collect();
     let count = uni.add_wormholes(&wormhole::merge(&all, now));
-    let shortcuts = Shortcuts::new(&uni, report, wh, scout);
-    let log = wh.log.iter().chain(&scout.log).cloned().collect();
+    let shortcuts = Shortcuts::new(&uni, report, wh, scout, metro);
+    let log = wh.log.iter().chain(&scout.log).chain(&metro.log).cloned().collect();
     (Snapshot { uni: Arc::new(uni), shortcuts, all, log }, count)
 }
 
@@ -141,6 +150,13 @@ pub struct Setup {
     pub nexum: NexumConfig,
     /// The cache file of the Nexum data.
     pub nexum_cache: PathBuf,
+    /// The EVE Metro settings. A `Control::EveMetro` message replaces them.
+    pub metro: EveMetroConfig,
+    /// The cache file of the EVE Metro data.
+    pub metro_cache: PathBuf,
+    /// The URL of EVE Metro, and the URL of ESI for the corporation and the alliance.
+    pub metro_url: String,
+    pub esi_url: String,
     /// The URL of the EVE-Scout feed.
     pub scout_url: String,
     /// The cache file of the EVE-Scout data.
@@ -153,7 +169,7 @@ pub struct Setup {
 
 impl Setup {
     /// The setup of an app: the public EVE-Scout feed, the cache files in `paths.cache`, and a
-    /// refresh each `INTERVAL`.
+    /// refresh each `INTERVAL`. EVE Metro is off. The app sets `metro` after this call.
     pub fn new(base: Arc<Universe>, report: OverlayReport, types: WormholeTypes, nexum: NexumConfig, paths: &AppPaths) -> Setup {
         Setup {
             base,
@@ -161,6 +177,10 @@ impl Setup {
             types,
             nexum,
             nexum_cache: paths.cache_file(SourceId::Nexum),
+            metro: EveMetroConfig::default(),
+            metro_cache: paths.cache_file(SourceId::EveMetro),
+            metro_url: evemetro::URL.into(),
+            esi_url: crate::esi::client::ESI_URL.into(),
             scout_url: evescout::URL.into(),
             scout_cache: paths.cache_file(SourceId::EveScout),
             interval: INTERVAL,
@@ -175,6 +195,8 @@ pub enum Control {
     Bridges(OverlayReport),
     /// Use these Nexum settings. Refresh at once with no fresh-cache check, then start a new interval.
     Nexum(NexumConfig),
+    /// Use these EVE Metro settings. Refresh at once with no fresh-cache check, then start a new interval.
+    EveMetro(EveMetroConfig),
     /// Refresh at once with no fresh-cache check, then start a new interval.
     Refresh,
 }
@@ -205,6 +227,11 @@ impl Refresher {
     /// Use new Nexum settings, and refresh at once. A stopped worker ignores the message.
     pub fn nexum(&self, cfg: NexumConfig) {
         let _ = self.control.send(Control::Nexum(cfg));
+    }
+
+    /// Use new EVE Metro settings, and refresh at once. A stopped worker ignores the message.
+    pub fn eve_metro(&self, cfg: EveMetroConfig) {
+        let _ = self.control.send(Control::EveMetro(cfg));
     }
 
     /// Use new jump bridges. The worker builds the map again at once. A stopped worker ignores the message.
@@ -238,13 +265,14 @@ struct Worker {
     setup: Setup,
     last_nexum: Option<SourceData>,
     last_scout: Option<SourceData>,
+    last_metro: Option<SourceData>,
 }
 
 impl Worker {
     /// A worker that keeps the startup data of `setup.last` as the data of the last refresh.
     fn new(setup: Setup) -> Worker {
         let last = |source| setup.last.iter().find(|d| d.source == source).cloned();
-        Worker { last_nexum: last(SourceId::Nexum), last_scout: last(SourceId::EveScout), setup }
+        Worker { last_nexum: last(SourceId::Nexum), last_scout: last(SourceId::EveScout), last_metro: last(SourceId::EveMetro), setup }
     }
 
     fn run(mut self, control: Receiver<Control>, snapshots: Sender<Snapshot>, clock: impl Fn() -> u64, wake: impl Fn()) {
@@ -259,6 +287,10 @@ impl Worker {
                 }
                 Ok(Control::Nexum(cfg)) => {
                     self.setup.nexum = cfg;
+                    true
+                }
+                Ok(Control::EveMetro(cfg)) => {
+                    self.setup.metro = cfg;
                     true
                 }
                 Ok(Control::Refresh) => true,
@@ -286,18 +318,28 @@ impl Worker {
         } else {
             evescout::start(&s.scout_url, s.scout_cache.clone(), now)
         };
+        let metro_pending = if force {
+            evemetro::start_fetch(&s.metro, &s.metro_url, &s.esi_url, s.metro_cache.clone(), now)
+        } else {
+            evemetro::start(&s.metro, &s.metro_url, &s.esi_url, s.metro_cache.clone(), now)
+        };
         let known = |id: u32| s.base.by_id.contains_key(&id);
         let mut wh = nexum::finish(pending, known, &s.types);
         let mut scout = evescout::finish(scout_pending, known, &s.types);
+        let mut metro = evemetro::finish(metro_pending, known, &s.types);
         // A failed fetch with no cache keeps the data of the last refresh. As for the cache,
         // the data of another Nexum map does not count. Incomplete settings are not a failed fetch.
         let origin = nexum::origin(&s.nexum);
         let complete = s.nexum.complete().is_some();
         wh.data = wh.data.take().or_else(|| self.last_nexum.take().filter(|d| complete && d.origin == origin));
         scout.data = scout.data.take().or_else(|| self.last_scout.take());
+        // The same rule for EVE Metro: the data of another character does not count.
+        let metro_origin = evemetro::origin(&s.metro);
+        metro.data = metro.data.take().or_else(|| self.last_metro.take().filter(|d| metro_origin.is_some() && d.origin == metro_origin));
         self.last_nexum.clone_from(&wh.data);
         self.last_scout.clone_from(&scout.data);
-        build(&s.base, &s.report, &wh, &scout, now).0
+        self.last_metro.clone_from(&metro.data);
+        build(&s.base, &s.report, &wh, &scout, &metro, now).0
     }
 }
 
@@ -407,7 +449,7 @@ mod tests {
     #[test]
     fn build_keeps_the_node_of_each_system() {
         let base = universe();
-        let (snap, count) = build(base, &OverlayReport::default(), &nexum::Load::default(), &scout_load(), 0);
+        let (snap, count) = build(base, &OverlayReport::default(), &nexum::Load::default(), &scout_load(), &Default::default(), 0);
         assert_eq!(count, 1);
         assert_eq!(snap.uni.graph.node_count(), base.graph.node_count());
         for (id, &node) in &base.by_id {
@@ -425,7 +467,7 @@ mod tests {
         let row = |op, reason: &str| LogEntry { time: 7, op, ok: true, reason: reason.into() };
         let wh = nexum::Load { log: vec![row("nexum.fetch", "Loaded 2 wormhole connections")], ..Default::default() };
         let scout = evescout::Load { log: vec![row("evescout.fetch", "Loaded 1 wormhole connection")], ..Default::default() };
-        let (snap, _) = build(universe(), &OverlayReport::default(), &wh, &scout, 0);
+        let (snap, _) = build(universe(), &OverlayReport::default(), &wh, &scout, &Default::default(), 0);
         assert_eq!(snap.log, [row("nexum.fetch", "Loaded 2 wormhole connections"), row("evescout.fetch", "Loaded 1 wormhole connection")]);
     }
 
@@ -446,6 +488,10 @@ mod tests {
             types: WormholeTypes::default(),
             nexum: NexumConfig::default(),
             nexum_cache: dir.join("nexum.json"),
+            metro: EveMetroConfig::default(),
+            metro_cache: dir.join("eve-metro.json"),
+            metro_url: "http://127.0.0.1:9".into(),
+            esi_url: "http://127.0.0.1:9".into(),
             scout_url,
             scout_cache: dir.join("eve-scout.json"),
             interval,
@@ -532,6 +578,71 @@ mod tests {
         let data = snap.all.iter().find(|d| d.source == SourceId::Nexum).expect("no Nexum data");
         assert!(!data.holes.is_empty());
         assert_eq!(data.name.as_deref(), Some("Test Map"));
+    }
+
+    fn metro_cfg(character: u64) -> EveMetroConfig {
+        EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(character) }
+    }
+
+    #[test]
+    fn an_eve_metro_message_loads_the_map() {
+        let reply = format!(
+            r#"{{"access":true,"connections":[{{"systemId":"{JITA}","systemEdges":[{{"solarSystemIdDst":{AMARR},"signatureSrc":"ABC-123","wormholeTypeSrc":"K162","wormholeTypeDst":"B274"}}]}}]}}"#
+        );
+        let (esi, _) = serve_routes(HashMap::from([("/characters/42/".to_string(), r#"{"corporation_id":7}"#.to_string())]));
+        let (metro, request) = serve("200 OK", &reply, Duration::ZERO);
+        let (mut setup, _tmp) = setup(format!("{esi}/scout"), Duration::from_secs(3600));
+        (setup.metro_url, setup.esi_url) = (metro, esi);
+        let r = Refresher::start(setup, || FIXTURE_TIME, || {});
+        r.eve_metro(metro_cfg(42));
+        let snap = r.recv_timeout(Duration::from_secs(10)).expect("no refresh after the message");
+        assert!(request.recv().unwrap().starts_with("POST /connections HTTP/1.1"));
+        assert!(has_hole(&snap.uni, JITA, AMARR));
+        let data = snap.all.iter().find(|d| d.source == SourceId::EveMetro).expect("no EVE Metro data");
+        assert_eq!(data.holes.len(), 1);
+        assert_eq!(snap.shortcuts.metro, 1);
+        assert!(snap.shortcuts.sources.iter().any(|(source, _)| *source == SourceId::EveMetro));
+        assert!(snap.log.iter().any(|l| l.op == "evemetro.fetch" && l.ok));
+    }
+
+    #[test]
+    fn eve_metro_is_off_until_the_settings_are_complete() {
+        let (url, _) = serve_routes(HashMap::new());
+        let (setup, _tmp) = setup(format!("{url}/scout"), INTERVAL);
+        let mut worker = Worker::new(setup);
+        // The default settings are off. A tick sends no request to EVE Metro.
+        let snap = worker.tick(FIXTURE_TIME, false);
+        assert!(!snap.all.iter().any(|d| d.source == SourceId::EveMetro));
+        assert!(!snap.log.iter().any(|l| l.op == "evemetro.fetch"));
+        assert_eq!(snap.shortcuts.metro, 0);
+    }
+
+    #[test]
+    fn kept_data_of_another_eve_metro_character_is_not_used() {
+        // The ESI server has no routes, so each fetch fails, and no cache file exists.
+        let (url, _) = serve_routes(HashMap::new());
+        let (mut setup, _tmp) = setup(format!("{url}/scout"), INTERVAL);
+        (setup.metro_url, setup.esi_url) = (url.clone(), url);
+        let mut worker = Worker::new(setup);
+        worker.setup.metro = metro_cfg(42);
+        let kept = |character: u64| SourceData {
+            source: SourceId::EveMetro,
+            fetched_at: FIXTURE_TIME,
+            origin: evemetro::origin(&metro_cfg(character)),
+            name: None,
+            holes: vec![hole(JITA, AMARR)],
+        };
+        let has_metro = |snap: &Snapshot| snap.all.iter().any(|d| d.source == SourceId::EveMetro);
+        // The kept data of the same character fills the gap.
+        worker.last_metro = Some(kept(42));
+        assert!(has_metro(&worker.tick(FIXTURE_TIME, false)));
+        // The kept data of another character does not.
+        worker.last_metro = Some(kept(43));
+        assert!(!has_metro(&worker.tick(FIXTURE_TIME, false)));
+        // With the source off, kept data does not fill the gap.
+        worker.last_metro = Some(kept(42));
+        worker.setup.metro.enabled = false;
+        assert!(!has_metro(&worker.tick(FIXTURE_TIME, false)));
     }
 
     #[test]
@@ -625,8 +736,14 @@ mod tests {
     fn try_recv_gives_the_newest_snapshot() {
         let (r, snapshots, _control) = crate::test_support::fake_refresher();
         assert!(matches!(r.try_recv(), Err(TryRecvError::Empty)));
-        snapshots.send(build(universe(), &OverlayReport::default(), &nexum::Load::default(), &evescout::Load::default(), 0).0).unwrap();
-        snapshots.send(build(universe(), &OverlayReport::default(), &nexum::Load::default(), &scout_load(), 0).0).unwrap();
+        snapshots
+            .send(
+                build(universe(), &OverlayReport::default(), &nexum::Load::default(), &evescout::Load::default(), &Default::default(), 0).0,
+            )
+            .unwrap();
+        snapshots
+            .send(build(universe(), &OverlayReport::default(), &nexum::Load::default(), &scout_load(), &Default::default(), 0).0)
+            .unwrap();
         assert_eq!(r.try_recv().unwrap().shortcuts.wormholes, 1);
         assert!(matches!(r.try_recv(), Err(TryRecvError::Empty)));
         // A dropped sender acts as a stopped worker.

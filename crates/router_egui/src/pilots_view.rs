@@ -981,7 +981,7 @@ mod tests {
     fn session_with_routes() -> (Session, tempfile::TempDir) {
         let uni = overlay_universe();
         let settings = settings(&uni, Some("black-ops"));
-        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default(), &Default::default());
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("eve-router.json");
         let mut s = Session::new(Arc::new(uni), settings, Config::default(), path, shortcuts);

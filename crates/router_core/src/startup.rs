@@ -1,14 +1,15 @@
 //! The startup load: the wormhole fetches, the SDE update, the map and the overlays.
 //!
-//! `load` starts the Nexum and EVE-Scout fetches first, so they run at the same time as the SDE
-//! update. It tells the caller about each step with `Progress`, for the splash screen.
+//! `load` starts the Nexum, EVE-Scout and EVE Metro fetches first, so they run at the same time as
+//! the SDE update. It tells the caller about each step with `Progress`, for the splash screen.
 
 use crate::config::{self, AppPaths, Config, ConfigError};
 use crate::error::{FileError, SdeError};
+use crate::esi::client::ESI_URL;
 use crate::overlay::{self, OverlayReport};
 use crate::refresh::{self, Snapshot};
 use crate::sde_update::{self, Outcome};
-use crate::sources::{evescout, nexum};
+use crate::sources::{evemetro, evescout, nexum};
 use crate::universe::Universe;
 use crate::wormhole::{self, SourceId};
 use crate::wormhole_types::WormholeTypes;
@@ -85,6 +86,9 @@ pub fn load(cfg: &Config, paths: &AppPaths, skip_sde_check: bool, progress: impl
     // The Thera and Turnur switches act at route time, so a switch works with no restart.
     let nexum = nexum::start(&cfg.nexum, paths.cache_file(SourceId::Nexum), wormhole::now());
     let scout = evescout::start(evescout::URL, paths.cache_file(SourceId::EveScout), wormhole::now());
+    // EVE Metro needs a key and a picked character. Without them the source stays off.
+    let metro_cache = paths.cache_file(SourceId::EveMetro);
+    let metro = evemetro::start(&cfg.eve_metro, evemetro::URL, ESI_URL, metro_cache, wormhole::now());
 
     let sde_dir = paths.sde.as_path();
     progress(Progress::CheckingSde);
@@ -102,7 +106,8 @@ pub fn load(cfg: &Config, paths: &AppPaths, skip_sde_check: bool, progress: impl
     progress(Progress::AddingWormholes);
     let wh = nexum::finish(nexum, |id| uni.by_id.contains_key(&id), &types);
     let scout = evescout::finish(scout, |id| uni.by_id.contains_key(&id), &types);
-    let (snapshot, _) = refresh::build(&uni, &report, &wh, &scout, wormhole::now());
+    let metro = evemetro::finish(metro, |id| uni.by_id.contains_key(&id), &types);
+    let (snapshot, _) = refresh::build(&uni, &report, &wh, &scout, &metro, wormhole::now());
     Ok(Loaded { sde: outcome, hulls, snapshot, base: Arc::new(uni), report, types })
 }
 

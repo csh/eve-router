@@ -128,8 +128,11 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
         let _ = tx.send(LoadMsg::Progress(step));
         ctx.request_repaint();
     };
+    // EVE Metro needs a logged-in character, so it stays off without an EVE client ID.
+    let sso_ready = client_id().is_some();
+    let startup_cfg = Config { eve_metro: cfg.eve_metro.gated(sso_ready), ..cfg.clone() };
     let startup::Loaded { sde, hulls, snapshot, base, report, types } =
-        startup::load(&cfg, &paths, env_flag(sde_update::SKIP_ENV), progress)?;
+        startup::load(&startup_cfg, &paths, env_flag(sde_update::SKIP_ENV), progress)?;
     let startup_lines: Vec<String> = sde.message(&paths.sde).into_iter().collect();
     let Snapshot { uni, shortcuts, all, log } = snapshot;
     let settings = Settings::from_config(&cfg, &uni, hulls)?;
@@ -138,6 +141,7 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     let pairs = report.pairs.clone();
     let mut setup = Setup::new(base, report, types, cfg.nexum.clone(), &paths);
     setup.last = all.clone();
+    setup.metro = cfg.eve_metro.gated(sso_ready);
     let refresher = Refresher::start(setup, router_core::wormhole::now, move || wake.request_repaint());
     let mut session = Session::new(uni, settings, cfg, paths.config.clone(), shortcuts);
     session.wormhole_data = all;
@@ -703,7 +707,7 @@ mod tests {
     fn session() -> (Session, tempfile::TempDir) {
         let uni = overlay_universe();
         let settings = settings(&uni, Some("black-ops"));
-        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default(), &Default::default());
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("eve-router.json");
         let mut s = Session::new(Arc::new(uni), settings, Config::default(), path, shortcuts);

@@ -22,6 +22,10 @@ use std::time::Duration;
 /// The fixed address of the service.
 pub const URL: &str = "https://api.evemetro.com";
 
+/// The text for the pilot when the app has no EVE client ID. The source needs a logged-in
+/// character, like the other SSO features.
+pub const NEEDS_CLIENT_ID: &str = "EVE Metro needs the EVE client ID. Set EVE_ROUTER_CLIENT_ID.";
+
 /// A system ID. The service can give a number or a text, so the parser accepts both.
 /// Any other value gives `None`.
 #[derive(Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
@@ -210,9 +214,14 @@ pub enum Pending {
     Fetch { thread: JoinHandle<Result<String, FetchError>>, started: u64, origin: String, cache: Option<SourceData>, cache_path: PathBuf },
 }
 
-/// The origin of the data. A cache is for one character only: the access depends on it.
-fn origin(base: &str, character: u64) -> String {
+/// The origin of the data at `base`. A cache is for one character only: the access depends on it.
+fn origin_at(base: &str, character: u64) -> String {
     format!("{base}/connections#{character}")
+}
+
+/// The origin of the data of `cfg`. `None` when the source is off, or the key or the character is not set.
+pub fn origin(cfg: &EveMetroConfig) -> Option<String> {
+    cfg.complete().map(|(_, character)| origin_at(URL, character))
 }
 
 /// Ask ESI for the corporation and the alliance of the character, then POST the query.
@@ -223,23 +232,23 @@ fn fetch(base: &str, esi: &Esi, key: &str, character: u64, timeout: Duration) ->
     sources::post_json(&format!("{base}/connections"), key, &body, timeout)
 }
 
-/// Start the EVE Metro load: a fresh cache, else a fetch on a thread.
-pub fn start(cfg: &EveMetroConfig, cache_path: PathBuf, now: u64) -> Pending {
-    start_with(cfg, URL, crate::esi::client::ESI_URL, cache_path, now, true)
+/// Start the EVE Metro load: a fresh cache, else a fetch on a thread. `base` is `URL` and `esi`
+/// is `ESI_URL`. A test gives the addresses of its own servers.
+pub fn start(cfg: &EveMetroConfig, base: &str, esi: &str, cache_path: PathBuf, now: u64) -> Pending {
+    start_with(cfg, base, esi, cache_path, now, true)
 }
 
 /// Start a fetch, also when the cache is fresh. A settings change needs this.
-pub fn start_fetch(cfg: &EveMetroConfig, cache_path: PathBuf, now: u64) -> Pending {
-    start_with(cfg, URL, crate::esi::client::ESI_URL, cache_path, now, false)
+pub fn start_fetch(cfg: &EveMetroConfig, base: &str, esi: &str, cache_path: PathBuf, now: u64) -> Pending {
+    start_with(cfg, base, esi, cache_path, now, false)
 }
 
-/// Start the EVE Metro load. `use_fresh` false skips the fresh-cache check. A test gives
-/// the addresses of its own servers.
+/// Start the EVE Metro load. `use_fresh` false skips the fresh-cache check.
 fn start_with(cfg: &EveMetroConfig, base: &str, esi: &str, cache_path: PathBuf, now: u64, use_fresh: bool) -> Pending {
     let Some((key, character)) = cfg.complete() else {
         return Pending::None;
     };
-    let origin = origin(base, character);
+    let origin = origin_at(base, character);
     let cache = sources::read_cache(&cache_path).filter(|d| d.source == SourceId::EveMetro && d.origin.as_ref() == Some(&origin));
     if use_fresh && let Some(data) = cache.as_ref().filter(|d| sources::cache_is_fresh(d, now)) {
         return Pending::Cache(data.clone());
@@ -365,12 +374,17 @@ mod tests {
     }
 
     #[test]
+    fn the_client_id_text_names_the_env_var() {
+        assert!(NEEDS_CLIENT_ID.contains(crate::esi::CLIENT_ID_VAR));
+    }
+
+    #[test]
     fn the_settings_must_be_complete() {
         assert_eq!(cfg().complete(), Some(("metro_test_key", 42)));
         assert_eq!(EveMetroConfig { enabled: false, ..cfg() }.complete(), None);
         assert_eq!(EveMetroConfig { key: None, ..cfg() }.complete(), None);
         assert_eq!(EveMetroConfig { character: None, ..cfg() }.complete(), None);
-        assert!(matches!(start(&EveMetroConfig::default(), PathBuf::from("none.json"), 0), Pending::None));
+        assert!(matches!(start(&EveMetroConfig::default(), URL, "http://esi.test", PathBuf::from("none.json"), 0), Pending::None));
     }
 
     /// The addresses of an ESI test server and an EVE Metro test server.
@@ -430,7 +444,9 @@ mod tests {
         assert_eq!(result.log[0].op, "evemetro.fetch");
         assert!(result.log[0].ok);
         let cached = sources::read_cache(&path).expect("no cache file");
-        assert_eq!(cached.origin, Some(origin(&metro, 42)));
+        assert_eq!(cached.origin, Some(origin_at(&metro, 42)));
+        assert_eq!(origin(&cfg()), Some(format!("{URL}/connections#42")));
+        assert_eq!(origin(&EveMetroConfig::default()), None);
         // A fresh cache for the same character stops the fetch. Another character does not use it.
         assert!(matches!(start_with(&cfg(), &metro, &esi, path.clone(), FETCHED, true), Pending::Cache(_)));
         let other = EveMetroConfig { character: Some(43), ..cfg() };
@@ -456,7 +472,7 @@ mod tests {
         load(&cfg(), &esi, &metro, path.clone());
         // The cache is old now, and the server refuses the key.
         let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "403 Forbidden", "{}");
-        let old = SourceData { fetched_at: FETCHED - 2 * HOUR, origin: Some(origin(&metro, 42)), ..sources::read_cache(&path).unwrap() };
+        let old = SourceData { fetched_at: FETCHED - 2 * HOUR, origin: Some(origin_at(&metro, 42)), ..sources::read_cache(&path).unwrap() };
         sources::write_cache(&path, &old).unwrap();
         let result = load(&cfg(), &esi, &metro, path);
         assert_eq!(result.data.as_ref().map(|d| d.holes.len()), Some(2));

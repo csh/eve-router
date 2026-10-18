@@ -7,9 +7,9 @@ use crate::esi::pilots::Pilots;
 use crate::overlay::OverlayReport;
 use crate::route::Route;
 use crate::settings::{HullSource, Settings};
-use crate::sources::{evescout, nexum};
+use crate::sources::{evemetro, evescout, nexum};
 use crate::universe::{Link, Universe, display_sec};
-use crate::wormhole::{MassStatus, SourceId, THERA, TURNUR, Wormhole, expiry_text};
+use crate::wormhole::{MassStatus, SourceData, SourceId, THERA, TURNUR, Wormhole, expiry_text};
 use petgraph::graph::EdgeIndex;
 
 /// The overlay counts for the "Shortcuts" sidebar box.
@@ -18,6 +18,8 @@ pub struct Shortcuts {
     pub bridges: usize,
     /// The wormholes from the Nexum map. The pairs also count in `wormholes`.
     pub nexum: usize,
+    /// The wormholes from EVE Metro. The pairs also count in `wormholes`.
+    pub metro: usize,
     /// Broken or expired wormholes that the router did not load.
     pub skipped: usize,
     /// The wormholes with an end in Thera, and in Turnur.
@@ -30,7 +32,7 @@ pub struct Shortcuts {
 }
 
 impl Shortcuts {
-    pub fn new(uni: &Universe, report: &OverlayReport, wh: &nexum::Load, scout: &evescout::Load) -> Self {
+    pub fn new(uni: &Universe, report: &OverlayReport, wh: &nexum::Load, scout: &evescout::Load, metro: &evemetro::Load) -> Self {
         let (wormholes, bridges) = uni.shortcut_counts();
         let mut warnings = Vec::new();
         if !report.unknown.is_empty() {
@@ -39,7 +41,12 @@ impl Shortcuts {
         if !report.same.is_empty() {
             warnings.push(format!("Bridges: same system at both ends: {}", report.same.join(", ")));
         }
-        for (source, unknown) in [(SourceId::Nexum, &wh.report.unknown), (SourceId::EveScout, &scout.report.unknown)] {
+        let unknown_ids = [
+            (SourceId::Nexum, &wh.report.unknown),
+            (SourceId::EveScout, &scout.report.unknown),
+            (SourceId::EveMetro, &metro.report.unknown),
+        ];
+        for (source, unknown) in unknown_ids {
             if !unknown.is_empty() {
                 let ids: Vec<String> = unknown.iter().map(u32::to_string).collect();
                 warnings.push(format!("{}: unknown system IDs: {}", source.label(), ids.join(", ")));
@@ -47,14 +54,19 @@ impl Shortcuts {
         }
         warnings.extend(wh.warning.clone());
         warnings.extend(scout.warning.clone());
+        warnings.extend(metro.warning.clone());
+        let pairs = |data: &Option<SourceData>| {
+            data.iter().flat_map(|d| &d.holes).map(|h| (h.a, h.b)).collect::<std::collections::HashSet<_>>().len()
+        };
         Shortcuts {
             wormholes,
             bridges,
-            nexum: wh.data.iter().flat_map(|d| &d.holes).map(|h| (h.a, h.b)).collect::<std::collections::HashSet<_>>().len(),
-            skipped: wh.report.skipped() + scout.report.skipped(),
+            nexum: pairs(&wh.data),
+            metro: pairs(&metro.data),
+            skipped: wh.report.skipped() + scout.report.skipped() + metro.report.skipped(),
             thera: uni.hub_count(THERA),
             turnur: uni.hub_count(TURNUR),
-            sources: wh.data.iter().chain(&scout.data).map(|d| (d.source, d.fetched_at)).collect(),
+            sources: wh.data.iter().chain(&scout.data).chain(&metro.data).map(|d| (d.source, d.fetched_at)).collect(),
             warning: (!warnings.is_empty()).then(|| warnings.join(" · ")),
         }
     }
@@ -413,7 +425,7 @@ mod tests {
         wh.report.unknown = vec![1, 2];
         let mut scout = evescout::Load { warning: Some("EVE-Scout offline, feed from 14:02".into()), ..Default::default() };
         scout.report.unknown = vec![3];
-        let warning = Shortcuts::new(uni, &report, &wh, &scout).warning.unwrap();
+        let warning = Shortcuts::new(uni, &report, &wh, &scout, &Default::default()).warning.unwrap();
         assert_eq!(
             warning,
             "Bridges: unknown systems: Nowhere · Nexum: unknown system IDs: 1, 2 · EVE-Scout: unknown system IDs: 3 · Nexum offline, map from 14:02 · EVE-Scout offline, feed from 14:02"
@@ -430,7 +442,7 @@ mod tests {
         // Two holes between one pair count one time.
         let wh = nexum::Load { data: Some(data(SourceId::Nexum, vec![hole(1, 2), hole(1, 2), hole(2, 3)])), ..Default::default() };
         let scout = evescout::Load { data: Some(data(SourceId::EveScout, vec![hole(4, 5)])), ..Default::default() };
-        assert_eq!(Shortcuts::new(uni, &Default::default(), &wh, &scout).nexum, 2);
-        assert_eq!(Shortcuts::new(uni, &Default::default(), &Default::default(), &scout).nexum, 0);
+        assert_eq!(Shortcuts::new(uni, &Default::default(), &wh, &scout, &Default::default()).nexum, 2);
+        assert_eq!(Shortcuts::new(uni, &Default::default(), &Default::default(), &scout, &Default::default()).nexum, 0);
     }
 }
