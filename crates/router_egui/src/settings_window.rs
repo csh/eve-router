@@ -363,6 +363,9 @@ fn label(ui: &mut Ui, text: &str) {
 /// The hover text of a control that a route start locks.
 pub const LOCKED: &str = "Locked while route is active — stop the route to change this";
 
+/// The hover text of a control that the Pochven Access switch locks.
+const ACCESS_OFF: &str = "Turn on Pochven access above first";
+
 /// The pages of the settings window, in the order of the list.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Page {
@@ -776,27 +779,27 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
         return;
     }
     let field = FIELD;
+    // A route cannot use EVE Metro while the Access switch above is off. The switch gives the
+    // reason, so the controls here only dim, with no second line of text to repeat it.
+    let pochven_off = !s.settings.clades.pochven;
+    let disabled = locked || pochven_off;
+    let disabled_hover = if locked { LOCKED } else { ACCESS_OFF };
     group(ui, "EVE Metro");
-    ui.label(dim("The Pochven wormhole map. The Access switch above must also be on for a route to use it."));
-    ui.label(dim(
-        "The API key itself costs nothing. The selected pilot, or its corporation or its alliance, needs a paid EVE Metro subscription.",
-    ));
-    ui.horizontal(|ui| {
-        ui.label(dim("Subscribe at"));
+    ui.horizontal_wrapped(|ui| {
+        ui.label(dim("An"));
         ui.hyperlink_to("evemetro.com", "https://evemetro.com/");
+        ui.label(dim("subscription is required. This is a third-party service."));
     });
-    ui.label(dim(
-        "Activation can take a few minutes after payment. EVE Metro is a third-party service: this app is not responsible for it.",
-    ));
+    ui.label(dim("Activation can take a few minutes after the ingame payment arrives."));
     ui.add_space(4.0);
     egui::Grid::new("settings-metro").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         label(ui, "Source");
-        let row = ui.add_enabled_ui(!locked, |ui| {
+        let row = ui.add_enabled_ui(!disabled, |ui| {
             let mut on = s.cfg.eve_metro.enabled;
             let changed = ui.app_checkbox(&mut on, "Load the Pochven wormhole map").changed();
             (changed, on)
         });
-        row.response.on_disabled_hover_text(LOCKED);
+        row.response.on_disabled_hover_text(disabled_hover);
         if row.inner.0 {
             s.cfg.eve_metro.enabled = row.inner.1;
             s.eve_metro_saved();
@@ -804,7 +807,7 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
         ui.end_row();
 
         label(ui, "Key");
-        ui.add_enabled_ui(!locked, |ui| {
+        ui.add_enabled_ui(!disabled, |ui| {
             // The masked key and Clear while a key is set, else the input and Save.
             ui.horizontal_wrapped(|ui| {
                 if let Some(key) = &s.cfg.eve_metro.key {
@@ -828,12 +831,12 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
             })
         })
         .response
-        .on_disabled_hover_text(LOCKED);
+        .on_disabled_hover_text(disabled_hover);
         ui.end_row();
     });
     ui.add_space(14.0);
     group(ui, "Character");
-    ui.label(dim("The picked character, or its corporation or its alliance, must have a valid EVE Metro subscription."));
+    ui.label(dim("The selected character, or its corporation or its alliance, must have a valid EVE Metro subscription."));
     ui.add_space(4.0);
     let pilots = s.pilots.characters();
     if pilots.is_empty() {
@@ -842,9 +845,9 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
     }
     let picked = s.cfg.eve_metro.character;
     if picked.is_none() {
-        ui.label(RichText::new("Pick a character. EVE Metro stays off until you do.").color(theme::WARN));
+        ui.label(RichText::new("Select a character. EVE Metro stays off until you do.").color(theme::WARN));
     } else if !pilots.iter().any(|p| Some(p.id) == picked) {
-        ui.label(RichText::new("The picked character is no longer linked. Pick another one.").color(theme::WARN));
+        ui.label(RichText::new("The selected character is no longer linked. Select another one.").color(theme::WARN));
     }
     let mut pick = None;
     // The table takes the height that is left.
@@ -882,7 +885,7 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
                 row.col(|ui| {
                     if selected {
                         ui.label(RichText::new("In use").color(theme::accent(ui)));
-                    } else if ui.add_enabled(!locked, AppButton::new("Use")).on_disabled_hover_text(LOCKED).clicked() {
+                    } else if ui.add_enabled(!disabled, AppButton::new("Use")).on_disabled_hover_text(disabled_hover).clicked() {
                         pick = Some(pilot.id);
                     }
                 });
