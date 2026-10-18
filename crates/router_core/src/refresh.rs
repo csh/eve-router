@@ -20,8 +20,8 @@ use std::time::Duration;
 pub const INTERVAL: Duration = Duration::from_secs(sources::CACHE_FRESH_SECS);
 /// The status note when the worker stops, for example after a panic.
 pub const STOPPED: &str = "Wormhole refresh stopped";
-/// The status text after a Nexum settings change, while the worker loads the new map.
-pub const NEXUM_LOADING: &str = "Nexum settings saved. Loading the new map…";
+/// The toast after a Nexum settings change, while the worker loads the new map.
+pub const NEXUM_LOADING: &str = "Rebuilding map of the universe.";
 
 /// A map with the wormholes of one load.
 pub struct Snapshot {
@@ -92,26 +92,29 @@ pub fn kept_route(routes: &[Route], uni: &Universe, old_uni: &Universe, old: &Pa
     routes.iter().position(|r| RouteKey::new(uni, &r.path) == key).or_else(|| routes.iter().position(|r| r.path.nodes == old.nodes))
 }
 
-/// The status note after a refresh, for the route that was selected before it. `old` is the
-/// path of that route in `old_uni`. `kept` is true if the new route list has the same path.
-/// A `NodeIndex` is the same in both maps, so the note looks for each old wormhole in `new_uni`.
-pub fn route_note(old_uni: &Universe, old: &Path, new_uni: &Universe, kept: bool) -> Option<String> {
-    let mut closed = Vec::new();
-    for &edge in &old.edges {
-        let (Link::Wormhole(w), Some((from, to))) = (&old_uni.graph[edge], old_uni.graph.edge_endpoints(edge)) else {
-            continue;
+/// What changed for the route that was selected before a refresh.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RouteChange {
+    /// A wormhole of the route is gone.
+    Collapsed,
+    /// All wormholes are open, but the route list has a new first route.
+    Faster,
+}
+
+/// The change after a refresh, for the route that was selected before it. `old` is the path of
+/// that route in `old_uni`. `kept` is true if the new route list has the same path.
+/// A `NodeIndex` is the same in both maps, so this looks for each old wormhole in `new_uni`.
+pub fn route_change(old_uni: &Universe, old: &Path, new_uni: &Universe, kept: bool) -> Option<RouteChange> {
+    let collapsed = old.edges.iter().any(|&edge| {
+        let (Link::Wormhole(_), Some((from, to))) = (&old_uni.graph[edge], old_uni.graph.edge_endpoints(edge)) else {
+            return false;
         };
-        if !new_uni.graph.edges_connecting(from, to).any(|e| matches!(e.weight(), Link::Wormhole(_))) {
-            // The signature in the system that the jump leaves, else the two system names.
-            let name = w.sig_at(old_uni.system(from).id).unwrap_or_else(|| format!("{} » {}", old_uni.name(from), old_uni.name(to)));
-            closed.push(name);
-        }
-    }
-    match closed.as_slice() {
-        [] if kept => None,
-        [] => Some("Wormholes updated: a new route is first".into()),
-        [one] => Some(format!("Wormhole {one} closed: the route changed")),
-        many => Some(format!("Wormholes {} closed: the route changed", many.join(", "))),
+        !new_uni.graph.edges_connecting(from, to).any(|e| matches!(e.weight(), Link::Wormhole(_)))
+    });
+    match (collapsed, kept) {
+        (true, _) => Some(RouteChange::Collapsed),
+        (false, true) => None,
+        (false, false) => Some(RouteChange::Faster),
     }
 }
 
@@ -332,17 +335,15 @@ mod tests {
     }
 
     #[test]
-    fn route_note_names_each_closed_wormhole() {
+    fn route_change_tells_a_collapse_from_a_faster_route() {
         let (old, path) = two_hole_path();
         let none = crate::test_support::snapshot(Vec::new());
-        let note = route_note(&old.uni, &path, &none.uni, false);
-        assert_eq!(note.as_deref(), Some("Wormholes ABC, Amarr » Dodixie closed: the route changed"));
+        assert_eq!(route_change(&old.uni, &path, &none.uni, false), Some(RouteChange::Collapsed));
         let one = crate::test_support::snapshot(vec![hole(JITA, AMARR)]);
-        let note = route_note(&old.uni, &path, &one.uni, false);
-        assert_eq!(note.as_deref(), Some("Wormhole Amarr » Dodixie closed: the route changed"));
-        // All wormholes are open: a note only when the path changed.
-        assert_eq!(route_note(&old.uni, &path, &old.uni, true), None);
-        assert_eq!(route_note(&old.uni, &path, &old.uni, false).as_deref(), Some("Wormholes updated: a new route is first"));
+        assert_eq!(route_change(&old.uni, &path, &one.uni, true), Some(RouteChange::Collapsed));
+        // All wormholes are open: a change only when the path changed.
+        assert_eq!(route_change(&old.uni, &path, &old.uni, true), None);
+        assert_eq!(route_change(&old.uni, &path, &old.uni, false), Some(RouteChange::Faster));
     }
 
     #[test]

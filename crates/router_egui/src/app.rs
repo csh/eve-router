@@ -12,7 +12,7 @@ use router_core::esi::{self, active::active_path};
 use router_core::labels::Shortcuts;
 use router_core::log::{self, LogEntry};
 use router_core::overlay::{self, OverlayReport, Pair};
-use router_core::refresh::{self, Refresher, Setup, Snapshot, kept_route, route_note};
+use router_core::refresh::{self, Refresher, RouteChange, Setup, Snapshot, kept_route, route_change};
 use router_core::route::{Route, Stop};
 use router_core::settings::{Settings, split_systems};
 use router_core::sources::nexum::MapInfo;
@@ -56,7 +56,6 @@ pub const APPLY_DELAY: Duration = Duration::from_millis(500);
 /// The least time between two manual refreshes. A Nexum map costs one request for each system.
 pub const REFRESH_GAP: Duration = Duration::from_secs(15);
 pub const REFRESHING: &str = "Refreshing the wormholes…";
-pub const REFRESH_WAIT: &str = "Refreshed less than 15 s ago";
 pub const REFRESH_STOPPED: &str = "The refresh worker stopped";
 
 /// The error when the load thread stops without a result. A panic in the load does this.
@@ -175,9 +174,6 @@ pub struct Session {
     refresher: Option<Refresher>,
     /// The time of the last manual refresh.
     refreshed_at: Option<Instant>,
-    /// The note about the selected route after a refresh. It stays until the next search or
-    /// refresh, because the status bar timer does not clear it.
-    pub note: String,
     /// The SDE update messages of the startup load.
     /// The messages for the pilot. The window moves them to the toasts at the next frame.
     pub notices: Vec<Notice>,
@@ -222,7 +218,6 @@ impl Session {
             log: Vec::new(),
             refresher: None,
             refreshed_at: None,
-            note: String::new(),
             notices: Vec::new(),
             bridges_reason: None,
             fetch_warning: None,
@@ -403,7 +398,6 @@ impl Session {
         self.selected = 0;
         self.selected_step = None;
         self.status.clear();
-        self.note.clear();
         let reason = self.settings.rules.blocked_reason();
         let turned_off = if reason != self.bridges_reason { reason.clone() } else { None };
         self.bridges_reason = reason;
@@ -460,7 +454,11 @@ impl Session {
                 self.selected_step = old_step;
             }
             if let Some(path) = &old {
-                self.note = route_note(&old_uni, path, &self.uni, kept.is_some()).unwrap_or_default();
+                match route_change(&old_uni, path, &self.uni, kept.is_some()) {
+                    Some(RouteChange::Collapsed) => self.notify(Level::Warning, "A wormhole on your route collapsed."),
+                    Some(RouteChange::Faster) => self.notify(Level::Info, "A faster route has become available."),
+                    None => {}
+                }
             }
         }
         // A fetch problem gives a notice, as at startup. The same problem on the next refresh
@@ -498,7 +496,6 @@ impl Session {
             return;
         };
         if self.refreshed_at.is_some_and(|at| now.saturating_duration_since(at) < REFRESH_GAP) {
-            self.status = REFRESH_WAIT.into();
             return;
         }
         self.refreshed_at = Some(now);
@@ -619,7 +616,7 @@ impl Session {
             Ok(()) => match &self.refresher {
                 Some(refresher) => {
                     refresher.nexum(self.cfg.nexum.clone());
-                    self.status = refresh::NEXUM_LOADING.into();
+                    self.notify(Level::Info, refresh::NEXUM_LOADING);
                 }
                 // No worker: a test, or a worker that stopped.
                 None => self.notify(Level::Info, "Nexum settings saved. Restart to load the new map."),
@@ -740,7 +737,6 @@ mod tests {
         s.apply_snapshot(snapshot(Vec::new()));
         assert_eq!(s.selected_route().unwrap().path.nodes, nodes);
         assert_eq!(s.selected_step, Some(3));
-        assert_eq!(s.note, "");
     }
 
     #[test]
@@ -773,7 +769,7 @@ mod tests {
     }
 
     #[test]
-    fn a_closed_wormhole_gives_a_note_until_the_next_search() {
+    fn a_closed_wormhole_gives_a_toast() {
         let (mut s, _tmp) = session();
         s.settings.top = 1;
         s.uni = snapshot(vec![jita_amarr()]).uni;
@@ -783,13 +779,11 @@ mod tests {
         s.apply_snapshot(snapshot(Vec::new()));
         assert_eq!(s.routes[0].wormholes, 0);
         assert_eq!((s.selected, s.selected_step), (0, None));
-        assert_eq!(s.note, "Wormhole ABC closed: the route changed");
-        s.recompute();
-        assert_eq!(s.note, "");
+        assert_eq!(last(&s), Some((Level::Warning, "A wormhole on your route collapsed.")));
     }
 
     #[test]
-    fn a_new_first_route_gives_a_note() {
+    fn a_new_first_route_gives_a_toast() {
         let (mut s, _tmp) = session();
         s.settings.top = 1;
         s.uni = snapshot(Vec::new()).uni;
@@ -797,7 +791,7 @@ mod tests {
         assert_eq!(s.routes[0].wormholes, 0);
         s.apply_snapshot(snapshot(vec![jita_amarr()]));
         assert_eq!(s.routes[0].wormholes, 1);
-        assert_eq!(s.note, "Wormholes updated: a new route is first");
+        assert_eq!(last(&s), Some((Level::Info, "A faster route has become available.")));
     }
 
     #[test]
@@ -807,7 +801,7 @@ mod tests {
         s.apply_snapshot(snapshot(vec![jita_amarr()]));
         assert_eq!((s.shortcuts.wormholes, s.wormhole_data.len()), (1, 1));
         assert!(s.routes.is_empty());
-        assert_eq!((s.status.as_str(), s.note.as_str()), ("keep", ""));
+        assert_eq!(s.status, "keep");
     }
 
     #[test]
@@ -860,7 +854,7 @@ mod tests {
         // A second call soon after sends nothing.
         s.refresh_now(start + Duration::from_secs(5));
         assert!(control.try_recv().is_err());
-        assert_eq!(s.status, REFRESH_WAIT);
+        assert_eq!(s.status, REFRESHING);
         // After the gap, the call sends a message again.
         s.refresh_now(start + REFRESH_GAP);
         assert!(matches!(control.try_recv(), Ok(Control::Refresh)));
@@ -952,7 +946,7 @@ mod tests {
         s.refresher = Some(refresher);
         s.cfg.nexum.url = Some("https://nexum.example".into());
         s.nexum_saved();
-        assert_eq!(s.status, NEXUM_LOADING);
+        assert_eq!(last(&s), Some((Level::Info, NEXUM_LOADING)));
         let Ok(Control::Nexum(sent)) = control.try_recv() else { panic!("no Nexum message") };
         assert_eq!(sent.url.as_deref(), Some("https://nexum.example"));
     }
