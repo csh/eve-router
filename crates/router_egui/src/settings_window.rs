@@ -473,10 +473,10 @@ fn favourites_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session) {
                 if ui.add(Button::new(icons::X.as_str()).small()).on_hover_text("Remove").clicked() {
                     edit = Some((i, 0));
                 }
-                if ui.add_enabled(i + 1 < count, Button::new(icons::CARET_DOWN.as_str()).small()).clicked() {
+                if ui.add_enabled(i + 1 < count, Button::new(icons::CARET_DOWN.as_str()).small()).on_hover_text("Move down").clicked() {
                     edit = Some((i, 1));
                 }
-                if ui.add_enabled(i > 0, Button::new(icons::CARET_UP.as_str()).small()).clicked() {
+                if ui.add_enabled(i > 0, Button::new(icons::CARET_UP.as_str()).small()).on_hover_text("Move up").clicked() {
                     edit = Some((i, -1));
                 }
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
@@ -675,7 +675,7 @@ fn maps_list(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     if loading {
                         ui.add(egui::Spinner::new().color(theme::accent(ui)));
-                    } else if ui.small_button("Refresh").on_hover_text("Load the list of maps again").clicked() {
+                    } else if ui.small_button("Reload maps").on_hover_text("Load the list of maps again").clicked() {
                         action = Some(Action::LoadMaps);
                     }
                 });

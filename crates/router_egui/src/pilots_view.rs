@@ -839,7 +839,7 @@ impl PilotsUi {
             }
             if !offline.is_empty() {
                 let text = RichText::new(format!("{} offline", offline.len())).color(theme::TEXT_DIM).small();
-                if ui.add(Label::new(text).sense(Sense::click())).on_hover_text("Show or hide").clicked() {
+                if ui.add(Label::new(text).sense(Sense::click())).on_hover_text("Toggle offline pilots").clicked() {
                     self.show_offline = !self.show_offline;
                 }
                 if self.show_offline {
