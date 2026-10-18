@@ -132,7 +132,7 @@ pub fn pilot_label(settings: &Settings, pilots: &Pilots) -> String {
             let kind = settings.rules.hull.as_ref().map_or("ship unknown".into(), |h| h.name.clone());
             format!("{name} · {kind}")
         }
-        HullSource::Manual => format!("Hull: {}", settings.rules.hull.as_deref().map_or("none".into(), hull_label)),
+        HullSource::Manual => format!("Hull: {}", settings.rules.hull.as_deref().map_or("Unselected".into(), hull_label)),
     }
 }
 

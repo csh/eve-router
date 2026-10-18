@@ -987,7 +987,7 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
     if !response.has_focus() && filter.is_empty() {
         response.request_focus();
     }
-    // Enter picks the first match, not the "none" row.
+    // Enter picks the first match, not the "Unselected" row.
     let enter = response.lost_focus() && ui.input(|i| i.key_pressed(Key::Enter));
     let mut picked = None;
     if enter {
@@ -1016,7 +1016,7 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
                         v.live.ship.as_ref().map_or("ship unknown".into(), |sh| ship_text(sh, &v.name, &s.settings.hulls).to_string());
                     p.text(left + vec2(200.0, 0.0), egui::Align2::LEFT_CENTER, ship, font, theme::TEXT_DIM);
                 }
-                PilotRow::Hull(None) => _ = p.text(left, egui::Align2::LEFT_CENTER, "none", font, theme::TEXT),
+                PilotRow::Hull(None) => _ = p.text(left, egui::Align2::LEFT_CENTER, "Unselected", font, theme::TEXT),
                 PilotRow::Hull(Some(h)) => {
                     let color = if h.base_tj.is_some() { theme::TEXT } else { theme::TEXT_DIM };
                     p.text(left, egui::Align2::LEFT_CENTER, &h.name, font.clone(), color);
@@ -1040,8 +1040,15 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
         }
         Some(Picked::Hull(hull)) => {
             let changed = s.settings.rules.hull.as_ref().map(|h| &h.name) != hull.as_ref().map(|h| &h.name);
+            let followed = match s.settings.hull_source {
+                HullSource::Pilot(id) => s.pilots.characters().into_iter().find(|c| c.id == id).map(|c| c.name),
+                HullSource::Manual => None,
+            };
             s.settings.hull_source = HullSource::Manual;
             s.settings.rules.hull = hull;
+            if let Some(name) = followed {
+                s.notify(crate::notice::Level::Info, format!("No longer tracking {name}'s ship type."));
+            }
             if let (true, Some(h)) = (changed, &s.settings.rules.hull) {
                 let text = format!("Routes planned for the {}. A route may not work for a ship that is larger.", h.name);
                 s.recompute();
