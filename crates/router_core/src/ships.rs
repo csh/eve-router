@@ -14,6 +14,11 @@ use std::path::Path;
 
 pub const FILE: &str = "ships.json";
 
+/// The shape of `ships.json`. Bump this when a field's meaning changes, so `sde_update` makes
+/// the file again even when the SDE build number does not change. A ship with no bridge cost
+/// or no mass still deserializes, so only a true shape change needs a bump.
+pub const SCHEMA: u32 = 1;
+
 /// The SDE files that the table comes from.
 pub const SOURCES: [&str; 4] = ["types.jsonl", "typeDogma.jsonl", "groups.jsonl", "typeLists.jsonl"];
 
@@ -32,6 +37,9 @@ const FILAMENT_BAN_LIST: &str = "InvalidShipGroupsForRandomJump";
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ShipData {
+    /// The schema of this file. `0` for a file from before this field: it has no `filament_ok`.
+    #[serde(default)]
+    pub schema: u32,
     pub build: Option<u32>,
     pub ansiblex: AnsiblexData,
     pub ships: Vec<ShipRow>,
@@ -191,7 +199,7 @@ pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, SdeError> {
         return Err(SdeError::NoShips);
     }
     ships.sort_by(|a, b| a.group.cmp(&b.group).then(a.name.cmp(&b.name)));
-    Ok(ShipData { build, ansiblex, ships })
+    Ok(ShipData { schema: SCHEMA, build, ansiblex, ships })
 }
 
 pub fn save(dir: &Path, data: &ShipData) -> Result<(), FileError> {

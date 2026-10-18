@@ -96,11 +96,14 @@ fn install(src: &dyn RangeSource, dir: &Path, latest: u32, on_bytes: OnBytes) ->
     Ok(Outcome::Updated { from, to: latest, bytes })
 }
 
-/// The build number of the local SDE, if all files are present.
+/// The build number of the local SDE, if all files are present and `ships.json` has the
+/// current schema. A build number match alone is not enough: a schema change (a new field
+/// such as `filament_ok`) needs a fresh `ships.json` even when the SDE build stays the same.
 fn local_build(dir: &Path) -> Option<u32> {
     let derived = [&crate::ships::FILE, &crate::wormhole_types::FILE];
     let present = FILES.iter().chain(derived).all(|f| dir.join(f).is_file());
-    if present { crate::sde::build_number(dir) } else { None }
+    let current_schema = ships::load(dir).is_ok_and(|d| d.schema == ships::SCHEMA);
+    if present && current_schema { crate::sde::build_number(dir) } else { None }
 }
 
 fn agent() -> ureq::Agent {
