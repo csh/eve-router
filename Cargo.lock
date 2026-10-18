@@ -3363,7 +3363,7 @@ dependencies = [
 
 [[package]]
 name = "router_core"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -3386,7 +3386,7 @@ dependencies = [
 
 [[package]]
 name = "router_egui"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "eframe",
  "egui",
