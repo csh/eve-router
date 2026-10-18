@@ -129,7 +129,7 @@ mod tests {
 
     #[test]
     fn derive_from_sde_lines() {
-        let src = crate::ships::parse(TYPES.as_bytes(), DOGMA.as_bytes(), b"").unwrap();
+        let src = crate::ships::parse(TYPES.as_bytes(), DOGMA.as_bytes(), b"", b"").unwrap();
         let table = derive(Some(1), &src);
         let b274 = WormholeType {
             code: "B274".into(),

@@ -308,7 +308,7 @@ pub(crate) fn download(src: &dyn RangeSource, dir: &Path, on_bytes: OnBytes) -> 
 
     let build = files.get("_sde.jsonl").and_then(|d| build_from(d));
     let source = |name| files.get(name).map(Vec::as_slice).unwrap_or_default();
-    let sources = ships::parse(source("types.jsonl"), source("typeDogma.jsonl"), source("groups.jsonl"))?;
+    let sources = ships::parse(source("types.jsonl"), source("typeDogma.jsonl"), source("groups.jsonl"), source("typeLists.jsonl"))?;
     let ship_data = ships::derive(build, &sources)?;
     let wormhole_data = crate::wormhole_types::derive(build, &sources);
     drop(sources);

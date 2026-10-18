@@ -37,6 +37,8 @@ pub enum SdeError {
     NoShips,
     #[error("typeDogma.jsonl: the Ansiblex ({}) has no {}", crate::ships::ANSIBLEX_TYPE, .0)]
     NoAnsiblexAttribute(&'static str),
+    #[error("typeLists.jsonl: no list named \"{0}\"")]
+    NoTypeList(&'static str),
     #[error("{url}: {source}")]
     Http { url: String, source: Box<ureq::Error> },
     #[error("{url}: no \"sde\" record with a build number")]

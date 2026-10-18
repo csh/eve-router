@@ -29,24 +29,11 @@ pub const MAX_SHARED: f64 = 0.7;
 /// needs 1000 wormholes before these costs add up to one jump.
 pub const WORMHOLE_TIE: u64 = 1;
 
-/// Ship groups that cannot activate a Triglavian filament, confirmed in game 2026-10-18
-/// (SDE type list 135, "InvalidShipGroupsForRandomJump").
-const FILAMENT_BANNED_GROUPS: [&str; 10] = [
-    "Freighter",
-    "Jump Freighter",
-    "Force Auxiliary",
-    "Supercarrier",
-    "Titan",
-    "Carrier",
-    "Dreadnought",
-    "Capital Industrial Ship",
-    "Lancer Dreadnought",
-    "Command Carrier",
-];
-
 /// True if the hull can activate a filament. No hull set: allow it, as the wormhole size check does.
+/// `Hull::filament_ok` comes from the SDE type list "InvalidShipGroupsForRandomJump", so a ban
+/// list change needs only an SDE update, not a rebuild.
 pub fn hull_allows_filament(hull: Option<&Hull>) -> bool {
-    hull.is_none_or(|h| !FILAMENT_BANNED_GROUPS.contains(&h.group.as_str()))
+    hull.is_none_or(|h| h.filament_ok)
 }
 
 /// The cost that each link of a route found earlier adds while the search looks for another route.
@@ -1220,13 +1207,30 @@ mod tests {
         assert!(Router::new(uni, no_hull).routes(&[node("Jita"), target], 1).is_ok());
     }
 
-    /// Each banned group name is a real SDE ship group, with a ship that stands for it. A renamed
-    /// or a split group would fail this test, rather than silently drop out of the ban.
+    /// The ten classes confirmed in game 2026-10-18 are banned, with the SDE's own
+    /// "InvalidShipGroupsForRandomJump" list as the source, not a name hardcoded here.
     #[test]
-    fn each_banned_filament_group_is_a_real_hull_group() {
-        for group in FILAMENT_BANNED_GROUPS {
+    fn the_confirmed_banned_classes_cannot_use_a_filament() {
+        let banned = [
+            "Freighter",
+            "Jump Freighter",
+            "Force Auxiliary",
+            "Supercarrier",
+            "Titan",
+            "Carrier",
+            "Dreadnought",
+            "Capital Industrial Ship",
+            "Lancer Dreadnought",
+            "Command Carrier",
+        ];
+        for group in banned {
             let hull = hulls().find(group).unwrap_or_else(|| panic!("no hull group named {group:?}"));
             assert!(!hull_allows_filament(Some(&hull)), "{group} is not banned");
+        }
+        // A sample of ships that stay off the list.
+        for ship in ["Rifter", "Battleship", "Black Ops", "Deep Space Transport"] {
+            let hull = hulls().find(ship).unwrap_or_else(|| panic!("no hull named {ship:?}"));
+            assert!(hull_allows_filament(Some(&hull)), "{ship} is wrongly banned");
         }
     }
 }

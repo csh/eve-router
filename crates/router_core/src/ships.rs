@@ -1,21 +1,21 @@
 //! The ship table: the Ansiblex cost of each ship, from the SDE dogma data.
 //!
-//! The SDE update parses `types.jsonl` (153 MB), `typeDogma.jsonl` (28 MB) and
-//! `groups.jsonl` one time. It keeps only the results: this table in `ships.json`, and
+//! The SDE update parses `types.jsonl` (153 MB), `typeDogma.jsonl` (28 MB), `groups.jsonl` and
+//! `typeLists.jsonl` one time. It keeps only the results: this table in `ships.json`, and
 //! the wormhole type table in `wormholes.json` (see `wormhole_types`).
 
 use crate::error::{FileError, SdeError, write_atomic};
 use rayon::prelude::*;
 use serde::de::DeserializeOwned;
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::Path;
 
 pub const FILE: &str = "ships.json";
 
 /// The SDE files that the table comes from.
-pub const SOURCES: [&str; 3] = ["types.jsonl", "typeDogma.jsonl", "groups.jsonl"];
+pub const SOURCES: [&str; 4] = ["types.jsonl", "typeDogma.jsonl", "groups.jsonl", "typeLists.jsonl"];
 
 const SHIP_CATEGORY: u32 = 6;
 pub(crate) const ANSIBLEX_TYPE: u32 = 35841;
@@ -27,6 +27,8 @@ const ATTR_CAPACITOR: u32 = 482;
 const ATTR_RECHARGE: u32 = 55;
 /// `gateMaxJumpMass`, in kg.
 const ATTR_MAX_JUMP_MASS: u32 = 2798;
+/// The `typeLists.jsonl` entry of the ship groups that cannot activate a Triglavian filament.
+const FILAMENT_BAN_LIST: &str = "InvalidShipGroupsForRandomJump";
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ShipData {
@@ -51,6 +53,10 @@ pub struct ShipRow {
     pub mass_kg: Option<f64>,
     /// `None`: the ship cannot use a bridge.
     pub bridge_cost_gj: Option<f64>,
+    /// False: the SDE lists the ship's group as unable to activate a Triglavian filament.
+    /// A `ships.json` from before this field defaults to false: safe until the next SDE update.
+    #[serde(default)]
+    pub filament_ok: bool,
 }
 
 #[derive(Deserialize)]
@@ -94,6 +100,14 @@ struct SdeAttribute {
     value: f64,
 }
 
+#[derive(Deserialize)]
+struct SdeTypeList {
+    #[serde(default)]
+    name: String,
+    #[serde(rename = "includedGroupIDs", default)]
+    included_group_ids: Vec<u32>,
+}
+
 fn parse_lines<T: DeserializeOwned + Send>(name: &str, data: &[u8]) -> Result<Vec<T>, SdeError> {
     let text = std::str::from_utf8(data).map_err(|source| SdeError::Utf8 { name: name.into(), source })?;
     text.par_lines()
@@ -102,11 +116,12 @@ fn parse_lines<T: DeserializeOwned + Send>(name: &str, data: &[u8]) -> Result<Ve
         .collect()
 }
 
-/// The 3 SDE source files, parsed. The ship table and the wormhole table both read it.
+/// The 4 SDE source files, parsed. The ship table and the wormhole table both read it.
 pub struct Sources {
     types: Vec<SdeType>,
     attrs: HashMap<u32, HashMap<u32, f64>>,
     groups: Vec<SdeGroup>,
+    type_lists: Vec<SdeTypeList>,
 }
 
 impl Sources {
@@ -119,17 +134,22 @@ impl Sources {
     pub fn names(&self) -> impl Iterator<Item = (u32, &str)> {
         self.types.iter().filter_map(|t| Some((t.id, t.name.as_ref()?.en.as_deref()?)))
     }
+
+    /// The group IDs of the SDE type list named `name`. `None` when no list has that name.
+    fn type_list(&self, name: &str) -> Option<&[u32]> {
+        self.type_lists.iter().find(|l| l.name == name).map(|l| l.included_group_ids.as_slice())
+    }
 }
 
-/// Parse the 3 SDE source files, in the order of `SOURCES`.
-pub fn parse(types: &[u8], dogma: &[u8], groups: &[u8]) -> Result<Sources, SdeError> {
-    let (types, (dogma, groups)) = rayon::join(
-        || parse_lines::<SdeType>("types.jsonl", types),
-        || rayon::join(|| parse_lines::<SdeTypeDogma>("typeDogma.jsonl", dogma), || parse_lines::<SdeGroup>("groups.jsonl", groups)),
+/// Parse the 4 SDE source files, in the order of `SOURCES`.
+pub fn parse(types: &[u8], dogma: &[u8], groups: &[u8], type_lists: &[u8]) -> Result<Sources, SdeError> {
+    let ((types, dogma), (groups, type_lists)) = rayon::join(
+        || rayon::join(|| parse_lines::<SdeType>("types.jsonl", types), || parse_lines::<SdeTypeDogma>("typeDogma.jsonl", dogma)),
+        || rayon::join(|| parse_lines::<SdeGroup>("groups.jsonl", groups), || parse_lines::<SdeTypeList>("typeLists.jsonl", type_lists)),
     );
-    let (types, dogma, groups) = (types?, dogma?, groups?);
+    let (types, dogma, groups, type_lists) = (types?, dogma?, groups?, type_lists?);
     let attrs = dogma.into_iter().map(|d| (d.id, d.attributes.into_iter().map(|a| (a.id, a.value)).collect())).collect();
-    Ok(Sources { types, attrs, groups })
+    Ok(Sources { types, attrs, groups, type_lists })
 }
 
 /// Make the ship table from the parsed SDE files.
@@ -147,6 +167,8 @@ pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, SdeError> {
         recharge_ms: need(ATTR_RECHARGE, "rechargeRate")?,
         max_jump_mass_kg: need(ATTR_MAX_JUMP_MASS, "gateMaxJumpMass")?,
     };
+    let filament_banned_groups: HashSet<u32> =
+        src.type_list(FILAMENT_BAN_LIST).ok_or(SdeError::NoTypeList(FILAMENT_BAN_LIST))?.iter().copied().collect();
 
     let mut ships: Vec<ShipRow> = src
         .types
@@ -161,6 +183,7 @@ pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, SdeError> {
                 group,
                 mass_kg: t.mass,
                 bridge_cost_gj: src.attr(t.id, ATTR_BRIDGE_COST),
+                filament_ok: !filament_banned_groups.contains(&t.group_id),
             })
         })
         .collect();

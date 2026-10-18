@@ -33,6 +33,8 @@ pub struct Hull {
     pub ban: Option<Ban>,
     /// The mass in kg, for the wormhole size check. A group has the mass of its heaviest ship.
     pub mass_kg: Option<f64>,
+    /// False: the SDE lists the hull as unable to activate a Triglavian filament.
+    pub filament_ok: bool,
 }
 
 impl Hull {
@@ -61,40 +63,48 @@ impl HullTable {
     fn new(data: ShipData) -> Self {
         let max_mass = data.ansiblex.max_jump_mass_kg;
         let gate_capacitor_tj = (data.ansiblex.capacitor_gj / GJ_PER_TJ) as f32;
-        let hull = |type_id: Option<u32>, name: String, group: String, result: Result<f32, Ban>, mass_kg: Option<f64>| {
-            let base_tj = result.as_ref().ok().copied();
-            Arc::new(Hull {
-                type_id,
-                name,
-                group,
-                base_tj,
-                base_cap_pct: base_tj.map(|tj| tj / gate_capacitor_tj * 100.0),
-                ban: result.err(),
-                mass_kg,
-            })
-        };
+        let hull =
+            |type_id: Option<u32>, name: String, group: String, result: Result<f32, Ban>, mass_kg: Option<f64>, filament_ok: bool| {
+                let base_tj = result.as_ref().ok().copied();
+                Arc::new(Hull {
+                    type_id,
+                    name,
+                    group,
+                    base_tj,
+                    base_cap_pct: base_tj.map(|tj| tj / gate_capacitor_tj * 100.0),
+                    ban: result.err(),
+                    mass_kg,
+                    filament_ok,
+                })
+            };
         // A ship needs a bridge cost, and its mass must not be more than the gate limit.
         let check = |cost_gj: Option<f64>, mass: Option<f64>| match (cost_gj, mass) {
             (None, _) => Err(Ban::NoCost),
             (Some(_), Some(m)) if m > max_mass => Err(Ban::TooHeavy { max_mass_kg: max_mass }),
             (Some(c), _) => Ok((c / GJ_PER_TJ) as f32),
         };
-        let mut groups: BTreeMap<String, (Option<f64>, Option<f64>)> = BTreeMap::new();
+        let mut groups: BTreeMap<String, (Option<f64>, Option<f64>, bool)> = BTreeMap::new();
         let ships = data
             .ships
             .into_iter()
             .map(|s| {
-                // A group gets the highest cost and the highest mass of its ships.
-                let g = groups.entry(s.group.clone()).or_insert((s.bridge_cost_gj, s.mass_kg));
+                // A group gets the highest cost and the highest mass of its ships, and is
+                // filament-eligible only if every one of its ships is (they always agree, since
+                // the SDE ban list works by group).
+                let g = groups.entry(s.group.clone()).or_insert((s.bridge_cost_gj, s.mass_kg, s.filament_ok));
                 g.0 = g.0.zip(s.bridge_cost_gj).map(|(a, b)| a.max(b));
                 g.1 = match (g.1, s.mass_kg) {
                     (Some(a), Some(b)) => Some(a.max(b)),
                     (a, b) => a.or(b),
                 };
-                hull(Some(s.type_id), s.name, s.group, check(s.bridge_cost_gj, s.mass_kg), s.mass_kg)
+                g.2 &= s.filament_ok;
+                hull(Some(s.type_id), s.name, s.group, check(s.bridge_cost_gj, s.mass_kg), s.mass_kg, s.filament_ok)
             })
             .collect();
-        let groups = groups.into_iter().map(|(name, (cost, mass))| hull(None, name.clone(), name, check(cost, mass), mass)).collect();
+        let groups = groups
+            .into_iter()
+            .map(|(name, (cost, mass, filament_ok))| hull(None, name.clone(), name, check(cost, mass), mass, filament_ok))
+            .collect();
         HullTable { ships, groups, gate_capacitor_tj }
     }
 }
