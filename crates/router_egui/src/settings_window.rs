@@ -1039,8 +1039,16 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
             s.pilots.sync_hull(&mut s.settings);
         }
         Some(Picked::Hull(hull)) => {
+            let changed = s.settings.rules.hull.as_ref().map(|h| &h.name) != hull.as_ref().map(|h| &h.name);
             s.settings.hull_source = HullSource::Manual;
             s.settings.rules.hull = hull;
+            if let (true, Some(h)) = (changed, &s.settings.rules.hull) {
+                let text = format!("Routes planned for the {}. A route may not work for a ship that is larger.", h.name);
+                s.recompute();
+                s.notify(crate::notice::Level::Warning, text);
+                s.save();
+                return true;
+            }
         }
         None => return false,
     }
