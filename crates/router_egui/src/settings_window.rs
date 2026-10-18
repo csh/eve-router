@@ -667,14 +667,6 @@ fn filaments_page(ui: &mut Ui, s: &mut Session, locked: bool) {
             s.save();
         }
     });
-    ui.add_space(14.0);
-    group(ui, "Hull");
-    if router_core::route::hull_allows_filament(s.settings.rules.hull.as_deref()) {
-        ui.label(RichText::new("The current hull can activate a filament.").color(theme::TEXT_DIM));
-    } else {
-        let name = s.settings.rules.hull.as_ref().map_or("The current hull", |h| h.name.as_str());
-        ui.label(RichText::new(format!("{name} cannot activate a filament. A route avoids one for this hull.")).color(theme::WARN));
-    }
 }
 
 /// The Nexum maps, in a table with a checkbox for each. The router reads the maps that are on.
@@ -1131,23 +1123,17 @@ mod tests {
     }
 
     #[test]
-    fn the_filaments_page_draws_with_an_allowed_and_a_banned_hull() {
+    fn the_filaments_page_draws_locked_and_unlocked() {
         // The app registers its fonts and theme first: the page uses the bold font.
         let ctx = egui::Context::default();
         theme::apply_default(&ctx);
         theme::set_font(&ctx);
-        let draw = |s: &mut Session, locked: bool| {
-            // The frame output holds texture changes. A test with no renderer drops them.
-            let mut output = ctx.run_ui(Default::default(), |ui| filaments_page(ui, s, locked));
-            output.textures_delta.clear();
-        };
         let (mut s, _tmp) = session(Some("Rifter"));
-        draw(&mut s, false);
-        draw(&mut s, true);
-        let (mut s, _tmp) = session(Some("Titan"));
-        draw(&mut s, false);
-        let (mut s, _tmp) = session(None);
-        draw(&mut s, false);
+        for locked in [false, true] {
+            // The frame output holds texture changes. A test with no renderer drops them.
+            let mut output = ctx.run_ui(Default::default(), |ui| filaments_page(ui, &mut s, locked));
+            output.textures_delta.clear();
+        }
         // Drawing changes no setting.
         assert!(!s.settings.clades.perun && !s.settings.clades.svarog && !s.settings.clades.veles);
     }
