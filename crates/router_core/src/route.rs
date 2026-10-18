@@ -1219,4 +1219,14 @@ mod tests {
         let no_hull = RouterOptions { clades, ..Default::default() };
         assert!(Router::new(uni, no_hull).routes(&[node("Jita"), target], 1).is_ok());
     }
+
+    /// Each banned group name is a real SDE ship group, with a ship that stands for it. A renamed
+    /// or a split group would fail this test, rather than silently drop out of the ban.
+    #[test]
+    fn each_banned_filament_group_is_a_real_hull_group() {
+        for group in FILAMENT_BANNED_GROUPS {
+            let hull = hulls().find(group).unwrap_or_else(|| panic!("no hull group named {group:?}"));
+            assert!(!hull_allows_filament(Some(&hull)), "{group} is not banned");
+        }
+    }
 }

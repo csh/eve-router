@@ -14,7 +14,7 @@ use egui_phosphor_icons::icons;
 use router_core::esi::active::{ActiveRoute, Hop};
 use router_core::esi::client::{IMAGES_URL, portrait};
 use router_core::esi::pilots::{HullSync, PilotView, Pilots, StartPlan, pilots_by_step};
-use router_core::labels::{hull_label, ship_text, wormhole_hint};
+use router_core::labels::{hull_label, manual_hop_hint, ship_text};
 use router_core::refresh::kept_route;
 use router_core::route::{Path, Stop};
 use router_core::settings::HullSource;
@@ -692,7 +692,7 @@ impl PilotsUi {
                     self.stop = true;
                 }
             });
-        } else if let Some(hint) = wormhole_hint(&s.uni, active) {
+        } else if let Some(hint) = manual_hop_hint(&s.uni, active) {
             bar(ui, theme::WORMHOLE, &mut |ui| _ = ui.label(RichText::new(&hint).color(theme::WORMHOLE)));
         } else if s.pilots.limited {
             ui.label(RichText::new("ESI limited — slowing updates").color(theme::TEXT_DIM).small());
@@ -781,6 +781,7 @@ impl PilotsUi {
                         row.col(|ui| {
                             let (via, color) = match step.hop {
                                 Hop::Wormhole => (format!("{} — manual", step.via), theme::WORMHOLE),
+                                Hop::Filament => (format!("{} — manual", step.via), theme::FILAMENT),
                                 Hop::Bridge => (step.via.clone(), theme::BRIDGE),
                                 _ => (step.via.clone(), theme::TEXT_DIM),
                             };

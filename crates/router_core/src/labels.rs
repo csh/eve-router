@@ -1,7 +1,7 @@
 //! The text of the route summaries, the route steps and the Shortcuts box, for each user interface.
 
 use crate::ansiblex::{BridgeRules, Hull, HullTable};
-use crate::esi::active::ActiveRoute;
+use crate::esi::active::{ActiveRoute, Hop};
 use crate::esi::client::Ship;
 use crate::esi::pilots::Pilots;
 use crate::overlay::OverlayReport;
@@ -138,13 +138,21 @@ pub fn pilot_label(settings: &Settings, pilots: &Pilots) -> String {
 
 /// The banner text for the next wormhole of the active route. `None` when no wormhole is ahead.
 /// For example "In Perimeter: warp to signature ABC and jump to Amarr."
-pub fn wormhole_hint(uni: &Universe, route: &ActiveRoute) -> Option<String> {
-    let step = route.next_wormhole()?;
+pub fn manual_hop_hint(uni: &Universe, route: &ActiveRoute) -> Option<String> {
+    let step = route.next_manual_hop()?;
     let name = |id: u32| uni.by_id.get(&id).map_or_else(|| id.to_string(), |&n| uni.name(n).to_string());
     let from = name(route.steps[step - 1].system);
     let to = name(route.steps[step].system);
+    let here = route.progress + 1 == step;
+    if route.steps[step].hop == Hop::Filament {
+        return Some(if here {
+            format!("In {from}: activate a filament to jump to {to}.")
+        } else {
+            format!("Next filament: {from} to {to}.")
+        });
+    }
     let sig = route.steps[step].sig.as_deref();
-    Some(match (route.progress + 1 == step, sig) {
+    Some(match (here, sig) {
         (true, Some(sig)) => format!("In {from}: warp to signature {sig} and jump to {to}."),
         (true, None) => format!("In {from}: scan the wormhole to {to}. The signature is not known."),
         (false, Some(sig)) => format!("Next wormhole: {from} to {to}, signature {sig}."),
@@ -334,21 +342,21 @@ mod tests {
     }
 
     #[test]
-    fn wormhole_hint_names_the_signature() {
+    fn manual_hop_hint_names_the_signature() {
         use crate::esi::active::{ActiveRoute, Hop, Step};
         let uni = crate::test_support::overlay_universe();
         let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
         let step = |name: &str, hop, sig: Option<&str>| Step { system: id(name), hop, via: String::new(), sig: sig.map(String::from) };
         let steps = vec![step("Jita", Hop::Start, None), step("Perimeter", Hop::Gate, None), step("Amarr", Hop::Wormhole, Some("ABC"))];
         let mut r = ActiveRoute::from_steps(steps, vec![0, 2], 1, 7, "Alice");
-        assert_eq!(wormhole_hint(&uni, &r).as_deref(), Some("Next wormhole: Perimeter to Amarr, signature ABC."));
+        assert_eq!(manual_hop_hint(&uni, &r).as_deref(), Some("Next wormhole: Perimeter to Amarr, signature ABC."));
         // The pilot is in the system of the wormhole.
         r.progress = 1;
-        assert_eq!(wormhole_hint(&uni, &r).as_deref(), Some("In Perimeter: warp to signature ABC and jump to Amarr."));
+        assert_eq!(manual_hop_hint(&uni, &r).as_deref(), Some("In Perimeter: warp to signature ABC and jump to Amarr."));
         r.steps[2].sig = None;
-        assert_eq!(wormhole_hint(&uni, &r).as_deref(), Some("In Perimeter: scan the wormhole to Amarr. The signature is not known."));
+        assert_eq!(manual_hop_hint(&uni, &r).as_deref(), Some("In Perimeter: scan the wormhole to Amarr. The signature is not known."));
         r.progress = 2;
-        assert_eq!(wormhole_hint(&uni, &r), None);
+        assert_eq!(manual_hop_hint(&uni, &r), None);
     }
 
     #[test]

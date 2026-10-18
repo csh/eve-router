@@ -110,26 +110,35 @@ impl ActiveRoute {
         character_name: &str,
         now: u64,
     ) -> ActiveRoute {
-        let steps = route
-            .path
-            .nodes
-            .iter()
-            .enumerate()
-            .map(|(i, &node)| {
-                let system = uni.system(node).id;
-                let Some(&edge) = i.checked_sub(1).and_then(|e| route.path.edges.get(e)) else {
-                    return Step { system, hop: Hop::Start, via: String::new(), sig: None };
-                };
-                let (hop, sig) = match &uni.graph[edge] {
-                    Link::Stargate => (Hop::Gate, None),
-                    Link::Wormhole(w) => (Hop::Wormhole, w.sig_at(uni.system(route.path.nodes[i - 1]).id)),
-                    Link::JumpBridge => (Hop::Bridge, None),
-                    Link::Filament(_) => (Hop::Filament, None),
-                };
-                Step { system, hop, via: link_label(uni, rules, edge, now), sig }
-            })
-            .collect();
-        Self::from_steps(steps, route.stops.clone(), number, character, character_name)
+        // A filament jump lands the path on the virtual hub of the clade, then on the clade system.
+        // The pilot cannot see the hub and ESI can never report it, so the two edges are one real
+        // hop: skip the hub's node, and carry only the step that lands on the clade system.
+        let mut steps = Vec::with_capacity(route.path.nodes.len());
+        let mut step_of_node = vec![0usize; route.path.nodes.len()];
+        for (i, &node) in route.path.nodes.iter().enumerate() {
+            let system = uni.system(node).id;
+            let Some(&edge) = i.checked_sub(1).and_then(|e| route.path.edges.get(e)) else {
+                step_of_node[i] = steps.len();
+                steps.push(Step { system, hop: Hop::Start, via: String::new(), sig: None });
+                continue;
+            };
+            if let Link::Filament(f) = &uni.graph[edge]
+                && f.expected_jumps.is_none()
+            {
+                step_of_node[i] = steps.len();
+                continue;
+            }
+            let (hop, sig) = match &uni.graph[edge] {
+                Link::Stargate => (Hop::Gate, None),
+                Link::Wormhole(w) => (Hop::Wormhole, w.sig_at(uni.system(route.path.nodes[i - 1]).id)),
+                Link::JumpBridge => (Hop::Bridge, None),
+                Link::Filament(_) => (Hop::Filament, None),
+            };
+            step_of_node[i] = steps.len();
+            steps.push(Step { system, hop, via: link_label(uni, rules, edge, now), sig });
+        }
+        let stops = route.stops.iter().map(|&s| step_of_node[s]).collect();
+        Self::from_steps(steps, stops, number, character, character_name)
     }
 
     pub fn from_steps(steps: Vec<Step>, stops: Vec<usize>, number: usize, character: u64, character_name: &str) -> ActiveRoute {
@@ -197,8 +206,9 @@ impl ActiveRoute {
     }
 
     /// The step of the next wormhole after the progress: the end of the segment in the game.
-    pub fn next_wormhole(&self) -> Option<usize> {
-        (self.progress + 1..self.steps.len()).find(|&i| self.steps[i].hop == Hop::Wormhole)
+    /// The step of the next manual hop ahead: a wormhole, or a filament.
+    pub fn next_manual_hop(&self) -> Option<usize> {
+        (self.progress + 1..self.steps.len()).find(|&i| self.steps[i].hop.is_manual())
     }
 
     /// The waypoints to send at the start.
@@ -284,7 +294,7 @@ impl ActiveRoute {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{FIXTURE_TIME, overlay_universe, settings};
+    use crate::test_support::{FIXTURE_TIME, overlay_universe, settings, universe};
 
     /// A route of gates, with a manual hop of `hop` into each system in `manual`.
     fn route(systems: &[u32], manual: &[(u32, Hop)]) -> ActiveRoute {
@@ -327,15 +337,15 @@ mod tests {
     }
 
     #[test]
-    fn next_wormhole_is_the_end_of_the_segment() {
+    fn next_manual_hop_is_the_end_of_the_segment() {
         // Step 2 is a bridge, step 3 is a wormhole.
         let mut r = route(&[1, 2, 3, 4, 5], &[(3, Hop::Bridge), (4, Hop::Wormhole)]);
-        assert_eq!(r.next_wormhole(), Some(3));
+        assert_eq!(r.next_manual_hop(), Some(3));
         r.observe(&at(3));
-        assert_eq!(r.next_wormhole(), Some(3));
+        assert_eq!(r.next_manual_hop(), Some(3));
         // The pilot takes the wormhole: no wormhole is ahead.
         r.observe(&at(4));
-        assert_eq!(r.next_wormhole(), None);
+        assert_eq!(r.next_manual_hop(), None);
     }
 
     #[test]
@@ -492,5 +502,50 @@ mod tests {
         }
         // Each system is in exactly one segment, but the first step and each manual hop exit.
         assert_eq!(r.waypoint_count(), r.steps.len() - 1 - r.manual_hops());
+    }
+
+    /// A real route through a filament: the virtual hub never gets its own step, so the jump is
+    /// one manual hop, not two, and `observe` can advance over it from the ESI location alone
+    /// (the hub's synthetic ID is never a location ESI can report).
+    #[test]
+    fn real_route_through_a_filament() {
+        use crate::config::Clades;
+        use crate::route::{Router, RouterOptions};
+        use petgraph::visit::EdgeRef;
+        let uni = universe();
+        let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
+        let target = uni.graph.edges(perun).next().unwrap().target();
+        let jita = uni.exact("Jita").unwrap();
+        let clades = Clades { perun: true, ..Default::default() };
+        let options = RouterOptions { clades, ..Default::default() };
+        let route = Router::new(uni, options).routes(&[jita, target], 1).unwrap().remove(0);
+        assert_eq!(route.jumps, 2, "the hub is still two edges in the route's own path");
+
+        let s = settings(uni, None);
+        let mut r = ActiveRoute::new(uni, &s.rules, &route, 1, 7, "Alice", FIXTURE_TIME);
+        // One step merges away: the hub never gets a step of its own.
+        assert_eq!(r.steps.len(), route.path.nodes.len() - 1);
+        assert_eq!(r.manual_hops(), 1);
+        assert_eq!(r.steps[1].hop, Hop::Filament);
+        assert!(r.steps[1].via.starts_with("Filament"), "{}", r.steps[1].via);
+
+        // ESI can only ever report the real landing system, never the hub. The filament step is
+        // also the last one, so the pilot has arrived, not merely progressed.
+        let landing = uni.system(target).id;
+        assert_eq!(r.observe(&Location { solar_system_id: landing, station_id: None, structure_id: None }), Observation::Arrived);
+        assert_eq!(r.progress, 1);
+    }
+
+    #[test]
+    fn manual_hop_hint_covers_a_filament() {
+        use crate::labels::manual_hop_hint;
+        let steps = vec![
+            Step { system: 1, hop: Hop::Start, via: String::new(), sig: None },
+            Step { system: 2, hop: Hop::Filament, via: "Filament · Krai Perun · ~4 jumps (avg)".into(), sig: None },
+        ];
+        let uni = overlay_universe();
+        let r = ActiveRoute::from_steps(steps, vec![0, 1], 1, 7, "Alice");
+        // Neither system is a real one in the test universe, so the hint falls back to the ID.
+        assert_eq!(manual_hop_hint(&uni, &r).as_deref(), Some("In 1: activate a filament to jump to 2."));
     }
 }
