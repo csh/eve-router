@@ -370,23 +370,21 @@ pub enum Page {
     Favourites,
     Theme,
     Wormholes,
-    Filaments,
-    EveMetro,
+    /// Filaments and EVE Metro: the two features almost all about travel via Pochven.
+    Pochven,
     Ansiblex,
     Engine,
 }
 
 impl Page {
-    pub const ALL: [Page; 7] =
-        [Page::Favourites, Page::Theme, Page::Wormholes, Page::Filaments, Page::EveMetro, Page::Ansiblex, Page::Engine];
+    pub const ALL: [Page; 6] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Pochven, Page::Ansiblex, Page::Engine];
 
     pub fn label(self) -> &'static str {
         match self {
             Page::Favourites => "Favourites",
             Page::Theme => "Theme",
             Page::Wormholes => "Wormholes",
-            Page::Filaments => "Filaments",
-            Page::EveMetro => "EVE Metro",
+            Page::Pochven => "Pochven",
             Page::Ansiblex => "Ansiblex",
             Page::Engine => "Engine",
         }
@@ -439,18 +437,17 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
         ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0, theme::LINE));
         ui.add_space(pad - ui.spacing().item_spacing.x);
         ui.allocate_ui_with_layout(vec2(page_width, body), egui::Layout::top_down(egui::Align::Min), |ui| {
-            // The Ansiblex and EVE Metro pages have their own scrolling table, so the page itself stays still.
+            // The Ansiblex and Pochven pages have their own scrolling table, so the page itself stays still.
             match form.page {
                 Page::Ansiblex => return ansiblex_page(ui, form, s, locked),
-                Page::EveMetro => return eve_metro_page(ui, form, s, locked, portraits),
+                Page::Pochven => return pochven_page(ui, form, s, locked, portraits),
                 _ => {}
             }
             ScrollArea::vertical().max_height(body).auto_shrink([false, false]).show(ui, |ui| match form.page {
                 Page::Favourites => favourites_page(ui, form, s),
                 Page::Theme => theme_page(ui, s),
                 Page::Wormholes => action = wormholes_page(ui, form, s, locked, loading),
-                Page::Filaments => filaments_page(ui, s, locked),
-                Page::EveMetro | Page::Ansiblex => {}
+                Page::Pochven | Page::Ansiblex => {}
                 Page::Engine => engine_page(ui, form, s, locked),
             });
         });
@@ -651,7 +648,9 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
 
 /// The Triglavian filament page: a switch for each clade, and a note about the hull restriction.
 /// A clade switch acts at route time, like the EVE-Scout hub switches.
-fn filaments_page(ui: &mut Ui, s: &mut Session, locked: bool) {
+/// The Clades group of the Pochven page: a switch for each clade. Filament travel needs no
+/// client ID, unlike EVE Metro, so it always shows.
+fn clades_group(ui: &mut Ui, s: &mut Session, locked: bool) {
     group(ui, "Clades");
     ui.label(
         RichText::new("A filament puts a pilot at a random system of the clade. The cost of the jump is an average.")
@@ -768,14 +767,19 @@ fn pilot_status(pilot: &PilotView) -> (&'static str, Color32) {
     }
 }
 
-/// The EVE Metro page: the switch, the key, and a table of the linked characters with their
-/// portraits. The service checks the picked character, its corporation and its alliance. Like the
-/// Ansiblex page, the page itself stays still and the table scrolls.
-fn eve_metro_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool, portraits: &mut Portraits) {
+/// The Pochven page: filament travel and the EVE Metro wormhole map, the two features almost all
+/// about travel via Pochven. Filament travel needs no client ID. The EVE Metro switch, the key,
+/// and a table of the linked characters with their portraits follow it. The service checks the
+/// picked character, its corporation and its alliance. Like the Ansiblex page, the page itself
+/// stays still and the table scrolls.
+fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool, portraits: &mut Portraits) {
     const ROW: f32 = 40.0;
     let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
+    clades_group(ui, s, locked);
+    ui.add_space(14.0);
     // The source needs a logged-in character, so it needs the EVE client ID, like each SSO feature.
     if !s.pilots.shows_characters() {
+        group(ui, "EVE Metro");
         ui.label(RichText::new(evemetro::NEEDS_CLIENT_ID).color(theme::WARN));
         return;
     }
@@ -1243,41 +1247,13 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use router_core::config::Config;
-    use router_core::labels::Shortcuts;
-    use router_core::test_support::{overlay_universe, settings};
+    use router_core::test_support::overlay_universe;
 
     #[test]
     fn each_page_has_one_entry_and_a_label() {
         let labels: std::collections::HashSet<_> = Page::ALL.iter().map(|p| p.label()).collect();
         assert_eq!(labels.len(), Page::ALL.len());
         assert!(labels.iter().all(|l| !l.is_empty()));
-    }
-
-    /// A session with the test SDE, and a config in a temporary directory.
-    fn session(hull: Option<&str>) -> (Session, tempfile::TempDir) {
-        let uni = overlay_universe();
-        let settings = settings(&uni, hull);
-        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default(), &Default::default());
-        let tmp = tempfile::tempdir().unwrap();
-        let s = Session::new(std::sync::Arc::new(uni), settings, Config::default(), tmp.path().join("eve-router.json"), shortcuts);
-        (s, tmp)
-    }
-
-    #[test]
-    fn the_filaments_page_draws_locked_and_unlocked() {
-        // The app registers its fonts and theme first: the page uses the bold font.
-        let ctx = egui::Context::default();
-        theme::apply_default(&ctx);
-        theme::set_font(&ctx);
-        let (mut s, _tmp) = session(Some("Rifter"));
-        for locked in [false, true] {
-            // The frame output holds texture changes. A test with no renderer drops them.
-            let mut output = ctx.run_ui(Default::default(), |ui| filaments_page(ui, &mut s, locked));
-            output.textures_delta.clear();
-        }
-        // Drawing changes no setting.
-        assert!(!s.settings.clades.perun && !s.settings.clades.svarog && !s.settings.clades.veles);
     }
 
     #[test]
@@ -1319,9 +1295,9 @@ mod tests {
     }
 
     #[test]
-    fn the_eve_metro_page_draws_with_and_without_characters() {
+    fn the_pochven_page_draws_every_state() {
         let (mut s, tmp) = session_with_pilots();
-        let mut form = SettingsForm::new(&s, Page::EveMetro);
+        let mut form = SettingsForm::new(&s, Page::Pochven);
         let mut portraits = Portraits::without_download(&[1, 2]);
         // The app registers its fonts and theme first: the page uses the bold font.
         let ctx = egui::Context::default();
@@ -1329,7 +1305,7 @@ mod tests {
         theme::set_font(&ctx);
         let mut draw = |s: &mut Session, locked: bool| {
             // The frame output holds texture changes. A test with no renderer drops them.
-            let mut output = ctx.run_ui(Default::default(), |ui| eve_metro_page(ui, &mut form, s, locked, &mut portraits));
+            let mut output = ctx.run_ui(Default::default(), |ui| pochven_page(ui, &mut form, s, locked, &mut portraits));
             output.textures_delta.clear();
         };
         // A character is picked, so its row is selected. The key is set, so the masked key shows.
@@ -1341,11 +1317,13 @@ mod tests {
         draw(&mut s, true);
         s.pilots = router_core::esi::pilots::Pilots::offline_with_client_id(tmp.path().join("active-route.json"), &[]);
         draw(&mut s, false);
-        // Without a client ID the page draws only the reason.
+        // Without a client ID, the EVE Metro part of the page draws only the reason, but the Clades
+        // switches draw regardless: filament travel needs no client ID.
         s.pilots = router_core::esi::pilots::Pilots::offline(tmp.path().join("active-route.json"));
         draw(&mut s, false);
         // Drawing changes no setting.
         assert_eq!(s.cfg.eve_metro.character, Some(99));
+        assert!(!s.settings.clades.perun && !s.settings.clades.svarog && !s.settings.clades.veles);
     }
 
     #[test]
