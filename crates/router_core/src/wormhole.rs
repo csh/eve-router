@@ -17,6 +17,7 @@ pub fn now() -> u64 {
 pub enum SourceId {
     Nexum,
     EveScout,
+    EveMetro,
 }
 
 impl SourceId {
@@ -24,6 +25,7 @@ impl SourceId {
         match self {
             SourceId::Nexum => "Nexum",
             SourceId::EveScout => "EVE-Scout",
+            SourceId::EveMetro => "EVE Metro",
         }
     }
 
@@ -32,6 +34,7 @@ impl SourceId {
         match self {
             SourceId::Nexum => "nexum",
             SourceId::EveScout => "eve-scout",
+            SourceId::EveMetro => "eve-metro",
         }
     }
 }

@@ -250,7 +250,7 @@ fn parse_mass(mass: &str) -> Option<MassStatus> {
 }
 
 /// The earlier of two expiry values.
-fn earlier(a: Option<Expiry>, b: Option<Expiry>) -> Option<Expiry> {
+pub(crate) fn earlier(a: Option<Expiry>, b: Option<Expiry>) -> Option<Expiry> {
     match (a, b) {
         (Some(x), Some(y)) => Some(if y.at < x.at { y } else { x }),
         (x, y) => x.or(y),

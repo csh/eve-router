@@ -1,6 +1,7 @@
 //! Wormhole sources. Each source has one file, and converts its data to `Wormhole` records.
 //! This file holds the HTTP GET, the fetch errors and the disk cache.
 
+pub mod evemetro;
 pub mod evescout;
 pub mod nexum;
 
@@ -36,6 +37,7 @@ impl FetchError {
         match (self, source) {
             (FetchError::Auth, SourceId::EveScout) => "request refused".into(),
             (FetchError::Auth, SourceId::Nexum) => "bad API key or no access to the map".into(),
+            (FetchError::Auth, SourceId::EveMetro) => "bad API key".into(),
             (FetchError::NotFound, _) => "map not found".into(),
             (FetchError::Offline(cause), _) => cause.clone(),
         }
@@ -44,9 +46,9 @@ impl FetchError {
     /// The status line text. `cached_at` is the fetch time of the cache in use.
     pub fn status(&self, source: SourceId, cached_at: Option<u64>) -> String {
         let name = source.label();
-        // Nexum gives a map. EVE-Scout gives a public feed, with no key.
+        // Nexum and EVE Metro give a map. EVE-Scout gives a public feed, with no key.
         let data = match source {
-            SourceId::Nexum => "map",
+            SourceId::Nexum | SourceId::EveMetro => "map",
             SourceId::EveScout => "feed",
         };
         match (self, cached_at) {
@@ -75,13 +77,25 @@ pub fn get(url: &str, key: Option<&str>, timeout: Duration) -> Result<String, Fe
 }
 
 /// Send one GET request, with a bearer key if `key` is set, and return the body.
-/// The router never sends any other method to a source.
+/// A source gets its data with GET. The one exception is `post_json`.
 pub fn get_with(agent: &ureq::Agent, url: &str, key: Option<&str>) -> Result<String, FetchError> {
     let mut request = agent.get(url);
     if let Some(key) = key {
         request = request.header("Authorization", &format!("Bearer {key}"));
     }
-    match request.call() {
+    read_body(request.call())
+}
+
+/// Send one POST request with a JSON body and the key in the `x-api-key` header, and return the
+/// body. Only EVE Metro uses it. Its query is a POST that reads data and changes nothing.
+pub fn post_json(url: &str, key: &str, body: &str, timeout: Duration) -> Result<String, FetchError> {
+    let request = agent(timeout).post(url).header("x-api-key", key).header("Content-Type", "application/json");
+    read_body(request.send(body))
+}
+
+/// The body of a response, or the fetch error of its status.
+fn read_body(result: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> Result<String, FetchError> {
+    match result {
         Ok(mut resp) => resp.body_mut().with_config().limit(MAX_BODY).read_to_string().map_err(|e| FetchError::Offline(e.to_string())),
         Err(ureq::Error::StatusCode(401 | 403)) => Err(FetchError::Auth),
         Err(ureq::Error::StatusCode(404)) => Err(FetchError::NotFound),

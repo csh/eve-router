@@ -34,6 +34,11 @@
     ],
     "keep_unsigned": true
   },
+  "eve_metro": {
+    "enabled": true,
+    "key": "metro_key",
+    "character": 2112345678
+  },
   "eve_scout": {
     "thera": false,
     "turnur": true

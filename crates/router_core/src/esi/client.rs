@@ -44,6 +44,15 @@ pub struct Online {
     pub online: bool,
 }
 
+/// `GET /characters/{id}/`. The router reads only the corporation and the alliance.
+#[derive(Deserialize, Clone, Debug, PartialEq, Eq)]
+pub struct Affiliation {
+    pub corporation_id: u64,
+    /// `None` for a character in a corporation with no alliance.
+    #[serde(default)]
+    pub alliance_id: Option<u64>,
+}
+
 /// A response value, with the cache and error-budget headers.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Fetched<T> {
@@ -97,15 +106,20 @@ impl Esi {
     }
 
     pub fn location(&self, token: &AccessToken, character: u64) -> Result<Fetched<Location>, EsiError> {
-        self.get(token, &format!("/characters/{character}/location"))
+        self.get(Some(token), &format!("/characters/{character}/location"))
     }
 
     pub fn ship(&self, token: &AccessToken, character: u64) -> Result<Fetched<Ship>, EsiError> {
-        self.get(token, &format!("/characters/{character}/ship"))
+        self.get(Some(token), &format!("/characters/{character}/ship"))
     }
 
     pub fn online(&self, token: &AccessToken, character: u64) -> Result<Fetched<Online>, EsiError> {
-        self.get(token, &format!("/characters/{character}/online"))
+        self.get(Some(token), &format!("/characters/{character}/online"))
+    }
+
+    /// The public data of a character. It needs no token.
+    pub fn affiliation(&self, character: u64) -> Result<Fetched<Affiliation>, EsiError> {
+        self.get(None, &format!("/characters/{character}/"))
     }
 
     /// Add one waypoint at the end of the in-game route of the token's character.
@@ -123,12 +137,11 @@ impl Esi {
         check_status(&response).map(|_| ())
     }
 
-    fn get<T: DeserializeOwned>(&self, token: &AccessToken, path: &str) -> Result<Fetched<T>, EsiError> {
-        let request = self
-            .agent
-            .get(format!("{}{path}", self.base))
-            .header("Authorization", format!("Bearer {}", token.secret()))
-            .header("X-Compatibility-Date", COMPATIBILITY_DATE);
+    fn get<T: DeserializeOwned>(&self, token: Option<&AccessToken>, path: &str) -> Result<Fetched<T>, EsiError> {
+        let mut request = self.agent.get(format!("{}{path}", self.base)).header("X-Compatibility-Date", COMPATIBILITY_DATE);
+        if let Some(token) = token {
+            request = request.header("Authorization", format!("Bearer {}", token.secret()));
+        }
         let mut response = request.call().map_err(|e| EsiError::Offline(e.to_string()))?;
         let errors_left = check_status(&response)?;
         let expires = header(&response, "expires").and_then(|v| httpdate::parse_http_date(&v).ok());

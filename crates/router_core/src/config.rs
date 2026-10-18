@@ -79,7 +79,7 @@ pub const DEFAULT_MIN_LIFE_MIN: u64 = 60;
 /// The main trade hubs.
 pub const DEFAULT_FAVOURITES: [&str; 5] = ["Jita", "Amarr", "Dodixie", "Hek", "Rens"];
 
-/// A Nexum API key. `Debug` shows only the first 4 and the last 3 characters.
+/// An API key, for Nexum or EVE Metro. `Debug` shows only the first 4 and the last 3 characters.
 #[derive(Serialize, Deserialize, Clone, PartialEq, Eq)]
 #[serde(transparent)]
 pub struct ApiKey(pub String);
@@ -210,6 +210,28 @@ impl Clades {
     }
 }
 
+/// The EVE Metro settings. The URL is fixed (`sources::evemetro::URL`). One user pays for the
+/// service, so the settings name one linked character. The API checks that character, its
+/// corporation and its alliance.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct EveMetroConfig {
+    pub enabled: bool,
+    pub key: Option<ApiKey>,
+    /// The character that identifies the user to the API. It must be a linked character.
+    pub character: Option<u64>,
+}
+
+impl EveMetroConfig {
+    /// The key and the character, when the source is on and both are set.
+    pub fn complete(&self) -> Option<(&str, u64)> {
+        if !self.enabled {
+            return None;
+        }
+        Some((self.key.as_ref()?.0.as_str(), self.character?))
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
@@ -244,6 +266,7 @@ pub struct Config {
     /// The regions that a route avoids, by name.
     pub avoid_regions: Vec<AvoidName>,
     pub nexum: NexumConfig,
+    pub eve_metro: EveMetroConfig,
     /// The Thera and Turnur switches. Both are on in a file without them.
     pub eve_scout: Hubs,
     pub clades: Clades,
@@ -296,10 +319,10 @@ impl Config {
             fs::create_dir_all(dir).map_err(FileError::io(dir))?;
         }
         let text = serde_json::to_string_pretty(self).map_err(FileError::json(path))?;
-        // The file holds the Nexum key, so only the owner can read it. The file gets its
-        // mode before the router writes the key. No other user can read the key at any time.
+        // The file holds the Nexum and EVE Metro keys, so only the owner can read it. The file gets its
+        // mode before the router writes a key. No other user can read a key at any time.
         #[cfg(unix)]
-        if self.nexum.key.is_some() {
+        if self.nexum.key.is_some() || self.eve_metro.key.is_some() {
             use std::io::Write;
             use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
             let mut file =
@@ -356,6 +379,7 @@ mod tests {
                 map_ids: vec!["m1".into()],
                 keep_unsigned: true,
             },
+            eve_metro: EveMetroConfig { enabled: true, key: Some(ApiKey("metro_key".into())), character: Some(2112345678) },
             eve_scout: Hubs { thera: false, turnur: true },
             clades: Clades { perun: true, svarog: false, veles: true },
             theme: None,
@@ -413,6 +437,21 @@ mod tests {
         cfg.nexum.map_ids = vec!["m1".into()];
         cfg.nexum.key = None;
         assert_eq!(cfg.nexum.complete(), None);
+    }
+
+    #[test]
+    fn an_old_file_has_no_eve_metro_and_its_key_is_masked() {
+        // A file from before EVE Metro: the source is off.
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert_eq!(cfg.eve_metro, EveMetroConfig::default());
+        assert_eq!(cfg.eve_metro.complete(), None);
+        let cfg = Config {
+            eve_metro: EveMetroConfig { enabled: true, key: Some(ApiKey("metro_SECRET_000000000abc".into())), character: Some(7) },
+            ..Config::default()
+        };
+        let debug = format!("{cfg:?}");
+        assert!(!debug.contains("SECRET"), "{debug}");
+        assert!(debug.contains("metr…abc"), "{debug}");
     }
 
     #[test]

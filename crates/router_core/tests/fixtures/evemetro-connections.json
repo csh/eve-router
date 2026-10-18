@@ -1,0 +1,69 @@
+{
+  "access": true,
+  "connections": [
+    {
+      "systemId": "30001001",
+      "systemName": "Kino",
+      "systemSecurityStatus": -1.0,
+      "systemEdges": [
+        {
+          "solarSystemIdDst": 30000142,
+          "solarSystemNameDst": "Jita",
+          "edgeSource": "trig-map",
+          "signatureSrc": "ABC-123",
+          "signatureDst": "XYZ-789",
+          "wormholeTypeSrc": "K162",
+          "wormholeTypeDst": "F216",
+          "wormholeMass": "stable",
+          "wormholeEol": "stable",
+          "createdTime": "2026-10-05T10:00:00.000Z",
+          "lastSeenTime": "2026-10-05T10:00:00.000Z"
+        },
+        {
+          "solarSystemIdDst": 30002187,
+          "solarSystemNameDst": "Amarr",
+          "edgeSource": "trig-map",
+          "signatureSrc": "DEF-456",
+          "signatureDst": null,
+          "wormholeTypeSrc": "C729",
+          "wormholeTypeDst": "K162",
+          "wormholeMass": "critical",
+          "wormholeEol": "critical",
+          "createdTime": "2026-10-05T09:00:00.000Z"
+        }
+      ]
+    },
+    {
+      "systemId": 30001002,
+      "systemName": "Otela",
+      "systemEdges": [
+        {
+          "solarSystemIdDst": 39999999,
+          "solarSystemNameDst": "Nowhere",
+          "wormholeTypeSrc": "K162",
+          "wormholeTypeDst": "F216",
+          "wormholeMass": "stable",
+          "wormholeEol": "stable"
+        },
+        {
+          "solarSystemIdDst": 30002659,
+          "solarSystemNameDst": "Dodixie",
+          "wormholeTypeSrc": "K162",
+          "wormholeTypeDst": "B274",
+          "wormholeMass": "stable",
+          "wormholeEol": "critical",
+          "createdTime": "2026-10-04T10:00:00.000Z"
+        },
+        {
+          "solarSystemNameDst": "No ID"
+        }
+      ]
+    },
+    {
+      "systemId": 30001003,
+      "systemName": "Nalvula",
+      "systemEdges": [],
+      "aFieldThatTheRouterDoesNotKnow": 1
+    }
+  ]
+}
