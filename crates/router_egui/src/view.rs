@@ -114,7 +114,7 @@ pub struct View {
     status_timer: StatusTimer,
     toaster: Toaster,
     /// The login, the route start, the active route and the avatars.
-    pilots: PilotsUi,
+    pub pilots: PilotsUi,
     /// True if the pilot opened the waypoint list, false if the pilot closed it. With `None`, the
     /// list is open until the first route shows, so the route gets the room.
     waypoints_open: Option<bool>,
@@ -762,8 +762,15 @@ fn source_state(s: &Session, source: SourceId) -> (Color32, String) {
         Some(at) if now.saturating_sub(at) <= FRESH_SECS => (theme::OK, age_text(at, now)),
         Some(at) => (theme::WARN, age_text(at, now)),
         None if source == SourceId::Nexum && s.cfg.nexum.complete().is_none() => (theme::TEXT_DIM, "not set".into()),
+        None if source == SourceId::EveMetro && !metro_on(s) => (theme::TEXT_DIM, "not set".into()),
         None => (theme::TEXT_DIM, "no data".into()),
     }
+}
+
+/// True if the router reads EVE Metro: the source is on, the key and the character are set,
+/// and the app has an EVE client ID.
+fn metro_on(s: &Session) -> bool {
+    s.cfg.eve_metro.gated(s.pilots.shows_characters()).complete().is_some()
 }
 
 /// The wormholes and the jump bridges that the overlays loaded. It shows only when an overlay
@@ -784,9 +791,12 @@ fn connections_panel(ui: &mut Ui, s: &Session) -> bool {
                 ui.with_layout(Layout::right_to_left(Align::Center), |ui| ui.label(RichText::new(count.to_string()).color(color)));
                 ui.end_row();
             };
-            for (label, count, on) in
-                [("Nexum", sc.nexum, true), ("Thera", sc.thera, settings.hubs.thera), ("Turnur", sc.turnur, settings.hubs.turnur)]
-            {
+            for (label, count, on) in [
+                ("Nexum", sc.nexum, true),
+                ("EVE Metro", sc.metro, true),
+                ("Thera", sc.thera, settings.hubs.thera),
+                ("Turnur", sc.turnur, settings.hubs.turnur),
+            ] {
                 if count > 0 {
                     row(ui, label, count, settings.wormholes && on);
                 }
@@ -904,8 +914,11 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool) {
 fn sync_status(ui: &mut Ui, s: &Session) {
     // The ages change with time, so the bar draws again each minute.
     ui.ctx().request_repaint_after(std::time::Duration::from_secs(60));
-    // The layout is right to left: EVE-Scout goes first, so Nexum shows on its left.
-    for source in [SourceId::EveScout, SourceId::Nexum] {
+    // The layout is right to left: EVE-Scout goes first, so Nexum shows on its left. EVE Metro
+    // shows only when the router reads it, or when it has data.
+    let metro_shows = metro_on(s) || s.shortcuts.sources.iter().any(|(id, _)| *id == SourceId::EveMetro);
+    let sources = [SourceId::EveScout, SourceId::Nexum, SourceId::EveMetro];
+    for source in sources.into_iter().filter(|&source| source != SourceId::EveMetro || metro_shows) {
         let (dot, text) = source_state(s, source);
         ui.label(RichText::new(&text).color(theme::TEXT_DIM).small());
         ui.label(RichText::new(source.label()).color(theme::TEXT).small());

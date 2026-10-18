@@ -56,6 +56,17 @@ impl Default for Portraits {
 }
 
 impl Portraits {
+    /// A set that starts no download for `ids`: their avatars show initials. A test uses it,
+    /// so no test needs the network.
+    #[cfg(test)]
+    pub fn without_download(ids: &[u64]) -> Portraits {
+        let mut portraits = Portraits::default();
+        for &id in ids {
+            portraits.textures.insert(id, None);
+        }
+        portraits
+    }
+
     fn poll(&mut self, ctx: &egui::Context) {
         while let Ok((id, image)) = self.rx.try_recv() {
             let texture = image.map(|image| ctx.load_texture(format!("portrait-{id}"), image, TextureOptions::LINEAR));
@@ -88,8 +99,23 @@ fn decode(bytes: &[u8]) -> Option<ColorImage> {
 /// shows at 40 % alpha. Before the portrait loads, the initials show.
 pub fn avatar(ui: &mut Ui, portraits: &mut Portraits, pilot: &PilotView, size: f32) -> egui::Response {
     let tint = if pilot.live.online == Some(false) { Color32::from_white_alpha(102) } else { Color32::WHITE };
+    let response = portrait_picture(ui, portraits, pilot.id, &pilot.name, tint, size);
+    if pilot.active {
+        ui.painter().rect_stroke(response.rect, CornerRadius::same(3), Stroke::new(1.0, theme::accent(ui)), StrokeKind::Outside);
+    }
+    response
+}
+
+/// The portrait of a character, with no ring and no dimming: a list that picks a character uses
+/// it. Before the portrait loads, the initials show.
+pub fn pilot_portrait(ui: &mut Ui, portraits: &mut Portraits, pilot: &PilotView, size: f32) -> egui::Response {
+    portrait_picture(ui, portraits, pilot.id, &pilot.name, Color32::WHITE, size)
+}
+
+/// The picture of a character: the portrait, or the initials on a dark square.
+fn portrait_picture(ui: &mut Ui, portraits: &mut Portraits, id: u64, name: &str, tint: Color32, size: f32) -> egui::Response {
     let radius = CornerRadius::same(3);
-    let response = match portraits.get(ui.ctx(), pilot.id) {
+    match portraits.get(ui.ctx(), id) {
         Some(texture) => ui.add(
             egui::Image::new(SizedTexture::new(texture.id(), vec2(size, size))).corner_radius(radius).tint(tint).sense(Sense::hover()),
         ),
@@ -100,17 +126,13 @@ pub fn avatar(ui: &mut Ui, portraits: &mut Portraits, pilot: &PilotView, size: f
             ui.painter().text(
                 rect.center(),
                 egui::Align2::CENTER_CENTER,
-                initials(&pilot.name),
+                initials(name),
                 font,
                 theme::TEXT.gamma_multiply(tint.a() as f32 / 255.0),
             );
             response
         }
-    };
-    if pilot.active {
-        ui.painter().rect_stroke(response.rect, radius, Stroke::new(1.0, theme::accent(ui)), StrokeKind::Outside);
     }
-    response
 }
 
 /// The avatars of the pilots in one system: at most `MAX_AVATARS`, then "+n other characters".

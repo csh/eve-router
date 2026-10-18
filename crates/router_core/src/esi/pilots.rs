@@ -188,6 +188,24 @@ impl Pilots {
         Self::with_parts(None, None, None, active_path, Arc::new(|| {}))
     }
 
+    /// `offline` with an EVE client ID, so `shows_characters` is true, and with these characters
+    /// (ID and name). The first one is online, and the others are offline. No tracker starts. The
+    /// tests of the front end use it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn offline_with_client_id(active_path: PathBuf, characters: &[(u64, &str)]) -> Pilots {
+        use super::store::CharacterEntry;
+        let mut accounts = Accounts::session_only();
+        for &(id, name) in characters {
+            let scopes = super::SCOPES.iter().map(|s| oauth2::Scope::new((*s).to_string())).collect();
+            accounts.characters.push(CharacterEntry { id, name: name.into(), scopes, last_used: None });
+        }
+        let mut pilots = Self::with_parts(Some(accounts), Some("test-client".into()), None, active_path, Arc::new(|| {}));
+        for (i, &(id, _)) in characters.iter().enumerate() {
+            pilots.live.insert(id, PilotState { online: Some(i == 0), ..PilotState::default() });
+        }
+        pilots
+    }
+
     fn with_parts(
         accounts: Option<Accounts>,
         client_id: Option<String>,

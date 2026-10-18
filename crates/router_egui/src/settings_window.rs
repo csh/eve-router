@@ -1,6 +1,7 @@
 //! The modal windows: the settings, the Pilot picker, the Nexum map list and the messages.
 
 use crate::app::Session;
+use crate::pilots_view::{Portraits, pilot_portrait};
 use crate::search::SearchBox;
 use crate::theme;
 use crate::view::View;
@@ -9,11 +10,11 @@ use egui::{Button, Color32, Frame, Id, Key, Margin, Modal, RichText, ScrollArea,
 use egui_phosphor_icons::icons;
 use router_core::ansiblex::HullClass;
 use router_core::config::{self, ApiKey};
-use router_core::esi::pilots::PilotRow;
+use router_core::esi::pilots::{PilotRow, PilotView};
 use router_core::labels::ship_text;
 use router_core::settings::{HullSource, RouteCosts, parse_max_cap};
 use router_core::sources::{
-    self,
+    self, evemetro,
     nexum::{self, MapInfo},
 };
 use router_core::universe::display_sec;
@@ -46,6 +47,8 @@ pub struct SettingsForm {
     url: String,
     /// The key field starts empty, so the key never shows on the screen.
     key: String,
+    /// The EVE Metro key field. It starts empty too.
+    metro_key: String,
     error: Option<String>,
     /// The field that the pilot saved last, and when. "Saved" shows next to it for `SAVED_TIME`.
     saved: Option<(Saved, Instant)>,
@@ -56,6 +59,7 @@ pub struct SettingsForm {
 enum Saved {
     Url,
     Key,
+    MetroKey,
     MaxCap,
 }
 
@@ -86,6 +90,7 @@ impl SettingsForm {
             replace_confirm: false,
             url: s.cfg.nexum.url.clone().unwrap_or_default(),
             key: String::new(),
+            metro_key: String::new(),
             error: None,
             saved: None,
         }
@@ -140,7 +145,8 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
             view.maps = Some(fetch_map_list(s, ui.ctx()));
         }
         let loading = view.maps.is_some();
-        let response = Modal::new(Id::new("settings")).frame(modal_frame()).show(ui.ctx(), |ui| settings(ui, form, s, loading));
+        let portraits = &mut view.pilots.portraits;
+        let response = Modal::new(Id::new("settings")).frame(modal_frame()).show(ui.ctx(), |ui| settings(ui, form, s, loading, portraits));
         match response.inner {
             Some(Action::LoadMaps) => {
                 if view.maps.is_none() {
@@ -365,12 +371,14 @@ pub enum Page {
     Theme,
     Wormholes,
     Filaments,
+    EveMetro,
     Ansiblex,
     Engine,
 }
 
 impl Page {
-    pub const ALL: [Page; 6] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Filaments, Page::Ansiblex, Page::Engine];
+    pub const ALL: [Page; 7] =
+        [Page::Favourites, Page::Theme, Page::Wormholes, Page::Filaments, Page::EveMetro, Page::Ansiblex, Page::Engine];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -378,6 +386,7 @@ impl Page {
             Page::Theme => "Theme",
             Page::Wormholes => "Wormholes",
             Page::Filaments => "Filaments",
+            Page::EveMetro => "EVE Metro",
             Page::Ansiblex => "Ansiblex",
             Page::Engine => "Engine",
         }
@@ -390,7 +399,7 @@ fn group(ui: &mut Ui, text: &str) {
     ui.add_space(2.0);
 }
 
-fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool) -> Option<Action> {
+fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool, portraits: &mut Portraits) -> Option<Action> {
     let mut action = None;
     ui.set_width(crate::theme::modal_width(ui, 720.0));
     title(ui, "Settings");
@@ -430,17 +439,18 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
         ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0, theme::LINE));
         ui.add_space(pad - ui.spacing().item_spacing.x);
         ui.allocate_ui_with_layout(vec2(page_width, body), egui::Layout::top_down(egui::Align::Min), |ui| {
-            // The Ansiblex page has its own scrolling table, so the page itself stays still.
-            if form.page == Page::Ansiblex {
-                ansiblex_page(ui, form, s, locked);
-                return;
+            // The Ansiblex and EVE Metro pages have their own scrolling table, so the page itself stays still.
+            match form.page {
+                Page::Ansiblex => return ansiblex_page(ui, form, s, locked),
+                Page::EveMetro => return eve_metro_page(ui, form, s, locked, portraits),
+                _ => {}
             }
             ScrollArea::vertical().max_height(body).auto_shrink([false, false]).show(ui, |ui| match form.page {
                 Page::Favourites => favourites_page(ui, form, s),
                 Page::Theme => theme_page(ui, s),
                 Page::Wormholes => action = wormholes_page(ui, form, s, locked, loading),
                 Page::Filaments => filaments_page(ui, s, locked),
-                Page::Ansiblex => {}
+                Page::EveMetro | Page::Ansiblex => {}
                 Page::Engine => engine_page(ui, form, s, locked),
             });
         });
@@ -744,6 +754,138 @@ fn maps_list(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool
         s.nexum_saved();
     }
     action
+}
+
+/// The status of a character for the EVE Metro table: the text and its color.
+fn pilot_status(pilot: &PilotView) -> (&'static str, Color32) {
+    if pilot.live.expired || pilot.needs_reauth {
+        return ("Log in again", theme::WARN);
+    }
+    match pilot.live.online {
+        Some(true) => ("Online", theme::OK),
+        Some(false) => ("Offline", theme::TEXT_DIM),
+        None => ("-", theme::TEXT_DIM),
+    }
+}
+
+/// The EVE Metro page: the switch, the key, and a table of the linked characters with their
+/// portraits. The service checks the picked character, its corporation and its alliance. Like the
+/// Ansiblex page, the page itself stays still and the table scrolls.
+fn eve_metro_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool, portraits: &mut Portraits) {
+    const ROW: f32 = 40.0;
+    let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
+    // The source needs a logged-in character, so it needs the EVE client ID, like each SSO feature.
+    if !s.pilots.shows_characters() {
+        ui.label(RichText::new(evemetro::NEEDS_CLIENT_ID).color(theme::WARN));
+        return;
+    }
+    let field = FIELD;
+    group(ui, "EVE Metro");
+    ui.label(dim("The Pochven wormhole map. The service needs a paid key."));
+    ui.add_space(4.0);
+    egui::Grid::new("settings-metro").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        label(ui, "Source");
+        let row = ui.add_enabled_ui(!locked, |ui| {
+            let mut on = s.cfg.eve_metro.enabled;
+            let changed = ui.app_checkbox(&mut on, "Load the Pochven wormhole map").changed();
+            (changed, on)
+        });
+        row.response.on_disabled_hover_text(LOCKED);
+        if row.inner.0 {
+            s.cfg.eve_metro.enabled = row.inner.1;
+            s.eve_metro_saved();
+        }
+        ui.end_row();
+
+        label(ui, "Key");
+        ui.add_enabled_ui(!locked, |ui| {
+            // The masked key and Clear while a key is set, else the input and Save.
+            ui.horizontal_wrapped(|ui| {
+                if let Some(key) = &s.cfg.eve_metro.key {
+                    ui.label(RichText::new(key.masked()).color(theme::TEXT));
+                    if ui.app_button("Clear").clicked() {
+                        s.cfg.eve_metro.key = None;
+                        s.eve_metro_saved();
+                    }
+                } else {
+                    ui.add(
+                        TextEdit::singleline(&mut form.metro_key).password(true).hint_text("paste your EVE Metro key").desired_width(field),
+                    );
+                    if ui.add_enabled(!form.metro_key.trim().is_empty(), AppButton::new("Save").primary()).clicked() {
+                        s.cfg.eve_metro.key = Some(ApiKey(form.metro_key.trim().to_string()));
+                        form.metro_key.clear();
+                        s.eve_metro_saved();
+                        form.saved = Some((Saved::MetroKey, Instant::now()));
+                    }
+                }
+                form.saved_label(ui, Saved::MetroKey);
+            })
+        })
+        .response
+        .on_disabled_hover_text(LOCKED);
+        ui.end_row();
+    });
+    ui.add_space(14.0);
+    group(ui, "Character");
+    ui.label(dim("The service checks this character, its corporation and its alliance. One of the three needs access."));
+    ui.add_space(4.0);
+    let pilots = s.pilots.characters();
+    if pilots.is_empty() {
+        ui.label(dim("No linked character. Add one in the Pilots panel."));
+        return;
+    }
+    let picked = s.cfg.eve_metro.character;
+    if picked.is_none() {
+        ui.label(RichText::new("Pick a character. EVE Metro stays off until you do.").color(theme::WARN));
+    } else if !pilots.iter().any(|p| Some(p.id) == picked) {
+        ui.label(RichText::new("The picked character is no longer linked. Pick another one.").color(theme::WARN));
+    }
+    let mut pick = None;
+    // The table takes the height that is left.
+    let table_height = (ui.available_height() - 8.0).max(ROW * 2.0);
+    use egui_extras::Column;
+    egui_extras::TableBuilder::new(ui)
+        .id_salt("eve-metro-characters")
+        .striped(true)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(Column::exact(48.0))
+        .column(Column::remainder().at_least(160.0).clip(true))
+        .column(Column::exact(110.0))
+        .column(Column::exact(84.0))
+        .max_scroll_height(table_height)
+        .auto_shrink([false, true])
+        .header(22.0, |mut header| {
+            for text in ["", "Character", "Status", ""] {
+                header.col(|ui| _ = ui.label(theme::header_text(text)));
+            }
+        })
+        .body(|body| {
+            body.rows(ROW, pilots.len(), |mut row| {
+                let pilot = &pilots[row.index()];
+                let selected = picked == Some(pilot.id);
+                row.set_selected(selected);
+                row.col(|ui| _ = pilot_portrait(ui, portraits, pilot, 32.0));
+                row.col(|ui| {
+                    let color = if selected { Color32::WHITE } else { theme::TEXT };
+                    ui.label(RichText::new(&pilot.name).color(color));
+                });
+                row.col(|ui| {
+                    let (text, color) = pilot_status(pilot);
+                    ui.label(RichText::new(text).color(color));
+                });
+                row.col(|ui| {
+                    if selected {
+                        ui.label(RichText::new("In use").color(theme::accent(ui)));
+                    } else if ui.add_enabled(!locked, AppButton::new("Use")).on_disabled_hover_text(LOCKED).clicked() {
+                        pick = Some(pilot.id);
+                    }
+                });
+            });
+        });
+    if let Some(id) = pick {
+        s.cfg.eve_metro.character = Some(id);
+        s.eve_metro_saved();
+    }
 }
 
 /// The Ansiblex page: the alliance capital, a box to import a list, and the bridges. A bridge works
@@ -1116,7 +1258,7 @@ mod tests {
     fn session(hull: Option<&str>) -> (Session, tempfile::TempDir) {
         let uni = overlay_universe();
         let settings = settings(&uni, hull);
-        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default(), &Default::default());
         let tmp = tempfile::tempdir().unwrap();
         let s = Session::new(std::sync::Arc::new(uni), settings, Config::default(), tmp.path().join("eve-router.json"), shortcuts);
         (s, tmp)
@@ -1136,6 +1278,74 @@ mod tests {
         }
         // Drawing changes no setting.
         assert!(!s.settings.clades.perun && !s.settings.clades.svarog && !s.settings.clades.veles);
+    }
+
+    #[test]
+    fn the_status_of_a_character() {
+        use router_core::esi::pilots::PilotState;
+        let pilot = |online, expired, needs_reauth| PilotView {
+            id: 1,
+            name: "Alice Ander".into(),
+            live: PilotState { online, expired, ..PilotState::default() },
+            needs_reauth,
+            active: false,
+        };
+        assert_eq!(pilot_status(&pilot(Some(true), false, false)).0, "Online");
+        assert_eq!(pilot_status(&pilot(Some(false), false, false)).0, "Offline");
+        assert_eq!(pilot_status(&pilot(None, false, false)).0, "-");
+        // A login that is gone, or has a missing scope, needs a new login. This wins over "Online".
+        assert_eq!(pilot_status(&pilot(Some(true), true, false)).0, "Log in again");
+        assert_eq!(pilot_status(&pilot(Some(true), false, true)).0, "Log in again");
+    }
+
+    /// A session with a client ID, the characters Alice and Bo, and a config in a temporary directory.
+    fn session_with_pilots() -> (Session, tempfile::TempDir) {
+        use router_core::esi::pilots::Pilots;
+        use router_core::test_support::{overlay_universe, settings};
+        let uni = overlay_universe();
+        let settings = settings(&uni, Some("black-ops"));
+        let shortcuts =
+            router_core::labels::Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default(), &Default::default());
+        let tmp = tempfile::tempdir().unwrap();
+        let mut s = Session::new(
+            std::sync::Arc::new(uni),
+            settings,
+            router_core::config::Config::default(),
+            tmp.path().join("eve-router.json"),
+            shortcuts,
+        );
+        s.pilots = Pilots::offline_with_client_id(tmp.path().join("active-route.json"), &[(1, "Alice Ander"), (2, "Bo Berg")]);
+        (s, tmp)
+    }
+
+    #[test]
+    fn the_eve_metro_page_draws_with_and_without_characters() {
+        let (mut s, tmp) = session_with_pilots();
+        let mut form = SettingsForm::new(&s, Page::EveMetro);
+        let mut portraits = Portraits::without_download(&[1, 2]);
+        // The app registers its fonts and theme first: the page uses the bold font.
+        let ctx = egui::Context::default();
+        theme::apply_default(&ctx);
+        theme::set_font(&ctx);
+        let mut draw = |s: &mut Session, locked: bool| {
+            // The frame output holds texture changes. A test with no renderer drops them.
+            let mut output = ctx.run_ui(Default::default(), |ui| eve_metro_page(ui, &mut form, s, locked, &mut portraits));
+            output.textures_delta.clear();
+        };
+        // A character is picked, so its row is selected. The key is set, so the masked key shows.
+        s.cfg.eve_metro.character = Some(2);
+        s.cfg.eve_metro.key = Some(ApiKey("metro_test_key".into()));
+        draw(&mut s, false);
+        // A picked character that is not linked, a locked page, and no characters at all.
+        s.cfg.eve_metro.character = Some(99);
+        draw(&mut s, true);
+        s.pilots = router_core::esi::pilots::Pilots::offline_with_client_id(tmp.path().join("active-route.json"), &[]);
+        draw(&mut s, false);
+        // Without a client ID the page draws only the reason.
+        s.pilots = router_core::esi::pilots::Pilots::offline(tmp.path().join("active-route.json"));
+        draw(&mut s, false);
+        // Drawing changes no setting.
+        assert_eq!(s.cfg.eve_metro.character, Some(99));
     }
 
     #[test]

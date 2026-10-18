@@ -15,6 +15,7 @@ use router_core::overlay::{self, OverlayReport, Pair};
 use router_core::refresh::{self, Refresher, RouteChange, Setup, Snapshot, kept_route, route_change};
 use router_core::route::{Route, Stop};
 use router_core::settings::{Settings, split_systems};
+use router_core::sources::evemetro;
 use router_core::sources::nexum::MapInfo;
 use router_core::startup::StartupError;
 use router_core::universe::Universe;
@@ -629,6 +630,27 @@ impl Session {
         }
     }
 
+    /// Save the config after a change to an EVE Metro value. The refresh worker loads the map at
+    /// once. Without an EVE client ID the source stays off, and the worker gets the settings off.
+    pub fn eve_metro_saved(&mut self) {
+        if let Err(e) = self.write_config() {
+            self.notify(Level::Error, e.to_string());
+            return;
+        }
+        let sso_ready = self.pilots.shows_characters();
+        let Some(refresher) = &self.refresher else {
+            // No worker: a test, or a worker that stopped.
+            self.notify(Level::Info, "EVE Metro settings saved. Restart to load the map.");
+            return;
+        };
+        refresher.eve_metro(self.cfg.eve_metro.gated(sso_ready));
+        if !sso_ready {
+            self.notify(Level::Warning, evemetro::NEEDS_CLIENT_ID);
+        } else if self.cfg.eve_metro.enabled {
+            self.notify(Level::Info, refresh::EVE_METRO_LOADING);
+        }
+    }
+
     /// The active faction theme.
     pub fn faction_theme(&self) -> theme::FactionTheme {
         self.cfg.theme.as_deref().map(theme::FactionTheme::from_name).unwrap_or_default()
@@ -697,9 +719,10 @@ impl eframe::App for RouterApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use router_core::config::ApiKey;
     use router_core::labels::{jumps_label, route_extras};
     use router_core::log::LogEntry;
-    use router_core::refresh::{Control, NEXUM_LOADING};
+    use router_core::refresh::{Control, EVE_METRO_LOADING, NEXUM_LOADING};
     use router_core::test_support::{FIXTURE_TIME, fake_refresher, hole, overlay_universe, settings, snapshot};
     use router_core::wormhole::Wormhole;
 
@@ -953,6 +976,47 @@ mod tests {
         assert_eq!(last(&s), Some((Level::Info, NEXUM_LOADING)));
         let Ok(Control::Nexum(sent)) = control.try_recv() else { panic!("no Nexum message") };
         assert_eq!(sent.url.as_deref(), Some("https://nexum.example"));
+    }
+
+    fn metro_settings() -> router_core::config::EveMetroConfig {
+        router_core::config::EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(42) }
+    }
+
+    #[test]
+    fn an_eve_metro_change_asks_the_worker_for_the_map() {
+        let (refresher, _snapshots, control) = fake_refresher();
+        let (mut s, tmp) = session();
+        s.refresher = Some(refresher);
+        s.pilots = Pilots::offline_with_client_id(tmp.path().join("active-route.json"), &[]);
+        s.cfg.eve_metro = metro_settings();
+        s.eve_metro_saved();
+        assert_eq!(last(&s), Some((Level::Info, EVE_METRO_LOADING)));
+        let Ok(Control::EveMetro(sent)) = control.try_recv() else { panic!("no EVE Metro message") };
+        assert_eq!(sent, metro_settings());
+        // The settings are in the file.
+        assert_eq!(Config::load(&s.cfg_path).unwrap().eve_metro, metro_settings());
+    }
+
+    #[test]
+    fn eve_metro_stays_off_without_a_client_id() {
+        let (refresher, _snapshots, control) = fake_refresher();
+        let (mut s, _tmp) = session();
+        s.refresher = Some(refresher);
+        s.cfg.eve_metro = metro_settings();
+        s.eve_metro_saved();
+        assert_eq!(last(&s), Some((Level::Warning, router_core::sources::evemetro::NEEDS_CLIENT_ID)));
+        // The worker gets the settings off. The file keeps the settings of the user.
+        let Ok(Control::EveMetro(sent)) = control.try_recv() else { panic!("no EVE Metro message") };
+        assert_eq!(sent.complete(), None);
+        assert_eq!(Config::load(&s.cfg_path).unwrap().eve_metro, metro_settings());
+    }
+
+    #[test]
+    fn eve_metro_settings_save_without_a_worker() {
+        let (mut s, _tmp) = session();
+        s.cfg.eve_metro = metro_settings();
+        s.eve_metro_saved();
+        assert_eq!(last(&s), Some((Level::Info, "EVE Metro settings saved. Restart to load the map.")));
     }
 
     #[test]
