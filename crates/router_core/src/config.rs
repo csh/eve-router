@@ -190,23 +190,20 @@ impl NexumConfig {
     }
 }
 
-/// The clade switches: which Pochven clades a filament can reach. All off by default, because the
-/// feature is new and a filament can leave a pilot with a long way back.
+/// The Pochven switch: whether a route can go into Pochven at all, by a filament or by a
+/// wormhole (the EVE Metro map). Off by default, because the feature is new and Pochven is a
+/// long way back. The SDE shows one Triglavian faction only (Triglavian Collective, `500026`):
+/// the three clade corporations share it, with no faction of their own, so one switch covers
+/// all three clades.
 #[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
 #[serde(default)]
 pub struct Clades {
-    pub perun: bool,
-    pub svarog: bool,
-    pub veles: bool,
+    pub pochven: bool,
 }
 
 impl Clades {
-    pub fn allows(self, clade: crate::universe::Clade) -> bool {
-        match clade {
-            crate::universe::Clade::Perun => self.perun,
-            crate::universe::Clade::Svarog => self.svarog,
-            crate::universe::Clade::Veles => self.veles,
-        }
+    pub fn allows(self, _clade: crate::universe::Clade) -> bool {
+        self.pochven
     }
 }
 
@@ -388,7 +385,7 @@ mod tests {
             },
             eve_metro: EveMetroConfig { enabled: true, key: Some(ApiKey("metro_key".into())), character: Some(2112345678) },
             eve_scout: Hubs { thera: false, turnur: true },
-            clades: Clades { perun: true, svarog: false, veles: true },
+            clades: Clades { pochven: true },
             theme: None,
             compact: false,
         };

@@ -14,7 +14,7 @@ use router_core::esi::pilots::{PilotRow, PilotView};
 use router_core::labels::ship_text;
 use router_core::settings::{HullSource, RouteCosts, parse_max_cap};
 use router_core::sources::{
-    self, evemetro,
+    self,
     nexum::{self, MapInfo},
 };
 use router_core::universe::display_sec;
@@ -651,30 +651,23 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
 /// The Clades group of the Pochven page: a switch for each clade. Filament travel needs no
 /// client ID, unlike EVE Metro, so it always shows.
 fn clades_group(ui: &mut Ui, s: &mut Session, locked: bool) {
-    group(ui, "Clades");
+    group(ui, "Access");
     ui.label(
-        RichText::new("A filament puts a pilot at a random system of the clade. The cost of the jump is an average.")
-            .color(theme::TEXT_DIM),
+        RichText::new(
+            "A filament puts a pilot at a random system of a clade, at the average cost. This switch also gives EVE Metro's wormhole routes into Pochven.",
+        )
+        .color(theme::TEXT_DIM),
     );
     ui.add_space(4.0);
     egui::Grid::new("settings-filaments").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        use router_core::universe::Clade;
-        let mut changed = false;
-        for (clade, on) in [
-            (Clade::Perun, &mut s.settings.clades.perun),
-            (Clade::Svarog, &mut s.settings.clades.svarog),
-            (Clade::Veles, &mut s.settings.clades.veles),
-        ] {
-            label(ui, clade.label());
-            let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(on, "Allow travel via a filament").changed());
-            changed |= row.inner;
-            row.response.on_disabled_hover_text(LOCKED);
-            ui.end_row();
-        }
-        if changed {
+        label(ui, "Pochven");
+        let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(&mut s.settings.clades.pochven, "Allow travel via Pochven").changed());
+        row.response.on_disabled_hover_text(LOCKED);
+        if row.inner {
             s.recompute();
             s.save();
         }
+        ui.end_row();
     });
 }
 
@@ -777,15 +770,24 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
     let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
     clades_group(ui, s, locked);
     ui.add_space(14.0);
-    // The source needs a logged-in character, so it needs the EVE client ID, like each SSO feature.
+    // The source needs a logged-in character, so it needs the EVE client ID, like each SSO
+    // feature. Without one, EVE Metro gives nothing, so the whole group stays off the page.
     if !s.pilots.shows_characters() {
-        group(ui, "EVE Metro");
-        ui.label(RichText::new(evemetro::NEEDS_CLIENT_ID).color(theme::WARN));
         return;
     }
     let field = FIELD;
     group(ui, "EVE Metro");
-    ui.label(dim("The Pochven wormhole map. The service needs a paid key."));
+    ui.label(dim("The Pochven wormhole map. The Access switch above must also be on for a route to use it."));
+    ui.label(dim(
+        "The API key itself costs nothing. The selected pilot, or its corporation or its alliance, needs a paid EVE Metro subscription.",
+    ));
+    ui.horizontal(|ui| {
+        ui.label(dim("Subscribe at"));
+        ui.hyperlink_to("evemetro.com", "https://evemetro.com/");
+    });
+    ui.label(dim(
+        "Activation can take a few minutes after payment. EVE Metro is a third-party service: this app is not responsible for it.",
+    ));
     ui.add_space(4.0);
     egui::Grid::new("settings-metro").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         label(ui, "Source");
@@ -831,7 +833,7 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
     });
     ui.add_space(14.0);
     group(ui, "Character");
-    ui.label(dim("The service checks this character, its corporation and its alliance. One of the three needs access."));
+    ui.label(dim("The picked character, or its corporation or its alliance, must have a valid EVE Metro subscription."));
     ui.add_space(4.0);
     let pilots = s.pilots.characters();
     if pilots.is_empty() {
@@ -1323,7 +1325,7 @@ mod tests {
         draw(&mut s, false);
         // Drawing changes no setting.
         assert_eq!(s.cfg.eve_metro.character, Some(99));
-        assert!(!s.settings.clades.perun && !s.settings.clades.svarog && !s.settings.clades.veles);
+        assert!(!s.settings.clades.pochven);
     }
 
     #[test]

@@ -516,7 +516,7 @@ mod tests {
         let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
         let target = uni.graph.edges(perun).next().unwrap().target();
         let jita = uni.exact("Jita").unwrap();
-        let clades = Clades { perun: true, ..Default::default() };
+        let clades = Clades { pochven: true };
         let options = RouterOptions { clades, ..Default::default() };
         let route = Router::new(uni, options).routes(&[jita, target], 1).unwrap().remove(0);
         assert_eq!(route.jumps, 2, "the hub is still two edges in the route's own path");

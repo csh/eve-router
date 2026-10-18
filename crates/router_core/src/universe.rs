@@ -68,7 +68,7 @@ impl Clade {
 }
 
 /// Pochven, the region of the three clades. A filament cannot start here: a pilot is already there.
-const POCHVEN_REGION: u32 = 10_000_070;
+pub const POCHVEN_REGION: u32 = 10_000_070;
 /// Yasna Zakh, the region of Zarzakh (one system). A filament is unusable there.
 const ZARZAKH_REGION: u32 = 10_001_000;
 /// The 33 wormhole space regions. A filament needs a k-space system.

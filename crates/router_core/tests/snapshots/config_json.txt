@@ -44,8 +44,6 @@
     "turnur": true
   },
   "clades": {
-    "perun": true,
-    "svarog": false,
-    "veles": true
+    "pochven": true
   }
 }

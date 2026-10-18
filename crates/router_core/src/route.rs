@@ -29,6 +29,12 @@ pub const MAX_SHARED: f64 = 0.7;
 /// needs 1000 wormholes before these costs add up to one jump.
 pub const WORMHOLE_TIE: u64 = 1;
 
+/// True if either end of the edge is in Pochven.
+fn in_pochven(uni: &Universe, a: NodeIndex, b: NodeIndex) -> bool {
+    let region = crate::universe::POCHVEN_REGION;
+    uni.system(a).region_id == region || uni.system(b).region_id == region
+}
+
 /// True if the hull can activate a filament. No hull set: allow it, as the wormhole size check does.
 /// `Hull::filament_ok` comes from the SDE type list "InvalidShipGroupsForRandomJump", so a ban
 /// list change needs only an SDE update, not a rebuild.
@@ -269,7 +275,11 @@ impl<'a> Router<'a> {
             .par_iter()
             .map(|e| match &e.weight {
                 Link::Stargate => true,
-                Link::Wormhole(w) => wormholes && hubs.allows(w) && w.usable(now, hull_kg),
+                // The Pochven switch also gates a wormhole with an end in Pochven (the EVE Metro
+                // map): the switch means "allow Pochven", not "allow a filament only".
+                Link::Wormhole(w) => {
+                    wormholes && hubs.allows(w) && w.usable(now, hull_kg) && (clades.pochven || !in_pochven(uni, e.source(), e.target()))
+                }
                 Link::JumpBridge => bridges && rules.allowed(uni, e.source()),
                 Link::Filament(f) => clades.allows(f.clade) && filament_hull_ok,
             })
@@ -1174,7 +1184,7 @@ mod tests {
         use petgraph::visit::EdgeRef;
         let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
         let target = uni.graph.edges(perun).next().unwrap().target();
-        let clades = crate::config::Clades { perun: true, ..Default::default() };
+        let clades = crate::config::Clades { pochven: true };
         let r = Router::new(uni, RouterOptions { clades, ..Default::default() });
         let route = r.routes(&[node("Jita"), target], 1).unwrap().remove(0);
         // Two filament edges: the activation, and the jump from the hub into the clade.
@@ -1189,7 +1199,7 @@ mod tests {
         use petgraph::visit::EdgeRef;
         let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
         let target = uni.graph.edges(perun).next().unwrap().target();
-        let clades = crate::config::Clades { perun: true, ..Default::default() };
+        let clades = crate::config::Clades { pochven: true };
         // A Titan is on the banned list. No hull set still allows the filament.
         let banned = RouterOptions {
             clades,
@@ -1205,6 +1215,29 @@ mod tests {
         assert!(Router::new(uni, allowed).routes(&[node("Jita"), target], 1).is_ok());
         let no_hull = RouterOptions { clades, ..Default::default() };
         assert!(Router::new(uni, no_hull).routes(&[node("Jita"), target], 1).is_ok());
+    }
+
+    /// The Pochven switch also gates a plain wormhole with an end in Pochven, the shape that an
+    /// EVE Metro connection takes once it is on the map: the switch means "allow Pochven", not
+    /// "allow a filament only".
+    #[test]
+    fn pochven_off_blocks_a_wormhole_into_pochven_too() {
+        let base = universe();
+        let mut uni = base.clone();
+        use petgraph::visit::EdgeRef;
+        let perun = base.filament_hub(crate::universe::Clade::Perun).unwrap();
+        let pochven_id = base.system(base.graph.edges(perun).next().unwrap().target()).id;
+        let jita_id = base.system(node("Jita")).id;
+        uni.add_wormholes(&[hole(jita_id, pochven_id)]);
+        let (jita, target) = (uni.exact("Jita").unwrap(), uni.by_id[&pochven_id]);
+
+        assert!(Router::new(&uni, RouterOptions::default()).routes(&[jita, target], 1).is_err());
+        // No signature penalty: the test proves the wormhole is usable, not that it beats a filament.
+        let clades = crate::config::Clades { pochven: true };
+        let options = RouterOptions { clades, unknown_sig_penalty: 0, ..Default::default() };
+        let route = Router::new(&uni, options).routes(&[jita, target], 1).unwrap().remove(0);
+        assert_eq!(route.jumps, 1);
+        assert_eq!(route.wormholes, 1);
     }
 
     /// The ten classes confirmed in game 2026-10-18 are banned, with the SDE's own
