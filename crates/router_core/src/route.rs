@@ -45,7 +45,7 @@ const FILAMENT_BANNED_GROUPS: [&str; 10] = [
 ];
 
 /// True if the hull can activate a filament. No hull set: allow it, as the wormhole size check does.
-fn hull_allows_filament(hull: Option<&Hull>) -> bool {
+pub fn hull_allows_filament(hull: Option<&Hull>) -> bool {
     hull.is_none_or(|h| !FILAMENT_BANNED_GROUPS.contains(&h.group.as_str()))
 }
 

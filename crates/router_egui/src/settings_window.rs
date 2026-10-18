@@ -364,18 +364,20 @@ pub enum Page {
     Favourites,
     Theme,
     Wormholes,
+    Filaments,
     Ansiblex,
     Engine,
 }
 
 impl Page {
-    pub const ALL: [Page; 5] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Ansiblex, Page::Engine];
+    pub const ALL: [Page; 6] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Filaments, Page::Ansiblex, Page::Engine];
 
     pub fn label(self) -> &'static str {
         match self {
             Page::Favourites => "Favourites",
             Page::Theme => "Theme",
             Page::Wormholes => "Wormholes",
+            Page::Filaments => "Filaments",
             Page::Ansiblex => "Ansiblex",
             Page::Engine => "Engine",
         }
@@ -437,6 +439,7 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                 Page::Favourites => favourites_page(ui, form, s),
                 Page::Theme => theme_page(ui, s),
                 Page::Wormholes => action = wormholes_page(ui, form, s, locked, loading),
+                Page::Filaments => filaments_page(ui, s, locked),
                 Page::Ansiblex => {}
                 Page::Engine => engine_page(ui, form, s, locked),
             });
@@ -634,6 +637,44 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
         }
     });
     action
+}
+
+/// The Triglavian filament page: a switch for each clade, and a note about the hull restriction.
+/// A clade switch acts at route time, like the EVE-Scout hub switches.
+fn filaments_page(ui: &mut Ui, s: &mut Session, locked: bool) {
+    group(ui, "Clades");
+    ui.label(
+        RichText::new("A filament puts a pilot at a random system of the clade. The cost of the jump is an average.")
+            .color(theme::TEXT_DIM),
+    );
+    ui.add_space(4.0);
+    egui::Grid::new("settings-filaments").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        use router_core::universe::Clade;
+        let mut changed = false;
+        for (clade, on) in [
+            (Clade::Perun, &mut s.settings.clades.perun),
+            (Clade::Svarog, &mut s.settings.clades.svarog),
+            (Clade::Veles, &mut s.settings.clades.veles),
+        ] {
+            label(ui, clade.label());
+            let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(on, "Allow travel via a filament").changed());
+            changed |= row.inner;
+            row.response.on_disabled_hover_text(LOCKED);
+            ui.end_row();
+        }
+        if changed {
+            s.recompute();
+            s.save();
+        }
+    });
+    ui.add_space(14.0);
+    group(ui, "Hull");
+    if router_core::route::hull_allows_filament(s.settings.rules.hull.as_deref()) {
+        ui.label(RichText::new("The current hull can activate a filament.").color(theme::TEXT_DIM));
+    } else {
+        let name = s.settings.rules.hull.as_ref().map_or("The current hull", |h| h.name.as_str());
+        ui.label(RichText::new(format!("{name} cannot activate a filament. A route avoids one for this hull.")).color(theme::WARN));
+    }
 }
 
 /// The Nexum maps, in a table with a checkbox for each. The router reads the maps that are on.
@@ -1068,13 +1109,47 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use router_core::test_support::overlay_universe;
+    use router_core::config::Config;
+    use router_core::labels::Shortcuts;
+    use router_core::test_support::{overlay_universe, settings};
 
     #[test]
     fn each_page_has_one_entry_and_a_label() {
         let labels: std::collections::HashSet<_> = Page::ALL.iter().map(|p| p.label()).collect();
         assert_eq!(labels.len(), Page::ALL.len());
         assert!(labels.iter().all(|l| !l.is_empty()));
+    }
+
+    /// A session with the test SDE, and a config in a temporary directory.
+    fn session(hull: Option<&str>) -> (Session, tempfile::TempDir) {
+        let uni = overlay_universe();
+        let settings = settings(&uni, hull);
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default());
+        let tmp = tempfile::tempdir().unwrap();
+        let s = Session::new(std::sync::Arc::new(uni), settings, Config::default(), tmp.path().join("eve-router.json"), shortcuts);
+        (s, tmp)
+    }
+
+    #[test]
+    fn the_filaments_page_draws_with_an_allowed_and_a_banned_hull() {
+        // The app registers its fonts and theme first: the page uses the bold font.
+        let ctx = egui::Context::default();
+        theme::apply_default(&ctx);
+        theme::set_font(&ctx);
+        let draw = |s: &mut Session, locked: bool| {
+            // The frame output holds texture changes. A test with no renderer drops them.
+            let mut output = ctx.run_ui(Default::default(), |ui| filaments_page(ui, s, locked));
+            output.textures_delta.clear();
+        };
+        let (mut s, _tmp) = session(Some("Rifter"));
+        draw(&mut s, false);
+        draw(&mut s, true);
+        let (mut s, _tmp) = session(Some("Titan"));
+        draw(&mut s, false);
+        let (mut s, _tmp) = session(None);
+        draw(&mut s, false);
+        // Drawing changes no setting.
+        assert!(!s.settings.clades.perun && !s.settings.clades.svarog && !s.settings.clades.veles);
     }
 
     #[test]

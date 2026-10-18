@@ -662,6 +662,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                     let via_color = match via.as_str() {
                         v if v.starts_with("Wormhole") => theme::WORMHOLE,
                         v if v.starts_with("Ansiblex") => theme::BRIDGE,
+                        v if v.starts_with("Filament") => theme::FILAMENT,
                         _ => theme::TEXT_DIM,
                     };
                     let stop = route.stop_at(step);

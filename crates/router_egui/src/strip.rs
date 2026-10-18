@@ -54,6 +54,7 @@ pub fn paint(painter: &Painter, uni: &Universe, route: &Route, rect: Rect) {
         let link = match i.checked_sub(1).map(|e| &uni.graph[route.path.edges[e]]) {
             Some(Link::Wormhole(_)) => Some(theme::WORMHOLE),
             Some(Link::JumpBridge) => Some(theme::BRIDGE),
+            Some(Link::Filament(_)) => Some(theme::FILAMENT),
             _ => None,
         };
         if let Some(link) = link {

@@ -27,6 +27,8 @@ pub const ERROR: Color32 = Color32::from_rgb(0xFF, 0x45, 0x4B);
 pub const ERROR_SOFT: Color32 = Color32::from_rgb(0xC9, 0x5A, 0x5A);
 pub const WORMHOLE: Color32 = Color32::from_rgb(0xB0, 0x70, 0xE0);
 pub const BRIDGE: Color32 = Color32::from_rgb(0x60, 0xA0, 0xFF);
+/// A Triglavian filament hop: a deep orange-red, apart from `WARN` and `ERROR`.
+pub const FILAMENT: Color32 = Color32::from_rgb(0xD1, 0x3B, 0x1E);
 
 /// The fill of a stop row in the route table, and of a hovered row.
 pub const ROW_FILL: Color32 = Color32::from_rgb(0x10, 0x12, 0x13);
