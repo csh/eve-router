@@ -10,10 +10,10 @@
 //! a command to show the overlay window then starts the pass that draws it. The window is drawn in `show`.
 
 use super::mode::DisplayMode;
-use super::win;
 use crate::app::Session;
 use crate::pilots_view::system_name;
 use crate::theme;
+use crate::win32 as win;
 use egui::{Context, CursorIcon, Frame, Id, Margin, Pos2, RichText, Sense, TextStyle, ViewportBuilder, ViewportCommand, ViewportId, vec2};
 use router_core::config::{Place, Pos};
 use router_core::routing_overlay::{Content, DEFAULT_POS, content, content_for_title, parse_client_title, resolve_position};

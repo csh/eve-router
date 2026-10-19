@@ -1,10 +1,15 @@
-//! The calls to Windows for the routing overlay. They read the window that has the focus: its
-//! title and the file name of its program. They send no input, and they read no memory of another
-//! process. The router never lists the windows of the desktop.
+//! All calls to Windows. The routing overlay reads the window that has the focus: its title and
+//! the file name of its program. It sends no input, and it reads no memory of another process. The
+//! router never lists the windows of the desktop. The other calls change the look of a window of
+//! this app.
 
-use super::mode::Geometry;
+use crate::overlay::Geometry;
+use std::ffi::c_void;
 use std::path::Path;
 use windows::Win32::Foundation::{COLORREF, HWND, RECT};
+use windows::Win32::Graphics::Dwm::{
+    DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWINDOWATTRIBUTE, DwmSetWindowAttribute,
+};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -82,6 +87,28 @@ impl Foreground {
     }
 }
 
+/// The top-level window with this title. `None` when no window has it.
+pub fn find(title: &str) -> Option<HWND> {
+    // SAFETY: The call reads the title through a pointer that `HSTRING` keeps alive for the whole
+    // call. A null class matches any class. It gives an error when no window has the title.
+    unsafe { FindWindowW(PCWSTR::null(), &HSTRING::from(title)) }.ok()
+}
+
+/// Make the window square, with no border of its own. The app draws its own border, so the rounded
+/// corners and the light line that Windows 11 adds only cut into it. Windows 10 has no such
+/// attributes, and the calls fail there with no effect.
+pub fn square(hwnd: HWND) {
+    set_dwm_u32(hwnd, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND.0 as u32);
+    set_dwm_u32(hwnd, DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE);
+}
+
+fn set_dwm_u32(hwnd: HWND, attribute: DWMWINDOWATTRIBUTE, value: u32) {
+    // SAFETY: `value` lives longer than the call, and `size_of::<u32>()` is its size. The window is
+    // one of this app. A system that has no such attribute gives an error, and the error is no
+    // problem, because the window then keeps its look.
+    let _ = unsafe { DwmSetWindowAttribute(hwnd, attribute, (&raw const value).cast::<c_void>(), size_of::<u32>() as u32) };
+}
+
 /// Make the window with this title a window that takes no input: a click goes through it to the
 /// window below, and it never becomes the foreground window, so the game client keeps the focus.
 /// The window is one of this app. Winit writes the whole extended style again when a window flag
@@ -89,9 +116,7 @@ impl Foreground {
 /// shows. The call changes nothing when the style is already right. Returns `false` when no window
 /// has the title, or when Windows does not keep the new style.
 pub fn pass_input_through(title: &str) -> bool {
-    // SAFETY: The call reads the title through a pointer that `HSTRING` keeps alive for the whole
-    // call. It gives an error when no window has the title.
-    let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR::null(), &HSTRING::from(title)) }) else { return false };
+    let Some(hwnd) = find(title) else { return false };
     // SAFETY: A window that is gone gives 0, and the call changes nothing.
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
     let wanted = style | (WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT).0 as isize;
@@ -116,8 +141,9 @@ fn image_file_name(process_id: u32) -> Option<String> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }.ok()?;
     // SAFETY: `OpenProcess` gave the handle to this code, and nothing else owns it. `Owned` closes it one time.
     let process = unsafe { Owned::new(process) };
-    let mut buffer = vec![0u16; MAX_IMAGE_PATH];
-    let mut length = u32::try_from(buffer.len()).ok()?;
+    // One buffer on the stack holds the longest path that Windows allows, so no call needs a retry.
+    let mut buffer = [0u16; MAX_IMAGE_PATH];
+    let mut length = MAX_IMAGE_PATH as u32;
     // SAFETY: The handle is open with the right to query. `buffer` has room for `length` units. The
     // call writes at most that many, and sets `length` to the count that it wrote, without the null.
     unsafe { QueryFullProcessImageNameW(*process, PROCESS_NAME_WIN32, PWSTR::from_raw(buffer.as_mut_ptr()), &raw mut length) }.ok()?;

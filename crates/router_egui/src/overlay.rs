@@ -4,12 +4,10 @@
 #[cfg(windows)]
 mod mode;
 #[cfg(windows)]
-mod win;
-#[cfg(windows)]
 mod window;
 
 #[cfg(windows)]
-pub use mode::DisplayMode;
+pub use mode::{DisplayMode, Geometry};
 #[cfg(windows)]
 pub use window::Overlay;
 

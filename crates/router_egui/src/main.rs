@@ -15,6 +15,8 @@ mod strip;
 mod theme;
 mod view;
 mod widgets;
+#[cfg(windows)]
+mod win32;
 
 use app::RouterApp;
 
