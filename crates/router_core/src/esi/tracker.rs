@@ -88,6 +88,20 @@ pub enum Command {
     Send { id: u64, systems: Vec<u32> },
 }
 
+/// Why a waypoint send stopped.
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
+pub enum SendError {
+    #[error("The character is not logged in.")]
+    NotLoggedIn,
+    #[error("The login of the character expired.")]
+    LoginExpired,
+    /// The build has no EVE client ID, so no tracker runs.
+    #[error("No EVE client ID in this build.")]
+    NoClientId,
+    #[error(transparent)]
+    Esi(#[from] EsiError),
+}
+
 #[derive(Debug)]
 pub enum Event {
     /// The current system of a character. It goes out at the first poll and at each change.
@@ -121,7 +135,7 @@ pub enum Event {
         id: u64,
         done: usize,
         total: usize,
-        error: String,
+        error: SendError,
     },
     /// True while ESI limits the router, or while the error budget is low.
     Limited(bool),
@@ -411,9 +425,9 @@ impl<A: Api, W: Fn()> Worker<A, W> {
     /// refresh and one retry.
     fn send_route(&mut self, id: u64, systems: &[u32]) {
         let total = systems.len();
-        let fail = |error: String, done: usize| Event::SendFailed { id, done, total, error };
+        let fail = |error: SendError, done: usize| Event::SendFailed { id, done, total, error };
         if !self.pilots.contains_key(&id) {
-            self.emit(fail("The character is not logged in.".into(), 0));
+            self.emit(fail(SendError::NotLoggedIn, 0));
             return;
         }
         for (done, &system) in systems.iter().enumerate() {
@@ -421,7 +435,7 @@ impl<A: Api, W: Fn()> Worker<A, W> {
             let mut retried = false;
             loop {
                 let Some(token) = self.access_token(id) else {
-                    self.emit(fail("The login of the character expired.".into(), done));
+                    self.emit(fail(SendError::LoginExpired, done));
                     return;
                 };
                 match self.api.add_waypoint(&token, system, done == 0) {
@@ -433,7 +447,7 @@ impl<A: Api, W: Fn()> Worker<A, W> {
                         }
                     }
                     Err(e) => {
-                        self.emit(fail(e.to_string(), done));
+                        self.emit(fail(e.into(), done));
                         return;
                     }
                 }

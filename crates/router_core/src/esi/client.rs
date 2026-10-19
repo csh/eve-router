@@ -63,7 +63,7 @@ pub struct Fetched<T> {
     pub errors_left: Option<u32>,
 }
 
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum EsiError {
     /// 401 or 403: the token is expired, revoked or has no scope for the call.
     #[error("ESI refused the login")]

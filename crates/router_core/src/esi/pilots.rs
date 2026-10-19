@@ -10,7 +10,7 @@ use super::active::{ActiveRoute, Observation, active_path};
 use super::client::{Esi, Location, Ship};
 use super::sso::{Login, LoginError, Sso, Tokens};
 use super::store::{Accounts, StoreError, TokenStore, characters_path};
-use super::tracker::{Command, Event, Intervals, Live, Tracker};
+use super::tracker::{Command, Event, Intervals, Live, SendError, Tracker};
 use crate::ansiblex::{HullClass, HullTable, same_class, same_hull};
 use crate::route::Route;
 use crate::route::RouteError;
@@ -50,7 +50,7 @@ pub struct LoginFlow {
     pub login: Login,
     exchange: Option<Receiver<Result<Tokens, LoginError>>>,
     /// The last error. The user can paste again, or start a new login.
-    pub error: Option<String>,
+    pub error: Option<LoginError>,
 }
 
 impl LoginFlow {
@@ -66,8 +66,26 @@ pub struct SendState {
     pub character: u64,
     pub systems: Vec<u32>,
     pub done: usize,
-    /// The error text, after a failure. `retry_send` sends all waypoints again.
-    pub failed: Option<String>,
+    /// The failure, after a failure. `retry_send` sends all waypoints again.
+    pub failed: Option<SendFailure>,
+}
+
+/// A send that stopped. `done` of `total` waypoints are in the game.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SendFailure {
+    pub done: usize,
+    pub total: usize,
+    pub error: SendError,
+}
+
+impl std::fmt::Display for SendFailure {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self.error {
+            // Nothing went out, so there is no partial route.
+            SendError::NoClientId => write!(f, "{}", self.error),
+            _ => write!(f, "Sent {} of {}. The game now has a partial route. {}", self.done, self.total, self.error),
+        }
+    }
 }
 
 /// Why a route start, a re-route or a login cannot go on.
@@ -295,7 +313,7 @@ impl Pilots {
         let Some(flow) = &mut self.login else { return };
         match flow.login.paste(text) {
             Ok(code) => self.exchange(code),
-            Err(e) => flow.error = Some(e.to_string()),
+            Err(e) => flow.error = Some(e),
         }
     }
 
@@ -421,7 +439,10 @@ impl Pilots {
         self.send = Some(SendState { character: id, systems: systems.clone(), done: 0, failed: None });
         match &self.tracker {
             Some(tracker) => tracker.send(Command::Send { id, systems }),
-            None => self.send.as_mut().expect("send").failed = Some("No EVE client ID in this build.".into()),
+            None => {
+                let total = self.send.as_ref().map_or(0, |s| s.systems.len());
+                self.send.as_mut().expect("send").failed = Some(SendFailure { done: 0, total, error: SendError::NoClientId });
+            }
         }
     }
 
@@ -515,13 +536,13 @@ impl Pilots {
             flow.exchange = None;
             match result {
                 Ok(tokens) => self.logged_in(tokens),
-                Err(e) => flow.error = Some(e.to_string()),
+                Err(e) => flow.error = Some(e),
             }
             return true;
         }
         match flow.login.poll() {
             Some(Ok(code)) => self.exchange(code),
-            Some(Err(e)) => flow.error = Some(e.to_string()),
+            Some(Err(e)) => flow.error = Some(e),
             None => return false,
         }
         true
@@ -585,7 +606,7 @@ impl Pilots {
             Event::SendFailed { done, total, error, .. } => {
                 if let Some(send) = &mut self.send {
                     send.done = done;
-                    send.failed = Some(format!("Sent {done} of {total}. The game now has a partial route. {error}"));
+                    send.failed = Some(SendFailure { done, total, error });
                 }
             }
             Event::Limited(limited) => self.limited = limited,
@@ -632,7 +653,7 @@ pub struct StartPlan {
     pub here: Option<u32>,
     pub online: Option<bool>,
     /// Why `from_here` is missing, when the search failed.
-    pub error: Option<String>,
+    pub error: Option<PilotError>,
     /// The hull of the pilot, when it does not suit the planned hull. The UI offers "Plan for" it.
     pub flown: Option<HullClass>,
 }
@@ -649,7 +670,7 @@ impl StartPlan {
         let stops: Vec<u32> = plan.planned.stops.iter().skip(1).map(|&i| plan.planned.steps[i].system).collect();
         match route_from(uni, settings, system, &stops, now) {
             Ok(r) => plan.from_here = Some(ActiveRoute::new(uni, &settings.rules, &r, number, pilot.id, &pilot.name)),
-            Err(e) => plan.error = Some(e.to_string()),
+            Err(e) => plan.error = Some(e),
         }
         plan
     }
@@ -927,12 +948,31 @@ mod tests {
         p.start_route(route(&[10, 20, 30], None));
         until(&mut p, |p| p.send.as_ref().is_some_and(|s| s.failed.is_some()));
         assert!(p.active.is_none());
-        assert!(p.send.as_ref().unwrap().failed.as_ref().unwrap().starts_with("Sent 1 of 2."));
+        let failure = p.send.as_ref().unwrap().failed.clone().unwrap();
+        assert_eq!((failure.done, failure.total), (1, 2));
+        assert!(failure.to_string().starts_with("Sent 1 of 2."));
         // Retry sends all waypoints again, with a clear first.
         fake.0.lock().unwrap().fail_waypoint_at = None;
         p.retry_send();
         until(&mut p, |p| p.active.is_some());
         assert_eq!(fake.0.lock().unwrap().waypoints, [(20, true), (20, true), (30, false)]);
+    }
+
+    #[test]
+    fn a_send_failure_has_its_text() {
+        let failure = |error| SendFailure { done: 1, total: 3, error }.to_string();
+        assert_eq!(failure(SendError::LoginExpired), "Sent 1 of 3. The game now has a partial route. The login of the character expired.");
+        assert_eq!(
+            failure(SendError::Esi(crate::esi::client::EsiError::Auth)),
+            "Sent 1 of 3. The game now has a partial route. ESI refused the login"
+        );
+        // No tracker runs, so nothing went out.
+        assert_eq!(failure(SendError::NoClientId), "No EVE client ID in this build.");
+        let tmp = tempfile::tempdir().unwrap();
+        let mut p = Pilots::offline(tmp.path().join("active-route.json"));
+        p.start_route(route(&[10, 20, 30], None));
+        let failed = p.send.as_ref().unwrap().failed.clone().unwrap();
+        assert_eq!((failed.done, failed.total, failed.error), (0, 2, SendError::NoClientId));
     }
 
     #[test]

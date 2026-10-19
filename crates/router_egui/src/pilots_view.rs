@@ -301,7 +301,7 @@ impl PilotsUi {
         let Some(r) = s.routes.get(route) else { return };
         let plan = StartPlan::new(&s.uni, &s.settings, r, route + 1, &pilot, router_core::wormhole::now());
         if let Some(e) = &plan.error {
-            s.notify(Level::Error, e.clone());
+            s.notify(Level::Error, e.to_string());
         }
         self.start = Some(Start::Confirm(Box::new(plan)));
     }
@@ -432,7 +432,7 @@ impl PilotsUi {
         let Some(flow) = &s.pilots.login else { return };
         let url = flow.login.url.clone();
         let listen_error = flow.login.listen_error().map(ToString::to_string);
-        let (busy, error) = (flow.busy(), flow.error.clone());
+        let (busy, error) = (flow.busy(), flow.error.as_ref().map(ToString::to_string));
         ui.label(RichText::new("Opening EVE login in your browser…").color(theme::TEXT));
         ui.horizontal(|ui| {
             ui.label(RichText::new("Not opened? Copy this URL:").color(theme::TEXT_DIM));
@@ -593,7 +593,7 @@ impl PilotsUi {
                 }
                 Some(error) => {
                     crate::settings_window::title(ui, "Send failed");
-                    ui.label(RichText::new(error).color(theme::WARN));
+                    ui.label(RichText::new(error.to_string()).color(theme::WARN));
                     ui.horizontal(|ui| {
                         if ui.app_button("Retry").clicked() {
                             s.pilots.retry_send();
@@ -668,7 +668,7 @@ impl PilotsUi {
     fn banner(&mut self, ui: &mut Ui, s: &mut Session, active: &ActiveRoute, destination: &str) {
         let name = &active.character_name;
         let live = s.pilots.live.get(&active.character).cloned().unwrap_or_default();
-        let send_error = s.pilots.send.as_ref().and_then(|x| x.failed.clone());
+        let send_error = s.pilots.send.as_ref().and_then(|x| x.failed.as_ref().map(ToString::to_string));
         let bar = |ui: &mut Ui, color: Color32, add: &mut dyn FnMut(&mut Ui)| {
             ui.add_space(6.0);
             Frame::new().fill(color.gamma_multiply(0.15)).stroke(Stroke::new(1.0, color)).inner_margin(Margin::symmetric(8, 4)).show(
