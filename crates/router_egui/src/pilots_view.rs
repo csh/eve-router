@@ -389,7 +389,7 @@ impl PilotsUi {
                     });
                 });
                 if self.remove == Some(row.id) {
-                    ui.horizontal(|ui| {
+                    ui.horizontal_wrapped(|ui| {
                         let text = format!("Remove {}? This revokes access and deletes stored tokens.", row.name);
                         ui.label(RichText::new(text).color(theme::WARN));
                         if ui.app_button("Remove").clicked() {
