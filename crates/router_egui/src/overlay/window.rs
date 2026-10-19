@@ -13,9 +13,9 @@ use super::win;
 use crate::app::Session;
 use crate::pilots_view::system_name;
 use crate::theme;
-use egui::{Context, Frame, Margin, Pos2, RichText, TextStyle, ViewportBuilder, ViewportCommand, ViewportId, vec2};
-use router_core::config::Pos;
-use router_core::routing_overlay::{Content, content, content_for_title, resolve_position};
+use egui::{Context, CursorIcon, Frame, Id, Margin, Pos2, RichText, Sense, TextStyle, ViewportBuilder, ViewportCommand, ViewportId, vec2};
+use router_core::config::{Place, Pos};
+use router_core::routing_overlay::{content, content_for_title, resolve_position};
 use std::time::{Duration, Instant};
 
 /// The title of the window. It cannot match the title of a client, which starts with "EVE - ".
@@ -27,8 +27,18 @@ const POLL: Duration = Duration::from_millis(250);
 /// The place of the window for a character that has none of its own, and no global place.
 const DEFAULT_POS: Pos = Pos { x: 40, y: 40 };
 
+/// The title of the dummy window of the position editor. It cannot match the title of a client either.
+const EDITOR_TITLE: &str = "eve-router overlay position";
+
+/// The size of the window, in points.
+const SIZE: [f32; 2] = [260.0, 58.0];
+
 fn viewport_id() -> ViewportId {
     ViewportId::from_hash_of("routing-overlay")
+}
+
+fn editor_viewport_id() -> ViewportId {
+    ViewportId::from_hash_of("routing-overlay-editor")
 }
 
 #[derive(Default)]
@@ -38,6 +48,20 @@ pub struct Overlay {
     /// The last command that `logic` sent was `Visible(true)`.
     shown: bool,
     last_poll: Option<Instant>,
+    /// The position editor, while the user moves the dummy window.
+    editor: Option<Editor>,
+}
+
+/// The position editor: a dummy window that the user drags to the place for the overlay.
+struct Editor {
+    place: Place,
+    /// The position of the dummy window in the last pass that drew it. `None` before the first pass.
+    at: Option<Pos>,
+}
+
+/// The position of a window in the config: the corner of the window, in whole points.
+fn pos_of(corner: Pos2) -> Pos {
+    Pos { x: corner.x.round() as i32, y: corner.y.round() as i32 }
 }
 
 /// The command for a change of what the overlay wants. `None`: nothing to send.
@@ -55,9 +79,42 @@ fn here(s: &Session, route: &router_core::esi::active::ActiveRoute) -> Option<u3
 }
 
 impl Overlay {
+    /// Open the dummy window for a place. A dummy window for another place closes.
+    #[allow(dead_code, reason = "The Overlay settings page calls this in the next step.")]
+    pub fn begin_edit(&mut self, place: Place) {
+        self.editor = Some(Editor { place, at: None });
+    }
+
+    /// The place that the user moves, while the dummy window is open.
+    #[allow(dead_code, reason = "The Overlay settings page calls this in the next step.")]
+    pub fn editing(&self) -> Option<Place> {
+        self.editor.as_ref().map(|e| e.place)
+    }
+
+    /// Close the dummy window and keep the old position.
+    #[allow(dead_code, reason = "The Overlay settings page calls this in the next step.")]
+    pub fn cancel_edit(&mut self) {
+        self.editor = None;
+    }
+
+    /// Close the dummy window. The result is the place and the position of the window, for the
+    /// caller to save. A window that no pass has drawn gives `None`.
+    #[allow(dead_code, reason = "The Overlay settings page calls this in the next step.")]
+    pub fn finish_edit(&mut self) -> Option<(Place, Pos)> {
+        let editor = self.editor.take()?;
+        Some((editor.place, editor.at?))
+    }
+
     /// Read the focused window, and show or hide the overlay window. With the overlay off, or with
     /// the pilot outside the departure system of the next manual hop, no call to Windows happens.
     pub fn logic(&mut self, ctx: &Context, s: &Session) {
+        // The dummy window replaces the overlay window.
+        if self.editor.is_some() {
+            self.alive = false;
+            self.last_poll = None;
+            self.send(ctx, false, None);
+            return;
+        }
         let config = &s.cfg.routing_overlay;
         let route = s.pilots.active.as_ref().filter(|r| config.enabled && content(r, here(s, r)).is_some());
         let Some(route) = route else {
@@ -96,31 +153,63 @@ impl Overlay {
     /// wormhole or filament leaves. The window starts hidden. `logic` shows it.
     pub fn show(&mut self, ctx: &Context, s: &Session) {
         let config = &s.cfg.routing_overlay;
+        if let Some(editor) = &mut self.editor {
+            show_editor(ctx, config, editor);
+            return;
+        }
         let Some(route) = s.pilots.active.as_ref().filter(|_| config.enabled) else { return };
         let Some(content) = content(route, here(s, route)) else { return };
-        let Pos { x, y } = resolve_position(config, route.character).unwrap_or(DEFAULT_POS);
-        let builder = ViewportBuilder::default()
-            .with_title(TITLE)
-            .with_inner_size([260.0, 58.0])
-            .with_position(Pos2::new(x as f32, y as f32))
-            .with_decorations(false)
-            .with_resizable(false)
-            .with_always_on_top()
-            .with_taskbar(false)
+        let at = resolve_position(config, route.character).unwrap_or(DEFAULT_POS);
+        let builder = window_builder(TITLE, at)
             // The client keeps the focus: the window does not activate when it shows.
             .with_active(false)
             // No click-through and no transparency: both make Windows treat the window as a layered
             // window, and the window then draws nothing. `keep_focus_off` keeps the focus on the client.
             .with_visible(false);
-        ctx.show_viewport_immediate(viewport_id(), builder, |ui, _class| draw(ui, s, &content));
+        let (title, detail) = content.lines(|id| system_name(s, id));
+        ctx.show_viewport_immediate(viewport_id(), builder, |ui, _class| paint(ui, &title, &detail));
         self.alive = true;
     }
 }
 
-fn draw(ui: &mut egui::Ui, s: &Session, content: &Content) {
+/// The builder of the overlay window and of the dummy window: the same size, no frame, always on top.
+fn window_builder(title: &str, at: Pos) -> ViewportBuilder {
+    ViewportBuilder::default()
+        .with_title(title)
+        .with_inner_size(SIZE)
+        .with_position(Pos2::new(at.x as f32, at.y as f32))
+        .with_decorations(false)
+        .with_resizable(false)
+        .with_always_on_top()
+        .with_taskbar(false)
+}
+
+/// Draw the dummy window and read its position. The user drags the window with the primary button.
+fn show_editor(ctx: &Context, config: &router_core::config::RoutingOverlayConfig, editor: &mut Editor) {
+    let start = match editor.place {
+        Place::Global => config.position,
+        Place::Character(id) => resolve_position(config, id),
+    };
+    let builder = window_builder(EDITOR_TITLE, start.unwrap_or(DEFAULT_POS));
+    ctx.show_viewport_immediate(editor_viewport_id(), builder, |ui, _class| {
+        paint(ui, "Signature: ABC", "Drag to move");
+        let drag = ui.interact(ui.ctx().content_rect(), Id::new("overlay-editor-drag"), Sense::drag());
+        if drag.hovered() || drag.dragged() {
+            ui.ctx().set_cursor_icon(CursorIcon::Grab);
+        }
+        if drag.drag_started() {
+            ui.ctx().send_viewport_cmd(ViewportCommand::StartDrag);
+        }
+        if let Some(rect) = ui.ctx().input(|i| i.viewport().outer_rect) {
+            editor.at = Some(pos_of(rect.min));
+        }
+    });
+}
+
+/// Draw the two lines of the window.
+fn paint(ui: &mut egui::Ui, title: &str, detail: &str) {
     // The window is the box: the dark fill of the app, the lit line of the main window on its top
     // edge, and the text styles of the app. The window never has the focus, so the line is always lit.
-    let (title, detail) = content.lines(|id| system_name(s, id));
     let panel = Frame::new().fill(theme::BG).inner_margin(Margin { left: 12, right: 12, top: 10, bottom: 8 });
     egui::CentralPanel::default().frame(panel).show(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
@@ -156,5 +245,51 @@ mod tests {
         assert_eq!(transition(true, true, true), None);
         assert_eq!(transition(false, true, false), None);
         assert_eq!(transition(false, false, false), None);
+    }
+
+    #[test]
+    fn the_corner_of_a_window_rounds_to_whole_points() {
+        assert_eq!(pos_of(Pos2::new(40.4, 40.5)), Pos { x: 40, y: 41 });
+        assert_eq!(pos_of(Pos2::new(-12.6, 3.0)), Pos { x: -13, y: 3 });
+    }
+
+    #[test]
+    fn the_editor_gives_the_place_and_the_position_once() {
+        let mut o = Overlay::default();
+        assert_eq!(o.editing(), None);
+        o.begin_edit(Place::Character(7));
+        assert_eq!(o.editing(), Some(Place::Character(7)));
+        o.editor.as_mut().unwrap().at = Some(Pos { x: 10, y: 20 });
+        assert_eq!(o.finish_edit(), Some((Place::Character(7), Pos { x: 10, y: 20 })));
+        assert_eq!(o.editing(), None);
+        assert_eq!(o.finish_edit(), None);
+    }
+
+    #[test]
+    fn a_dummy_window_that_never_drew_gives_no_position() {
+        let mut o = Overlay::default();
+        o.begin_edit(Place::Global);
+        assert_eq!(o.finish_edit(), None);
+        assert_eq!(o.editing(), None);
+    }
+
+    #[test]
+    fn cancel_keeps_nothing() {
+        let mut o = Overlay::default();
+        o.begin_edit(Place::Global);
+        o.editor.as_mut().unwrap().at = Some(Pos { x: 1, y: 1 });
+        o.cancel_edit();
+        assert_eq!(o.editing(), None);
+        assert_eq!(o.finish_edit(), None);
+    }
+
+    #[test]
+    fn a_second_edit_replaces_the_first() {
+        let mut o = Overlay::default();
+        o.begin_edit(Place::Global);
+        o.editor.as_mut().unwrap().at = Some(Pos { x: 1, y: 1 });
+        o.begin_edit(Place::Character(9));
+        assert_eq!(o.editing(), Some(Place::Character(9)));
+        assert_eq!(o.finish_edit(), None);
     }
 }

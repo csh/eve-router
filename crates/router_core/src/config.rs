@@ -237,11 +237,20 @@ impl EveMetroConfig {
     }
 }
 
-/// A place on the desktop, in screen pixels.
+/// A place on the desktop, in logical points: the unit of the window positions of egui. On a
+/// monitor with a scale of 100% a point is a pixel.
 #[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Pos {
     pub x: i32,
     pub y: i32,
+}
+
+/// Whose position of the overlay the user sets.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Place {
+    /// The position of each character that has no position of its own.
+    Global,
+    Character(u64),
 }
 
 /// The routing overlay: a small window above the game that shows the signature of the next
@@ -262,6 +271,23 @@ impl RoutingOverlayConfig {
     /// True for the settings of a new file. The file leaves them out.
     pub fn is_default(&self) -> bool {
         *self == Self::default()
+    }
+
+    /// The position that the user set for this place. A character with no position of its own gives `None`.
+    pub fn position_of(&self, place: Place) -> Option<Pos> {
+        match place {
+            Place::Global => self.position,
+            Place::Character(id) => self.characters.get(&id).copied(),
+        }
+    }
+
+    /// Set the position for a place. `None` resets it: a character then uses the global position.
+    pub fn set_position(&mut self, place: Place, pos: Option<Pos>) {
+        match (place, pos) {
+            (Place::Global, pos) => self.position = pos,
+            (Place::Character(id), Some(pos)) => _ = self.characters.insert(id, pos),
+            (Place::Character(id), None) => _ = self.characters.remove(&id),
+        }
     }
 }
 
@@ -475,6 +501,23 @@ mod tests {
         assert!(text.contains(r#""2112345678":{"x":1,"y":2}"#), "{text}");
         let back: Config = serde_json::from_str(&text).unwrap();
         assert_eq!(back.routing_overlay, cfg.routing_overlay);
+    }
+
+    #[test]
+    fn a_position_is_set_and_reset_for_a_place() {
+        let mut config = RoutingOverlayConfig::default();
+        let a = Pos { x: 1, y: 2 };
+        let b = Pos { x: 3, y: 4 };
+        config.set_position(Place::Global, Some(a));
+        config.set_position(Place::Character(7), Some(b));
+        assert_eq!(config.position_of(Place::Global), Some(a));
+        assert_eq!(config.position_of(Place::Character(7)), Some(b));
+        // A character with no position of its own reads `None`. The global position is a fallback of the router.
+        assert_eq!(config.position_of(Place::Character(8)), None);
+        config.set_position(Place::Character(7), None);
+        assert_eq!(config.position_of(Place::Character(7)), None);
+        config.set_position(Place::Global, None);
+        assert!(config.is_default(), "{config:?}");
     }
 
     #[test]

@@ -49,7 +49,6 @@ enum State {
 
 pub struct RouterApp {
     state: State,
-    overlay: crate::overlay::Overlay,
 }
 
 /// The quiet time after the last change of a dragged value, before the app searches and saves.
@@ -91,7 +90,7 @@ impl RouterApp {
             let _ = tx.send(LoadMsg::Done(Box::new(result)));
             ctx.request_repaint();
         });
-        RouterApp { state: State::Loading(Loading { rx, step: None }), overlay: Default::default() }
+        RouterApp { state: State::Loading(Loading { rx, step: None }) }
     }
 
     /// Take the load result, if the thread sent it.
@@ -727,6 +726,13 @@ impl Session {
         self.save();
     }
 
+    /// Set the position of the routing overlay for a place, and save it. `None` resets the position.
+    #[allow(dead_code, reason = "The Overlay settings page calls this in the next step.")]
+    pub fn set_overlay_position(&mut self, place: router_core::config::Place, pos: Option<router_core::config::Pos>) {
+        self.cfg.routing_overlay.set_position(place, pos);
+        self.save();
+    }
+
     /// Apply the theme and compact mode from config to the egui context.
     pub fn apply_theme(&self, ctx: &egui::Context) {
         theme::apply(ctx, self.faction_theme(), self.cfg.compact);
@@ -743,8 +749,8 @@ impl eframe::App for RouterApp {
     /// eframe calls this before each `ui`, and also while the main window is minimized. The overlay
     /// reads the focused window here, so it works with the router window out of sight.
     fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        if let State::Ready(session, _) = &self.state {
-            self.overlay.logic(ctx, session);
+        if let State::Ready(session, view) = &mut self.state {
+            view.overlay.logic(ctx, session);
         }
     }
 
@@ -766,7 +772,7 @@ impl eframe::App for RouterApp {
             State::Failed(e) => crate::view::splash(ui, Some(e), None),
             State::Ready(session, view) => {
                 view.show(ui, session);
-                self.overlay.show(ui.ctx(), session);
+                view.overlay.show(ui.ctx(), session);
             }
         }
         crate::chrome::drag_through_modal(ui.ctx());
@@ -1271,7 +1277,7 @@ mod tests {
     fn a_lost_load_thread_shows_an_error() {
         let (tx, rx) = mpsc::channel::<LoadMsg>();
         drop(tx);
-        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), overlay: Default::default() };
+        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }) };
         app.poll(&egui::Context::default());
         let State::Failed(text) = &app.state else { panic!("the state is not Failed") };
         assert_eq!(text, LOAD_STOPPED);
@@ -1280,7 +1286,7 @@ mod tests {
     #[test]
     fn the_splash_keeps_the_newest_step() {
         let (tx, rx) = mpsc::channel::<LoadMsg>();
-        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), overlay: Default::default() };
+        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }) };
         tx.send(LoadMsg::Progress(startup::Progress::CheckingSde)).unwrap();
         tx.send(LoadMsg::Progress(startup::Progress::DownloadingSde { done: 5, total: 10 })).unwrap();
         app.poll(&egui::Context::default());
@@ -1384,6 +1390,24 @@ mod tests {
         let saved = Config::load(&s.cfg_path).unwrap();
         assert_eq!(saved.favourites, Some(vec!["Rens".to_string()]));
         assert_eq!(saved.capital.as_deref(), Some("JK-Q77"));
+        std::fs::remove_file(&s.cfg_path).unwrap();
+    }
+
+    #[test]
+    fn the_overlay_position_is_saved_and_reset() {
+        use router_core::config::{Place, Pos};
+        let (mut s, _tmp) = session();
+        let _ = std::fs::remove_file(&s.cfg_path);
+        let here = Pos { x: 120, y: -30 };
+        s.set_overlay_position(Place::Character(7), Some(here));
+        s.set_overlay_position(Place::Global, Some(Pos { x: 5, y: 6 }));
+        let saved = Config::load(&s.cfg_path).unwrap().routing_overlay;
+        assert_eq!(saved.position_of(Place::Character(7)), Some(here));
+        assert_eq!(saved.position_of(Place::Global), Some(Pos { x: 5, y: 6 }));
+        s.set_overlay_position(Place::Character(7), None);
+        let saved = Config::load(&s.cfg_path).unwrap().routing_overlay;
+        assert_eq!(saved.position_of(Place::Character(7)), None);
+        assert_eq!(saved.position_of(Place::Global), Some(Pos { x: 5, y: 6 }));
         std::fs::remove_file(&s.cfg_path).unwrap();
     }
 }

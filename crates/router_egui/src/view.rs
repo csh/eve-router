@@ -118,6 +118,8 @@ pub struct View {
     /// True if the pilot opened the waypoint list, false if the pilot closed it. With `None`, the
     /// list is open until the first route shows, so the route gets the room.
     waypoints_open: Option<bool>,
+    /// The routing overlay. It lives here, because the settings window sets its position.
+    pub overlay: crate::overlay::Overlay,
 }
 
 /// A change of the avoid list, or a closed wormhole, from the context menu of a route step.
@@ -148,6 +150,7 @@ impl View {
             toaster: Toaster::default(),
             pilots: PilotsUi::default(),
             waypoints_open: None,
+            overlay: Default::default(),
         }
     }
 
