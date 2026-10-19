@@ -322,8 +322,22 @@ pub struct Config {
     /// Compact UI layout with tighter row heights and padding.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compact: bool,
+    /// Whether the app looks for a new version at the start. `None` gives on.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub check_for_updates: Option<bool>,
+    /// Install a new version at the start with no question. It has effect only while
+    /// `check_for_updates` is on.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub auto_update: bool,
     #[serde(skip_serializing_if = "RoutingOverlayConfig::is_default")]
     pub routing_overlay: RoutingOverlayConfig,
+}
+
+impl Config {
+    /// Whether the app looks for a new version at the start.
+    pub fn checks_for_updates(&self) -> bool {
+        self.check_for_updates.unwrap_or(true)
+    }
 }
 
 /// The Photon UI faction theme presets.
@@ -467,12 +481,27 @@ mod tests {
             pochven: true,
             theme: None,
             compact: false,
+            check_for_updates: Some(false),
+            auto_update: true,
             routing_overlay: RoutingOverlayConfig::default(),
         };
         let text = serde_json::to_string_pretty(&cfg).unwrap();
         crate::assert_snapshot!("config_json", text);
         let back: Config = serde_json::from_str(&text).unwrap();
         assert_eq!(serde_json::to_string_pretty(&back).unwrap(), text);
+    }
+
+    /// An old file has no update fields: the check is on and the install asks. The defaults
+    /// stay out of a new file.
+    #[test]
+    fn the_update_settings_default_to_check_and_ask() {
+        let cfg: Config = serde_json::from_str("{}").unwrap();
+        assert!(cfg.checks_for_updates());
+        assert!(!cfg.auto_update);
+        let text = serde_json::to_string(&cfg).unwrap();
+        assert!(!text.contains("check_for_updates") && !text.contains("auto_update"), "{text}");
+        let off: Config = serde_json::from_str(r#"{"check_for_updates":false}"#).unwrap();
+        assert!(!off.checks_for_updates());
     }
 
     /// A new file has no routing overlay entry. Set values survive a round trip, and the

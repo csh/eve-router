@@ -447,13 +447,16 @@ pub enum Page {
     #[cfg(windows)]
     Overlay,
     Engine,
+    /// The version check at the start, and the install.
+    Updates,
 }
 
 impl Page {
     #[cfg(windows)]
-    pub const ALL: [Page; 7] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Pochven, Page::Ansiblex, Page::Overlay, Page::Engine];
+    pub const ALL: [Page; 8] =
+        [Page::Favourites, Page::Theme, Page::Wormholes, Page::Pochven, Page::Ansiblex, Page::Overlay, Page::Engine, Page::Updates];
     #[cfg(not(windows))]
-    pub const ALL: [Page; 6] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Pochven, Page::Ansiblex, Page::Engine];
+    pub const ALL: [Page; 7] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Pochven, Page::Ansiblex, Page::Engine, Page::Updates];
 
     pub fn label(self) -> &'static str {
         match self {
@@ -465,6 +468,7 @@ impl Page {
             #[cfg(windows)]
             Page::Overlay => "Overlay",
             Page::Engine => "Engine",
+            Page::Updates => "Updates",
         }
     }
 }
@@ -477,9 +481,9 @@ fn group(ui: &mut Ui, text: &str) {
 
 /// The note of the Settings window while a route is active. The pages that do not change a route stay editable.
 const LOCK_NOTE: &str = if cfg!(windows) {
-    "Routing settings are locked while a route is active. Favourites, Theme and Overlay stay editable."
+    "Routing settings are locked while a route is active. Favourites, Theme, Overlay and Updates stay editable."
 } else {
-    "Routing settings are locked while a route is active. Favourites and Theme stay editable."
+    "Routing settings are locked while a route is active. Favourites, Theme and Updates stay editable."
 };
 
 fn settings(
@@ -545,6 +549,7 @@ fn settings(
                 #[cfg(windows)]
                 Page::Overlay => {}
                 Page::Engine => engine_page(ui, form, s, locked),
+                Page::Updates => updates_page(ui, s),
             });
         });
     });
@@ -634,6 +639,26 @@ fn theme_page(ui: &mut Ui, s: &mut Session) {
                 s.set_compact_mode(compact, ui.ctx());
             }
         });
+        ui.end_row();
+    });
+}
+
+/// The update settings. A change applies at the next start, and it needs no route recompute.
+fn updates_page(ui: &mut Ui, s: &mut Session) {
+    egui::Grid::new("settings-updates").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        label(ui, "Check for updates");
+        let mut check = s.cfg.checks_for_updates();
+        if ui.app_checkbox(&mut check, "").changed() {
+            s.cfg.check_for_updates = Some(check);
+            s.save();
+        }
+        ui.end_row();
+        label(ui, "Install updates automatically");
+        let row = ui.add_enabled_ui(s.cfg.checks_for_updates(), |ui| ui.app_checkbox(&mut s.cfg.auto_update, "").changed());
+        row.response.on_disabled_hover_text("Checking for updates must be enabled.");
+        if row.inner {
+            s.save();
+        }
         ui.end_row();
     });
 }
