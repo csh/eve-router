@@ -37,6 +37,8 @@ pub struct Hull {
     pub filament_ok: bool,
     /// False: the SDE lists the hull as unable to pass a wormhole, whatever its mass.
     pub wormhole_ok: bool,
+    /// False: the SDE sets `disallowInHighSec` on the hull, so it cannot enter highsec.
+    pub highsec_ok: bool,
 }
 
 impl Hull {
@@ -61,17 +63,29 @@ pub struct HullTable {
 /// GJ in one TJ. The SDE gives capacitor values in GJ.
 const GJ_PER_TJ: f64 = 1000.0;
 
+/// The SDE access rules of a ship. A group keeps a rule only if every ship in it does.
+#[derive(Clone, Copy)]
+struct Access {
+    filament_ok: bool,
+    wormhole_ok: bool,
+    highsec_ok: bool,
+}
+
+impl Access {
+    fn and(self, other: Access) -> Access {
+        Access {
+            filament_ok: self.filament_ok && other.filament_ok,
+            wormhole_ok: self.wormhole_ok && other.wormhole_ok,
+            highsec_ok: self.highsec_ok && other.highsec_ok,
+        }
+    }
+}
+
 impl HullTable {
     fn new(data: ShipData) -> Self {
         let max_mass = data.ansiblex.max_jump_mass_kg;
         let gate_capacitor_tj = (data.ansiblex.capacitor_gj / GJ_PER_TJ) as f32;
-        let hull = |type_id: Option<u32>,
-                    name: String,
-                    group: String,
-                    result: Result<f32, Ban>,
-                    mass_kg: Option<f64>,
-                    filament_ok: bool,
-                    wormhole_ok: bool| {
+        let hull = |type_id: Option<u32>, name: String, group: String, result: Result<f32, Ban>, mass_kg: Option<f64>, access: Access| {
             let base_tj = result.as_ref().ok().copied();
             Arc::new(Hull {
                 type_id,
@@ -81,8 +95,9 @@ impl HullTable {
                 base_cap_pct: base_tj.map(|tj| tj / gate_capacitor_tj * 100.0),
                 ban: result.err(),
                 mass_kg,
-                filament_ok,
-                wormhole_ok,
+                filament_ok: access.filament_ok,
+                wormhole_ok: access.wormhole_ok,
+                highsec_ok: access.highsec_ok,
             })
         };
         // A ship needs a bridge cost, and its mass must not be more than the gate limit.
@@ -91,30 +106,28 @@ impl HullTable {
             (Some(_), Some(m)) if m > max_mass => Err(Ban::TooHeavy { max_mass_kg: max_mass }),
             (Some(c), _) => Ok((c / GJ_PER_TJ) as f32),
         };
-        let mut groups: BTreeMap<String, (Option<f64>, Option<f64>, bool, bool)> = BTreeMap::new();
+        let mut groups: BTreeMap<String, (Option<f64>, Option<f64>, Access)> = BTreeMap::new();
         let ships = data
             .ships
             .into_iter()
             .map(|s| {
-                // A group gets the highest cost and the highest mass of its ships, and is
-                // filament-eligible and wormhole-eligible only if every one of its ships is (they
-                // always agree, since the SDE ban lists work by group).
-                let g = groups.entry(s.group.clone()).or_insert((s.bridge_cost_gj, s.mass_kg, s.filament_ok, s.wormhole_ok));
+                // A group gets the highest cost and the highest mass of its ships, and keeps an
+                // access rule only if every one of its ships does (they always agree, since the
+                // SDE rules work by group).
+                let access = Access { filament_ok: s.filament_ok, wormhole_ok: s.wormhole_ok, highsec_ok: s.highsec_ok };
+                let g = groups.entry(s.group.clone()).or_insert((s.bridge_cost_gj, s.mass_kg, access));
                 g.0 = g.0.zip(s.bridge_cost_gj).map(|(a, b)| a.max(b));
                 g.1 = match (g.1, s.mass_kg) {
                     (Some(a), Some(b)) => Some(a.max(b)),
                     (a, b) => a.or(b),
                 };
-                g.2 &= s.filament_ok;
-                g.3 &= s.wormhole_ok;
-                hull(Some(s.type_id), s.name, s.group, check(s.bridge_cost_gj, s.mass_kg), s.mass_kg, s.filament_ok, s.wormhole_ok)
+                g.2 = g.2.and(access);
+                hull(Some(s.type_id), s.name, s.group, check(s.bridge_cost_gj, s.mass_kg), s.mass_kg, access)
             })
             .collect();
         let groups = groups
             .into_iter()
-            .map(|(name, (cost, mass, filament_ok, wormhole_ok))| {
-                hull(None, name.clone(), name, check(cost, mass), mass, filament_ok, wormhole_ok)
-            })
+            .map(|(name, (cost, mass, access))| hull(None, name.clone(), name, check(cost, mass), mass, access))
             .collect();
         HullTable { ships, groups, gate_capacitor_tj }
     }

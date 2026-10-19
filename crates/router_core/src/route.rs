@@ -49,6 +49,17 @@ pub fn hull_allows_wormhole(hull: Option<&Hull>) -> bool {
     hull.is_none_or(|h| h.wormhole_ok)
 }
 
+/// True if the hull can enter highsec. No hull set: allow it. `Hull::highsec_ok` comes from the
+/// SDE attribute `disallowInHighSec` (capital ships except Freighters and Jump Freighters).
+pub fn hull_allows_highsec(hull: Option<&Hull>) -> bool {
+    hull.is_none_or(|h| h.highsec_ok)
+}
+
+/// True if the system is in highsec.
+fn is_highsec(uni: &Universe, node: NodeIndex) -> bool {
+    band(uni.system(node).security) == Band::High
+}
+
 /// The cost that each link of a route found earlier adds while the search looks for another route.
 const REUSE_COST: u64 = JUMP / 2;
 
@@ -278,22 +289,29 @@ impl<'a> Router<'a> {
         let hull_kg = rules.hull.as_ref().and_then(|h| h.mass_kg);
         let filament_hull_ok = hull_allows_filament(rules.hull.as_deref());
         let wormhole_hull_ok = hull_allows_wormhole(rules.hull.as_deref());
+        let highsec_hull_ok = hull_allows_highsec(rules.hull.as_deref());
         let edge_ok = graph
             .raw_edges()
             .par_iter()
-            .map(|e| match &e.weight {
-                Link::Stargate => true,
-                // The Pochven switch also gates a wormhole with an end in Pochven (the EVE Metro
-                // map): the switch means "allow Pochven", not "allow a filament only".
-                Link::Wormhole(w) => {
-                    wormholes
-                        && wormhole_hull_ok
-                        && hubs.allows(w)
-                        && w.usable(now, hull_kg)
-                        && (clades.pochven || !in_pochven(uni, e.source(), e.target()))
+            .map(|e| {
+                // A hull that cannot enter highsec cannot use a link with an end there.
+                if !highsec_hull_ok && (is_highsec(uni, e.source()) || is_highsec(uni, e.target())) {
+                    return false;
                 }
-                Link::JumpBridge => bridges && rules.allowed(uni, e.target()),
-                Link::Filament(f) => clades.allows(f.clade) && filament_hull_ok,
+                match &e.weight {
+                    Link::Stargate => true,
+                    // The Pochven switch also gates a wormhole with an end in Pochven (the EVE Metro
+                    // map): the switch means "allow Pochven", not "allow a filament only".
+                    Link::Wormhole(w) => {
+                        wormholes
+                            && wormhole_hull_ok
+                            && hubs.allows(w)
+                            && w.usable(now, hull_kg)
+                            && (clades.pochven || !in_pochven(uni, e.source(), e.target()))
+                    }
+                    Link::JumpBridge => bridges && rules.allowed(uni, e.target()),
+                    Link::Filament(f) => clades.allows(f.clade) && filament_hull_ok,
+                }
             })
             .collect();
         // A bridge jump with a hull costs more as it uses more of the gate capacitor.
@@ -1299,17 +1317,57 @@ mod tests {
     #[test]
     fn a_supercarrier_is_blocked_by_a_wormhole_it_fits() {
         let mut uni = universe().clone();
-        let (jita, amarr) = (uni.system(node("Jita")).id, uni.system(node("Amarr")).id);
-        let capital = Wormhole { size: Some(Size::Capital), ..hole(jita, amarr) };
+        let (a, b) = (uni.system(node("Tama")).id, uni.system(node("Rancer")).id);
+        let capital = Wormhole { size: Some(Size::Capital), ..hole(a, b) };
         uni.add_wormholes(&[capital]);
-        let (from, to) = (uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap());
+        let (from, to) = (uni.exact("Tama").unwrap(), uni.exact("Rancer").unwrap());
         let route = |hull: &str| {
             let rules = BridgeRules { capital: None, hull: hulls().find(hull), max_cap: None };
             let options = RouterOptions { rules, unknown_sig_penalty: 0, ..Default::default() };
-            Router::new(&uni, options).routes(&[from, to], 1).unwrap().remove(0).wormholes
+            Router::new(&uni, options).routes(&[from, to], 1).map_or(0, |mut r| r.remove(0).wormholes)
         };
         assert_eq!(route("Dreadnought"), 1);
         assert_eq!(route("Supercarrier"), 0);
         assert_eq!(route("Titan"), 0);
+    }
+
+    /// The SDE attribute `disallowInHighSec` bans eight capital groups from highsec. Freighters and
+    /// Jump Freighters stay off the list.
+    #[test]
+    fn capital_hulls_cannot_enter_highsec() {
+        let banned = [
+            "Capital Industrial Ship",
+            "Carrier",
+            "Command Carrier",
+            "Dreadnought",
+            "Lancer Dreadnought",
+            "Force Auxiliary",
+            "Supercarrier",
+            "Titan",
+        ];
+        for group in banned {
+            let hull = hulls().find(group).unwrap_or_else(|| panic!("no hull group named {group:?}"));
+            assert!(!hull_allows_highsec(Some(&hull)), "{group} is not banned");
+        }
+        for group in ["Freighter", "Jump Freighter", "Black Ops", "Battleship", "Deep Space Transport"] {
+            let hull = hulls().find(group).unwrap_or_else(|| panic!("no hull group named {group:?}"));
+            assert!(hull_allows_highsec(Some(&hull)), "{group} is wrongly banned");
+        }
+        assert!(hull_allows_highsec(None));
+    }
+
+    /// Jita and Perimeter are highsec, so a hull that cannot enter highsec has no route.
+    #[test]
+    fn a_dreadnought_has_no_route_through_highsec() {
+        let uni = universe();
+        let route = |hull: &str| {
+            let rules = BridgeRules { capital: None, hull: hulls().find(hull), max_cap: None };
+            let options = RouterOptions { rules, ..Default::default() };
+            Router::new(uni, options).routes(&[node("Jita"), node("Perimeter")], 1)
+        };
+        assert!(route("Dreadnought").is_err());
+        assert!(route("Titan").is_err());
+        assert!(route("Freighter").is_ok());
+        assert!(route("Rifter").is_ok());
     }
 }

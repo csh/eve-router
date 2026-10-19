@@ -17,7 +17,7 @@ pub const FILE: &str = "ships.json";
 /// The shape of `ships.json`. Bump this when a field's meaning changes, so `sde_update` makes
 /// the file again even when the SDE build number does not change. A ship with no bridge cost
 /// or no mass still deserializes, so only a true shape change needs a bump.
-pub const SCHEMA: u32 = 2;
+pub const SCHEMA: u32 = 3;
 
 /// The SDE files that the table comes from.
 pub const SOURCES: [&str; 4] = ["types.jsonl", "typeDogma.jsonl", "groups.jsonl", "typeLists.jsonl"];
@@ -30,6 +30,8 @@ const ATTR_BRIDGE_COST: u32 = 6364;
 const ATTR_CAPACITOR: u32 = 482;
 /// `rechargeRate`, in ms.
 const ATTR_RECHARGE: u32 = 55;
+/// `disallowInHighSec`. A ship with the value 1 cannot enter highsec.
+const ATTR_DISALLOW_HIGHSEC: u32 = 1970;
 /// `gateMaxJumpMass`, in kg.
 const ATTR_MAX_JUMP_MASS: u32 = 2798;
 /// The `typeLists.jsonl` entry of the ship groups that cannot activate a Triglavian filament.
@@ -72,6 +74,10 @@ pub struct ShipRow {
     /// again at the next SDE update, and the mass check still applies until then.
     #[serde(default = "default_true")]
     pub wormhole_ok: bool,
+    /// False: the SDE sets `disallowInHighSec` on the ship, so it cannot enter highsec.
+    /// A `ships.json` from before this field defaults to true, as for `wormhole_ok`.
+    #[serde(default = "default_true")]
+    pub highsec_ok: bool,
 }
 
 fn default_true() -> bool {
@@ -206,6 +212,7 @@ pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, SdeError> {
                 bridge_cost_gj: src.attr(t.id, ATTR_BRIDGE_COST),
                 filament_ok: !filament_banned_groups.contains(&t.group_id),
                 wormhole_ok: !wormhole_banned_groups.contains(&t.group_id),
+                highsec_ok: src.attr(t.id, ATTR_DISALLOW_HIGHSEC).unwrap_or(0.0) == 0.0,
             })
         })
         .collect();
