@@ -44,47 +44,23 @@ pub fn link_color(hop: Hop) -> Color32 {
 /// The fill of a stop row in the route table, and of a hovered row.
 pub const ROW_FILL: Color32 = Color32::from_rgb(0x10, 0x12, 0x13);
 
-/// The Photon UI faction theme presets.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub enum FactionTheme {
-    #[default]
-    Caldari,
-    Amarr,
-    Gallente,
-    Minmatar,
+pub use router_core::config::FactionTheme;
+
+/// The colors of a faction theme.
+pub trait FactionColors {
+    fn accent(self) -> Color32;
+    fn selection_bg(self) -> Color32;
+    fn hovered_bg(self) -> Color32;
+    /// The 1 px line of a button at rest: a dark accent. A button has no fill at rest, as in Rift.
+    fn button_border(self) -> Color32;
+    /// The line of a hovered button: the light accent.
+    fn button_border_hover(self) -> Color32;
+    fn active_bg(self) -> Color32;
+    fn open_bg(self) -> Color32;
 }
 
-impl FactionTheme {
-    pub const ALL: [FactionTheme; 4] = [FactionTheme::Caldari, FactionTheme::Amarr, FactionTheme::Gallente, FactionTheme::Minmatar];
-
-    pub fn name(self) -> &'static str {
-        match self {
-            FactionTheme::Caldari => "caldari",
-            FactionTheme::Amarr => "amarr",
-            FactionTheme::Gallente => "gallente",
-            FactionTheme::Minmatar => "minmatar",
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            FactionTheme::Caldari => "Caldari",
-            FactionTheme::Amarr => "Amarr",
-            FactionTheme::Gallente => "Gallente",
-            FactionTheme::Minmatar => "Minmatar",
-        }
-    }
-
-    pub fn from_name(name: &str) -> Self {
-        match name.trim().to_lowercase().as_str() {
-            "amarr" => FactionTheme::Amarr,
-            "gallente" => FactionTheme::Gallente,
-            "minmatar" => FactionTheme::Minmatar,
-            _ => FactionTheme::Caldari,
-        }
-    }
-
-    pub fn accent(self) -> Color32 {
+impl FactionColors for FactionTheme {
+    fn accent(self) -> Color32 {
         match self {
             FactionTheme::Caldari => Color32::from_rgb(0x58, 0xA7, 0xBF),
             FactionTheme::Amarr => Color32::from_rgb(0xE5, 0xA9, 0x3C),
@@ -93,7 +69,7 @@ impl FactionTheme {
         }
     }
 
-    pub fn selection_bg(self) -> Color32 {
+    fn selection_bg(self) -> Color32 {
         match self {
             FactionTheme::Caldari => Color32::from_rgb(0x35, 0x58, 0x66),
             FactionTheme::Amarr => Color32::from_rgb(0x3D, 0x2E, 0x15),
@@ -102,7 +78,7 @@ impl FactionTheme {
         }
     }
 
-    pub fn hovered_bg(self) -> Color32 {
+    fn hovered_bg(self) -> Color32 {
         match self {
             FactionTheme::Caldari => Color32::from_rgb(0x13, 0x1C, 0x1F),
             FactionTheme::Amarr => Color32::from_rgb(0x2A, 0x20, 0x12),
@@ -111,21 +87,19 @@ impl FactionTheme {
         }
     }
 
-    /// The 1 px line of a button at rest: a dark accent. A button has no fill at rest, as in Rift.
-    pub fn button_border(self) -> Color32 {
+    fn button_border(self) -> Color32 {
         mix(Color32::BLACK, self.accent(), 0.35)
     }
 
-    /// The line of a hovered button: the light accent.
-    pub fn button_border_hover(self) -> Color32 {
+    fn button_border_hover(self) -> Color32 {
         accent_light_of(self.accent())
     }
 
-    pub fn active_bg(self) -> Color32 {
+    fn active_bg(self) -> Color32 {
         self.selection_bg()
     }
 
-    pub fn open_bg(self) -> Color32 {
+    fn open_bg(self) -> Color32 {
         match self {
             FactionTheme::Caldari => Color32::from_rgb(0x0F, 0x17, 0x1A),
             FactionTheme::Amarr => Color32::from_rgb(0x20, 0x18, 0x10),

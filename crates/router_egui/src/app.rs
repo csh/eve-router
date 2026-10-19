@@ -653,12 +653,12 @@ impl Session {
 
     /// The active faction theme.
     pub fn faction_theme(&self) -> theme::FactionTheme {
-        self.cfg.theme.as_deref().map(theme::FactionTheme::from_name).unwrap_or_default()
+        self.cfg.theme.unwrap_or_default()
     }
 
     /// Set and apply a faction theme.
     pub fn set_faction_theme(&mut self, theme: theme::FactionTheme, ctx: &egui::Context) {
-        self.cfg.theme = Some(theme.name().to_string());
+        self.cfg.theme = Some(theme);
         theme::apply(ctx, theme, self.cfg.compact);
         self.save();
     }

@@ -274,12 +274,47 @@ pub struct Config {
     /// The Thera and Turnur switches. Both are on in a file without them.
     pub eve_scout: Hubs,
     pub clades: Clades,
-    /// The Photon UI faction theme: "caldari", "amarr", "gallente", "minmatar".
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub theme: Option<String>,
+    /// The Photon UI faction theme. A name that is not known loads as no theme.
+    #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_theme")]
+    pub theme: Option<FactionTheme>,
     /// Compact UI layout with tighter row heights and padding.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compact: bool,
+}
+
+/// The Photon UI faction theme presets.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum FactionTheme {
+    #[default]
+    Caldari,
+    Amarr,
+    Gallente,
+    Minmatar,
+}
+
+impl FactionTheme {
+    pub const ALL: [FactionTheme; 4] = [FactionTheme::Caldari, FactionTheme::Amarr, FactionTheme::Gallente, FactionTheme::Minmatar];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            FactionTheme::Caldari => "Caldari",
+            FactionTheme::Amarr => "Amarr",
+            FactionTheme::Gallente => "Gallente",
+            FactionTheme::Minmatar => "Minmatar",
+        }
+    }
+
+    /// The theme for a name, in any case. An unknown name gives `None`.
+    pub fn parse(name: &str) -> Option<FactionTheme> {
+        Self::ALL.into_iter().find(|t| t.label().eq_ignore_ascii_case(name.trim()))
+    }
+}
+
+/// An old or edited file can hold a theme name that this version does not know. The file still
+/// loads, and the app uses the default theme.
+fn lenient_theme<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<FactionTheme>, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.and_then(|name| FactionTheme::parse(&name)))
 }
 
 /// Why a value of the config or of a settings field is not valid.
@@ -407,6 +442,18 @@ mod tests {
         // The default file next to the config file.
         fs::write(&default, "").unwrap();
         assert_eq!(overlay_path(&cfg_path, BRIDGES_FILE), Some(default));
+    }
+
+    #[test]
+    fn the_theme_loads_from_an_old_file() {
+        let load = |json: &str| serde_json::from_str::<Config>(json).unwrap().theme;
+        assert_eq!(load(r#"{"theme": "amarr"}"#), Some(FactionTheme::Amarr));
+        assert_eq!(load(r#"{"theme": " Minmatar "}"#), Some(FactionTheme::Minmatar));
+        // A name that is not known gives the default theme, and the file still loads.
+        assert_eq!(load(r#"{"theme": "sansha"}"#), None);
+        assert_eq!(load(r#"{}"#), None);
+        let cfg = Config { theme: Some(FactionTheme::Gallente), ..Config::default() };
+        assert!(serde_json::to_string(&cfg).unwrap().contains(r#""theme":"gallente""#));
     }
 
     #[test]
