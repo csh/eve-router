@@ -932,28 +932,38 @@ fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay
     }
     let editing = overlay.editing();
     // The columns are narrow, so the name column has room for a long name.
-    let extra = [("Position", Column::exact(64.0)), ("", Column::exact(72.0)), ("", Column::exact(176.0))];
+    let extra = [("Position", Column::exact(72.0)), ("", Column::exact(176.0))];
+    // The overlay cannot show above a fullscreen client. The table warns at the name.
+    let warnings: Vec<(u64, bool)> = pilots.iter().map(|p| (p.id, may_be_fullscreen(overlay.display_mode(&p.name)))).collect();
+    let fullscreen = |pilot: &PilotView| warnings.iter().any(|&(id, warn)| id == pilot.id && warn);
     character_table(
         ui,
         "overlay-characters",
         &pilots,
         portraits,
         &extra,
-        |pilot| editing == Some(Place::Character(pilot.id)),
+        |pilot| RowLook {
+            selected: editing == Some(Place::Character(pilot.id)),
+            warning: fullscreen(pilot).then_some("A fullscreen client hides the overlay. Use windowed or borderless mode."),
+        },
         |ui, pilot, column| match column {
             0 => match s.cfg.routing_overlay.position_of(Place::Character(pilot.id)) {
                 Some(_) => _ = ui.label(RichText::new("Personal").color(theme::TEXT)),
                 None => _ = ui.label(dim("Global")),
             },
-            1 => {
-                if may_be_fullscreen(overlay.display_mode(&pilot.name)) {
-                    ui.label(RichText::new("Fullscreen").color(theme::WARN))
-                        .on_hover_text("This client may run in fullscreen mode. A fullscreen client hides the overlay. Use the windowed or the borderless mode.");
-                }
-            }
             _ => position_buttons(ui, s, overlay, Place::Character(pilot.id)),
         },
     );
+}
+
+/// The look of a row of a table of characters.
+#[derive(Default)]
+struct RowLook {
+    /// The row has the selected look.
+    selected: bool,
+    /// The text of a warning. A row with a warning shows a warning icon before the name, the name in
+    /// the warning color, and the text as the tooltip of both.
+    warning: Option<&'static str>,
 }
 
 /// The row height of a table of characters.
@@ -964,15 +974,14 @@ const NAME_GAP: f32 = 8.0;
 
 /// A table of the linked characters: the portrait and the name, then the columns of `extra`. Each
 /// has a header text and a width. `cell` draws one cell of `extra` for a character, by the index
-/// in `extra`. A row that `selected` is true for has the selected look. The table takes the height
-/// that is left, and scrolls.
+/// in `extra`. `look` gives the look of a row. The table takes the height that is left, and scrolls.
 fn character_table(
     ui: &mut Ui,
     id_salt: &str,
     pilots: &[PilotView],
     portraits: &mut Portraits,
     extra: &[(&str, egui_extras::Column)],
-    selected: impl Fn(&PilotView) -> bool,
+    look: impl Fn(&PilotView) -> RowLook,
     mut cell: impl FnMut(&mut Ui, &PilotView, usize),
 ) {
     use egui_extras::Column;
@@ -997,14 +1006,28 @@ fn character_table(
         .body(|body| {
             body.rows(CHARACTER_ROW, pilots.len(), |mut row| {
                 let pilot = &pilots[row.index()];
-                let is_selected = selected(pilot);
+                let RowLook { selected: is_selected, warning: warn } = look(pilot);
                 row.set_selected(is_selected);
                 row.col(|ui| _ = pilot_portrait(ui, portraits, pilot, 32.0));
                 row.col(|ui| {
-                    let color = if is_selected { Color32::WHITE } else { theme::TEXT };
+                    let color = match (warn, is_selected) {
+                        (Some(_), _) => theme::WARN,
+                        (None, true) => Color32::WHITE,
+                        (None, false) => theme::TEXT,
+                    };
                     // A long name ends with "…" a few points before the next column, not at its edge.
                     ui.set_max_width((ui.available_width() - NAME_GAP).max(0.0));
-                    ui.add(egui::Label::new(RichText::new(&pilot.name).color(color)).truncate());
+                    let name = ui
+                        .horizontal(|ui| {
+                            if warn.is_some() {
+                                ui.label(RichText::new(icons::WARNING.as_str()).color(theme::WARN));
+                            }
+                            ui.add(egui::Label::new(RichText::new(&pilot.name).color(color)).truncate());
+                        })
+                        .response;
+                    if let Some(text) = warn {
+                        name.on_hover_text(text);
+                    }
                 });
                 for column in 0..extra.len() {
                     row.col(|ui| cell(ui, pilot, column));
@@ -1106,7 +1129,7 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
         &pilots,
         portraits,
         &extra,
-        |pilot| picked == Some(pilot.id),
+        |pilot| RowLook { selected: picked == Some(pilot.id), ..Default::default() },
         |ui, pilot, column| match column {
             0 => {
                 let (text, color) = pilot_status(pilot);
@@ -1597,6 +1620,25 @@ mod tests {
         assert_eq!(s.cfg.routing_overlay.position_of(Place::Global), Some(Pos { x: 10, y: 20 }));
         assert_eq!(s.cfg.routing_overlay.position_of(Place::Character(2)), Some(Pos { x: -5, y: 7 }));
         assert_eq!(overlay.editing(), Some(Place::Character(1)));
+    }
+
+    #[test]
+    fn a_character_table_draws_a_warning_row() {
+        let (s, _tmp) = session_with_pilots();
+        let mut portraits = Portraits::without_download(&[1, 2]);
+        let ctx = egui::Context::default();
+        theme::apply_default(&ctx);
+        theme::set_font(&ctx);
+        let pilots = s.pilots.characters();
+        let extra = [("Status", egui_extras::Column::exact(110.0))];
+        let mut cells = 0;
+        let mut output = ctx.run_ui(Default::default(), |ui| {
+            // The first character has a warning and the selected look. The second has neither.
+            let look = |pilot: &PilotView| RowLook { selected: pilot.id == 1, warning: (pilot.id == 1).then_some("A warning.") };
+            character_table(ui, "test-characters", &pilots, &mut portraits, &extra, look, |_, _, _| cells += 1);
+        });
+        output.textures_delta.clear();
+        assert_eq!(cells, pilots.len());
     }
 
     #[cfg(windows)]
