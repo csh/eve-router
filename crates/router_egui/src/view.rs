@@ -17,8 +17,8 @@ use router_core::labels::{LinkView, jumps_label, on_off, pilot_label, route_summ
 use router_core::route::{Mode, Stop};
 use router_core::sources::FetchError;
 use router_core::sources::nexum::MapInfo;
-use router_core::universe::display_sec;
-use router_core::wormhole::{SourceId, age_text};
+use router_core::universe::{Link, display_sec};
+use router_core::wormhole::{ClosedHole, SourceId, age_text};
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
@@ -120,10 +120,11 @@ pub struct View {
     waypoints_open: Option<bool>,
 }
 
-/// A change of the avoid list, from the context menu of a route step.
+/// A change of the avoid list, or a closed wormhole, from the context menu of a route step.
 enum Toggle {
     System(NodeIndex),
     Region(String),
+    Close(ClosedHole),
 }
 
 /// A change to the waypoints, from a click in the route planner.
@@ -272,11 +273,12 @@ impl View {
                 if ui.app_button(icon_label(ui, icons::GEAR.fill(), "Settings")).clicked() {
                     self.settings = Some(SettingsForm::new(s, self.settings_page));
                 }
-                let avoid = match s.settings.avoid.len() {
+                let avoid = match s.settings.avoid.len() + s.closed.len() {
                     0 => "Avoid".to_string(),
                     n => format!("Avoid ({n})"),
                 };
-                let button = ui.add_enabled(!locked, AppButton::new(avoid)).on_hover_text("Systems and regions that routes avoid");
+                let tip = "Systems, regions and wormholes that routes avoid";
+                let button = ui.add_enabled(!locked, AppButton::new(avoid)).on_hover_text(tip);
                 if button.clicked() {
                     self.popup = Some(Popup::Avoid { confirm: false, search: SearchBox::new("avoid-search"), region: String::new() });
                 }
@@ -710,6 +712,19 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                             toggle = Some(Toggle::Region(sys.region.clone()));
                             ui.close();
                         }
+                        // The link into this step, if it is a wormhole.
+                        let hole = step.checked_sub(1).and_then(|i| match &uni.graph[route.path.edges[i]] {
+                            Link::Wormhole(w) => Some(ClosedHole::of(w)),
+                            _ => None,
+                        });
+                        if let Some(hole) = hole {
+                            ui.separator();
+                            let tip = "Routes skip this wormhole until you close the app. Use it when the wormhole has collapsed.";
+                            if ui.app_button("Mark wormhole closed").on_hover_text(tip).clicked() {
+                                toggle = Some(Toggle::Close(hole));
+                                ui.close();
+                            }
+                        }
                     });
                     if row.response().clicked() {
                         clicked = Some(step);
@@ -720,6 +735,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     match toggle {
         Some(Toggle::System(node)) => s.toggle_avoid_system(node),
         Some(Toggle::Region(region)) => s.toggle_avoid_region(&region),
+        Some(Toggle::Close(hole)) => s.close_link(hole),
         None => {}
     }
     if clicked.is_some() {

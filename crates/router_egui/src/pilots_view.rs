@@ -11,14 +11,15 @@ use egui::{
 };
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor_icons::icons;
-use router_core::esi::active::ActiveRoute;
+use router_core::esi::active::{ActiveRoute, Hop};
 use router_core::esi::client::{IMAGES_URL, portrait};
 use router_core::esi::pilots::{HullSync, PilotView, Pilots, StartPlan, pilots_by_step};
-use router_core::labels::{hull_label, manual_hop_hint, ship_text};
+use router_core::labels::{LinkView, hull_label, manual_hop_hint, ship_text};
 use router_core::refresh::kept_route;
 use router_core::route::{Path, Stop};
 use router_core::settings::HullSource;
 use router_core::universe::{Universe, display_sec};
+use router_core::wormhole::{ClosedHole, SourceId, Wormhole};
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
@@ -661,6 +662,16 @@ impl PilotsUi {
         self.active_table(ui, s, &active);
     }
 
+    /// The "Re-route from here" button. A click finds a new route and opens the confirm window.
+    fn reroute_button(&mut self, ui: &mut Ui, s: &mut Session) {
+        if ui.app_button("Re-route from here").clicked() {
+            match s.pilots.reroute(&s.uni, &s.settings, router_core::wormhole::now()) {
+                Ok(route) => self.reroute = Some(Box::new(route)),
+                Err(e) => s.notify(Level::Error, e.to_string()),
+            }
+        }
+    }
+
     fn banner(&mut self, ui: &mut Ui, s: &mut Session, active: &ActiveRoute, destination: &str) {
         let name = &active.character_name;
         let live = s.pilots.live.get(&active.character).cloned().unwrap_or_default();
@@ -700,12 +711,16 @@ impl PilotsUi {
             let here = live.system.map_or_else(|| "?".into(), |id| system_name(s, id));
             bar(ui, theme::WARN, &mut |ui| {
                 ui.label(RichText::new(format!("Off route - {name} is in {here}.")).color(theme::WARN));
-                if ui.app_button("Re-route from here").clicked() {
-                    match s.pilots.reroute(&s.uni, &s.settings, router_core::wormhole::now()) {
-                        Ok(route) => self.reroute = Some(Box::new(route)),
-                        Err(e) => s.notify(Level::Error, e.to_string()),
-                    }
+                self.reroute_button(ui, s);
+                if ui.app_button("Stop route").clicked() {
+                    self.stop = true;
                 }
+            });
+        } else if let Some((from, to)) = closed_ahead(&s.closed, active) {
+            let text = format!("A closed wormhole is ahead: {} » {}.", system_name(s, from), system_name(s, to));
+            bar(ui, theme::WARN, &mut |ui| {
+                ui.label(RichText::new(&text).color(theme::WARN));
+                self.reroute_button(ui, s);
                 if ui.app_button("Stop route").clicked() {
                     self.stop = true;
                 }
@@ -722,6 +737,7 @@ impl PilotsUi {
         let systems: Vec<u32> = active.steps.iter().map(|st| st.system).collect();
         let by_step = pilots_by_step(&systems, &characters, Some(active));
         let scroll = std::mem::take(&mut self.scroll);
+        let mut close = None;
         panel(ui, &format!("Route #{}", active.number), "", true, |ui| {
             let header = |ui: &mut Ui, text: &str| _ = ui.label(theme::header_text(text));
             let mut table = TableBuilder::new(ui)
@@ -801,11 +817,24 @@ impl PilotsUi {
                             let via = if step.hop.is_manual() { format!("{via} - manual") } else { via };
                             let color = theme::link_color(step.hop);
                             let via = via.replace('\u{2192}', "»");
-                            ui.add(Label::new(RichText::new(&via).color(dim(color))).truncate());
+                            let label = ui.add(Label::new(RichText::new(&via).color(dim(color))).truncate().sense(Sense::click()));
+                            // Only a wormhole that is still ahead can close.
+                            if let Some(hole) = closable(active, i) {
+                                label.context_menu(|ui| {
+                                    let tip = "Routes skip this wormhole until you close the app. Use it when the wormhole has collapsed.";
+                                    if ui.app_button("Mark wormhole closed").on_hover_text(tip).clicked() {
+                                        close = Some(hole);
+                                        ui.close();
+                                    }
+                                });
+                            }
                         });
                     });
                 });
         });
+        if let Some(hole) = close {
+            s.close_link(hole);
+        }
     }
 
     /// The "Pilots" panel of the sidebar: the online pilots, and a line for the offline ones.
@@ -943,6 +972,34 @@ fn system_name(s: &Session, id: u32) -> String {
     s.uni.by_id.get(&id).map_or_else(|| id.to_string(), |&n| s.uni.name(n).to_string())
 }
 
+/// The wormhole into step `i` of the active route, if the pilot has not made that jump yet.
+/// The route holds only the signature of the system that the jump leaves, so the entry has no
+/// other end.
+fn closable(active: &ActiveRoute, i: usize) -> Option<ClosedHole> {
+    let step = active.steps.get(i).filter(|st| st.hop == Hop::Wormhole && i > active.progress)?;
+    let (size, expiry) = match step.link {
+        Some(LinkView::Wormhole { size, expiry, .. }) => (size, expiry),
+        _ => (None, None),
+    };
+    Some(ClosedHole::from_jump(active.steps[i - 1].system, step.system, step.sig.as_deref(), size, expiry))
+}
+
+/// The first wormhole ahead on the active route that matches a closed entry: the IDs of its ends.
+fn closed_ahead(closed: &[ClosedHole], active: &ActiveRoute) -> Option<(u32, u32)> {
+    if closed.is_empty() {
+        return None;
+    }
+    (active.progress + 1..active.steps.len()).find_map(|i| {
+        let step = &active.steps[i];
+        let from = active.steps[i - 1].system;
+        if step.hop != Hop::Wormhole {
+            return None;
+        }
+        let hole = Wormhole::new(from, step.system, step.sig.clone(), None, SourceId::Nexum);
+        closed.iter().any(|c| c.matches(&hole)).then_some((from, step.system))
+    })
+}
+
 fn destination(s: &Session, route: &ActiveRoute) -> String {
     route.steps.last().map(|st| system_name(s, st.system)).unwrap_or_default()
 }
@@ -980,6 +1037,38 @@ mod tests {
 
     const JITA: u32 = 30000142;
     const PERIMETER: u32 = 30000144;
+
+    /// Jita, then Perimeter by a wormhole with the signature ABC at Jita, then Amarr by a gate.
+    fn wormhole_route(progress: usize) -> ActiveRoute {
+        use router_core::esi::active::Step;
+        let step = |system, hop, sig: Option<&str>| Step { system, hop, link: None, sig: sig.map(Into::into) };
+        let steps = vec![step(JITA, Hop::Start, None), step(PERIMETER, Hop::Wormhole, Some("ABC")), step(30002187, Hop::Gate, None)];
+        let mut route = ActiveRoute::from_steps(steps, vec![0, 2], 1, 1, "Pilot");
+        route.progress = progress;
+        route
+    }
+
+    #[test]
+    fn only_a_wormhole_ahead_can_close() {
+        let route = wormhole_route(0);
+        assert_eq!(closable(&route, 0), None);
+        assert_eq!(closable(&route, 2), None);
+        let hole = closable(&route, 1).expect("the wormhole is ahead");
+        assert_eq!((hole.a, hole.b, hole.sig_a.as_deref(), hole.sig_b), (JITA, PERIMETER, Some("ABC"), None));
+        // After the jump the wormhole is behind the pilot.
+        assert_eq!(closable(&wormhole_route(1), 1), None);
+    }
+
+    #[test]
+    fn a_closed_entry_for_a_step_ahead_shows_the_banner_state() {
+        let closed = vec![closable(&wormhole_route(0), 1).unwrap()];
+        assert_eq!(closed_ahead(&closed, &wormhole_route(0)), Some((JITA, PERIMETER)));
+        assert_eq!(closed_ahead(&closed, &wormhole_route(1)), None);
+        assert_eq!(closed_ahead(&[], &wormhole_route(0)), None);
+        // A closed hole with another signature on the same pair does not match.
+        let other = vec![ClosedHole::from_jump(JITA, PERIMETER, Some("DEF"), None, None)];
+        assert_eq!(closed_ahead(&other, &wormhole_route(0)), None);
+    }
 
     #[test]
     fn overflow_wording() {

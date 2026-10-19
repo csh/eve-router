@@ -311,6 +311,37 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
                 });
             });
     }
+    let mut reopen = None;
+    if !s.closed.is_empty() {
+        ui.add_space(12.0);
+        ui.label(theme::header_text("Closed wormholes"));
+        ui.label(RichText::new("Routes skip these until you close the app.").color(theme::TEXT_DIM));
+        ui.add_space(4.0);
+        let name = |id: u32| s.uni.by_id.get(&id).map_or_else(|| id.to_string(), |&n| s.uni.name(n).to_string());
+        let sig = |sig: &Option<String>| sig.clone().unwrap_or_else(|| "no sig".into());
+        use egui_extras::Column;
+        egui_extras::TableBuilder::new(ui)
+            .id_salt("closed-table")
+            .striped(true)
+            .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+            .column(Column::remainder().at_least(160.0).clip(true))
+            .column(Column::exact(84.0))
+            .max_scroll_height(140.0)
+            .auto_shrink([false, true])
+            .body(|body| {
+                body.rows(28.0, s.closed.len(), |mut row| {
+                    let i = row.index();
+                    let hole = &s.closed[i];
+                    let text = format!("{} ({}) » {} ({})", name(hole.a), sig(&hole.sig_a), name(hole.b), sig(&hole.sig_b));
+                    row.col(|ui| _ = ui.add(egui::Label::new(RichText::new(text).color(theme::TEXT)).truncate()));
+                    row.col(|ui| {
+                        if ui.app_button("Reopen").clicked() {
+                            reopen = Some(i);
+                        }
+                    });
+                });
+            });
+    }
     let count = avoid.len();
     ui.add_space(8.0);
     let mut close = false;
@@ -349,6 +380,10 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
             s.set_avoid_never_region(&region, never);
         }
         None => {}
+    }
+    if let Some(i) = reopen {
+        let hole = s.closed[i].clone();
+        s.reopen_link(&hole);
     }
     if clear {
         s.clear_avoid();
