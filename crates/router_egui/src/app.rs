@@ -49,6 +49,7 @@ enum State {
 
 pub struct RouterApp {
     state: State,
+    overlay: crate::overlay::Overlay,
 }
 
 /// The quiet time after the last change of a dragged value, before the app searches and saves.
@@ -90,7 +91,7 @@ impl RouterApp {
             let _ = tx.send(LoadMsg::Done(Box::new(result)));
             ctx.request_repaint();
         });
-        RouterApp { state: State::Loading(Loading { rx, step: None }) }
+        RouterApp { state: State::Loading(Loading { rx, step: None }), overlay: Default::default() }
     }
 
     /// Take the load result, if the thread sent it.
@@ -739,6 +740,14 @@ impl Session {
 }
 
 impl eframe::App for RouterApp {
+    /// eframe calls this before each `ui`, and also while the main window is minimized. The overlay
+    /// reads the focused window here, so it works with the router window out of sight.
+    fn logic(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        if let State::Ready(session, _) = &self.state {
+            self.overlay.logic(ctx, session);
+        }
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, frame: &mut eframe::Frame) {
         self.poll(ui.ctx());
         // The refresh worker sends a new map each 5 minutes.
@@ -755,7 +764,10 @@ impl eframe::App for RouterApp {
         match &mut self.state {
             State::Loading(loading) => crate::view::splash(ui, None, loading.step.as_ref()),
             State::Failed(e) => crate::view::splash(ui, Some(e), None),
-            State::Ready(session, view) => view.show(ui, session),
+            State::Ready(session, view) => {
+                view.show(ui, session);
+                self.overlay.show(ui.ctx(), session);
+            }
         }
         crate::chrome::drag_through_modal(ui.ctx());
         crate::chrome::paint_border(ui.ctx(), theme::accent(ui));
@@ -1259,7 +1271,7 @@ mod tests {
     fn a_lost_load_thread_shows_an_error() {
         let (tx, rx) = mpsc::channel::<LoadMsg>();
         drop(tx);
-        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }) };
+        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), overlay: Default::default() };
         app.poll(&egui::Context::default());
         let State::Failed(text) = &app.state else { panic!("the state is not Failed") };
         assert_eq!(text, LOAD_STOPPED);
@@ -1268,7 +1280,7 @@ mod tests {
     #[test]
     fn the_splash_keeps_the_newest_step() {
         let (tx, rx) = mpsc::channel::<LoadMsg>();
-        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }) };
+        let mut app = RouterApp { state: State::Loading(Loading { rx, step: None }), overlay: Default::default() };
         tx.send(LoadMsg::Progress(startup::Progress::CheckingSde)).unwrap();
         tx.send(LoadMsg::Progress(startup::Progress::DownloadingSde { done: 5, total: 10 })).unwrap();
         app.poll(&egui::Context::default());

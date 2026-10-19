@@ -968,7 +968,7 @@ fn resolve(s: &mut Session, chosen: &ChosenRoute) -> Option<usize> {
     route
 }
 
-fn system_name(s: &Session, id: u32) -> String {
+pub(crate) fn system_name(s: &Session, id: u32) -> String {
     s.uni.by_id.get(&id).map_or_else(|| id.to_string(), |&n| s.uni.name(n).to_string())
 }
 

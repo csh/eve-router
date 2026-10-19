@@ -7,8 +7,6 @@ mod app;
 mod chrome;
 mod log_window;
 mod notice;
-#[cfg(windows)]
-#[allow(dead_code, reason = "The overlay window calls the probe in the next batch.")]
 mod overlay;
 mod pilots_view;
 mod search;
