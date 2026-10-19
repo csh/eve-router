@@ -1179,7 +1179,10 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
         });
     }
     ui.add_space(6.0);
-    ScrollArea::vertical().max_height(420.0).auto_shrink([false, true]).show(ui, |ui| {
+    // A fixed height keeps the window the same size for each filter. A window that shrinks to a short
+    // list keeps the small size when the list grows again.
+    let list_height = 420.0_f32.min((ui.ctx().content_rect().height() - 200.0).max(110.0));
+    ScrollArea::vertical().min_scrolled_height(list_height).max_height(list_height).auto_shrink([false, false]).show(ui, |ui| {
         for row in &rows {
             let (rect, click) = ui.allocate_exact_size(vec2(ui.available_width(), 22.0), Sense::click());
             if row.is_current(&s.settings) {
