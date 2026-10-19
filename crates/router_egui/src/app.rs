@@ -19,7 +19,7 @@ use router_core::sources::nexum::MapInfo;
 use router_core::sources::{OverlayWarning, evemetro};
 use router_core::startup::StartupError;
 use router_core::universe::Universe;
-use router_core::wormhole::SourceData;
+use router_core::wormhole::{ClosedHole, SourceData};
 use router_core::{sde_update, startup};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -190,6 +190,9 @@ pub struct Session {
     pub wormhole_data: Vec<SourceData>,
     /// The jump bridges, one pair for each bridge, in the order of the names.
     pub bridges: Vec<Pair>,
+    /// The wormholes that the pilot closed, from the last refresh. The worker holds them for the
+    /// session, so they never reach the config file.
+    pub closed: Vec<ClosedHole>,
     /// The rows of the Log window: the fetches since the start, newest last.
     pub log: Vec<LogEntry>,
     /// The refresh worker. `None` in the tests, and after the worker stops.
@@ -237,6 +240,7 @@ impl Session {
             shortcuts,
             wormhole_data: Vec::new(),
             bridges: Vec::new(),
+            closed: Vec::new(),
             log: Vec::new(),
             refresher: None,
             refreshed_at: None,
@@ -355,6 +359,28 @@ impl Session {
         self.save();
     }
 
+    /// Leave a wormhole out of the routes until the app stops. The worker builds the map again,
+    /// and the next snapshot searches again. Nothing is saved.
+    pub fn close_link(&mut self, hole: ClosedHole) {
+        match &self.refresher {
+            Some(refresher) => refresher.close(hole),
+            None => self.notify(Level::Error, REFRESH_STOPPED),
+        }
+    }
+
+    /// Put a closed wormhole back into the routes.
+    pub fn reopen_link(&mut self, hole: &ClosedHole) {
+        let Some(refresher) = &self.refresher else {
+            self.notify(Level::Error, REFRESH_STOPPED);
+            return;
+        };
+        refresher.reopen(hole.clone());
+        // The list shows the change at once. The next snapshot confirms it.
+        if let Some(i) = self.closed.iter().position(|c| c == hole) {
+            self.closed.remove(i);
+        }
+    }
+
     /// Add the bridges of a pasted SMT list to the list, or replace the list with them. Save the
     /// list, and give the map to the refresh worker. Return the lines that did not give a bridge.
     pub fn import_bridges(&mut self, text: &str, replace: bool) -> Vec<String> {
@@ -465,6 +491,12 @@ impl Session {
         self.shortcuts = snap.shortcuts;
         self.wormhole_data = snap.all;
         log::push(&mut self.log, snap.log);
+        // An entry that left the list without a reopen retired: its wormhole left the map.
+        let retired = self.closed.iter().any(|c| !snap.closed.contains(c));
+        self.closed = snap.closed;
+        if retired {
+            self.notify(Level::Info, "A closed wormhole left the map.");
+        }
         if !self.waypoints.is_empty() {
             let old = self.selected_route().map(|r| r.path.clone());
             let old_step = self.selected_step;
@@ -839,6 +871,74 @@ mod tests {
         s.apply_snapshot(snapshot(vec![jita_amarr()]));
         assert_eq!(s.routes[0].wormholes, 1);
         assert_eq!(last(&s), Some((Level::Info, "A faster route has become available.")));
+    }
+
+    /// A closed entry for the wormhole `jita_amarr`, as a snapshot returns it.
+    fn closed_jita_amarr() -> ClosedHole {
+        ClosedHole { seen: Some(1), ..ClosedHole::of(&jita_amarr()) }
+    }
+
+    #[test]
+    fn closing_a_link_asks_the_worker_and_saves_nothing() {
+        let (refresher, _snapshots, control) = fake_refresher();
+        let (mut s, tmp) = session();
+        s.refresher = Some(refresher);
+        let hole = ClosedHole::of(&jita_amarr());
+        s.close_link(hole.clone());
+        let Ok(Control::Close(sent)) = control.try_recv() else { panic!("no close message") };
+        assert_eq!(sent, hole);
+        assert!(!tmp.path().join("config.toml").exists(), "a closed link is not saved");
+        assert!(tmp.path().read_dir().unwrap().next().is_none());
+    }
+
+    #[test]
+    fn a_snapshot_with_a_closed_hole_searches_again_without_it() {
+        let (mut s, _tmp) = session();
+        s.settings.top = 1;
+        s.uni = snapshot(vec![jita_amarr()]).uni;
+        s.add_list("Jita, Amarr");
+        assert_eq!(s.routes[0].wormholes, 1, "{:?}", s.status);
+        let mut closed = snapshot(Vec::new());
+        closed.closed = vec![closed_jita_amarr()];
+        s.apply_snapshot(closed);
+        assert_eq!(s.routes[0].wormholes, 0);
+        assert_eq!(s.closed, [closed_jita_amarr()]);
+        assert_eq!(last(&s), Some((Level::Warning, "A wormhole on your route collapsed.")));
+    }
+
+    #[test]
+    fn reopening_a_link_asks_the_worker_and_empties_the_list_at_once() {
+        let (refresher, _snapshots, control) = fake_refresher();
+        let (mut s, _tmp) = session();
+        s.refresher = Some(refresher);
+        s.closed = vec![closed_jita_amarr()];
+        s.reopen_link(&closed_jita_amarr());
+        assert!(matches!(control.try_recv(), Ok(Control::Reopen(h)) if h == closed_jita_amarr()));
+        assert!(s.closed.is_empty());
+        // The snapshot that answers the message does not give a retire notice.
+        s.apply_snapshot(snapshot(vec![jita_amarr()]));
+        assert!(s.notices.is_empty(), "{:?}", s.notices);
+    }
+
+    #[test]
+    fn a_retired_entry_gives_a_notice() {
+        let (mut s, _tmp) = session();
+        let mut snap = snapshot(Vec::new());
+        snap.closed = vec![closed_jita_amarr()];
+        s.apply_snapshot(snap);
+        s.apply_snapshot(snapshot(Vec::new()));
+        assert!(s.closed.is_empty());
+        assert_eq!(last(&s), Some((Level::Info, "A closed wormhole left the map.")));
+    }
+
+    #[test]
+    fn closing_a_link_without_a_worker_gives_an_error() {
+        let (mut s, _tmp) = session();
+        s.close_link(ClosedHole::of(&jita_amarr()));
+        assert_eq!(last(&s), Some((Level::Error, REFRESH_STOPPED)));
+        s.closed = vec![closed_jita_amarr()];
+        s.reopen_link(&closed_jita_amarr());
+        assert_eq!(s.closed.len(), 1);
     }
 
     #[test]
