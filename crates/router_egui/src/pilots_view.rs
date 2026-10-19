@@ -3,7 +3,7 @@
 use crate::app::Session;
 use crate::notice::Level;
 use crate::theme::{self, panel, panel_with};
-use crate::widgets::{AppButton, UiExt};
+use crate::widgets::{self, AppButton, UiExt};
 use egui::load::SizedTexture;
 use egui::{
     Align, Color32, ColorImage, CornerRadius, Frame, Id, Label, Layout, Margin, Modal, RichText, Sense, Stroke, TextEdit, TextureHandle,
@@ -820,7 +820,7 @@ impl PilotsUi {
                             let label = ui.add(Label::new(RichText::new(&via).color(dim(color))).truncate().sense(Sense::click()));
                             // Only a wormhole that is still ahead can close.
                             if let Some(hole) = closable(active, i) {
-                                label.context_menu(|ui| {
+                                widgets::context_menu(&label, |ui| {
                                     let tip = "Routes skip this wormhole until you close the app. Use it when the wormhole has collapsed.";
                                     if ui.app_button("Mark wormhole closed").on_hover_text(tip).clicked() {
                                         close = Some(hole);

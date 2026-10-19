@@ -8,7 +8,7 @@ use crate::search::{Pick, SearchBox};
 use crate::settings_window::{self, Page, Popup, SettingsForm};
 use crate::strip;
 use crate::theme::{self, panel};
-use crate::widgets::{AppButton, UiExt, icon_label};
+use crate::widgets::{self, AppButton, UiExt, icon_label};
 use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor_icons::icons;
@@ -698,7 +698,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                     row.col(|ui| _ = ui.add(Label::new(RichText::new(&sys.region).color(theme::TEXT_DIM)).truncate()));
                     row.col(|ui| _ = ui.add(Label::new(RichText::new(&via).color(via_color)).truncate()));
                     let node = route.path.nodes[step];
-                    row.response().context_menu(|ui| {
+                    widgets::context_menu(&row.response(), |ui| {
                         let avoid = &s.settings.avoid;
                         let system =
                             if avoid.has_system(node) { format!("Stop avoiding {}", sys.name) } else { format!("Avoid {}", sys.name) };

@@ -148,6 +148,20 @@ pub fn icon_label(ui: &Ui, icon: RichText, text: &str) -> WidgetText {
     job.into()
 }
 
+/// A context menu for `response`. A second right click on the same widget opens a new menu there.
+/// The egui menu would close in the same frame: the click lands outside the old menu, and the
+/// old menu and the new one have the same ID. Each right click gets a new ID, so the old menu
+/// closes and the new one stays.
+pub fn context_menu(response: &Response, add_contents: impl FnOnce(&mut Ui)) {
+    let key = response.id.with("menu-count");
+    let mut count: u32 = response.ctx.data(|d| d.get_temp(key)).unwrap_or(0);
+    if response.secondary_clicked() {
+        count = count.wrapping_add(1);
+        response.ctx.data_mut(|d| d.insert_temp(key, count));
+    }
+    egui::Popup::context_menu(response).id(response.id.with(("menu", count))).show(add_contents);
+}
+
 /// The short ways to add a button of the app.
 pub trait UiExt {
     /// A button.
