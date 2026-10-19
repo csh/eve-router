@@ -1,6 +1,7 @@
 //! The modal windows: the settings, the Pilot picker, the Nexum map list and the messages.
 
 use crate::app::Session;
+use crate::overlay::Overlay;
 use crate::pilots_view::{Portraits, pilot_portrait};
 use crate::search::SearchBox;
 use crate::theme;
@@ -157,7 +158,9 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
         }
         let loading = view.maps.is_some();
         let portraits = &mut view.pilots.portraits;
-        let response = Modal::new(Id::new("settings")).frame(modal_frame()).show(ui.ctx(), |ui| settings(ui, form, s, loading, portraits));
+        let overlay = &mut view.overlay;
+        let response =
+            Modal::new(Id::new("settings")).frame(modal_frame()).show(ui.ctx(), |ui| settings(ui, form, s, loading, portraits, overlay));
         match response.inner {
             Some(Action::LoadMaps) => {
                 if view.maps.is_none() {
@@ -171,6 +174,9 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
         }
         if view.settings.is_none() {
             view.settings_page = page;
+            // The dummy window of the position editor belongs to the page.
+            #[cfg(windows)]
+            view.overlay.cancel_edit();
             s.flush_apply();
             s.save();
         }
@@ -437,10 +443,16 @@ pub enum Page {
     /// Filaments and EVE Metro: the two features almost all about travel via Pochven.
     Pochven,
     Ansiblex,
+    /// The routing overlay: a window above the game. It works on Windows only.
+    #[cfg(windows)]
+    Overlay,
     Engine,
 }
 
 impl Page {
+    #[cfg(windows)]
+    pub const ALL: [Page; 7] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Pochven, Page::Ansiblex, Page::Overlay, Page::Engine];
+    #[cfg(not(windows))]
     pub const ALL: [Page; 6] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Pochven, Page::Ansiblex, Page::Engine];
 
     pub fn label(self) -> &'static str {
@@ -450,6 +462,8 @@ impl Page {
             Page::Wormholes => "Wormholes",
             Page::Pochven => "Pochven",
             Page::Ansiblex => "Ansiblex",
+            #[cfg(windows)]
+            Page::Overlay => "Overlay",
             Page::Engine => "Engine",
         }
     }
@@ -461,17 +475,31 @@ fn group(ui: &mut Ui, text: &str) {
     ui.add_space(2.0);
 }
 
-fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool, portraits: &mut Portraits) -> Option<Action> {
+/// The note of the Settings window while a route is active. The pages that do not change a route stay editable.
+const LOCK_NOTE: &str = if cfg!(windows) {
+    "Routing settings are locked while a route is active. Favourites, Theme and Overlay stay editable."
+} else {
+    "Routing settings are locked while a route is active. Favourites and Theme stay editable."
+};
+
+fn settings(
+    ui: &mut Ui,
+    form: &mut SettingsForm,
+    s: &mut Session,
+    loading: bool,
+    portraits: &mut Portraits,
+    overlay: &mut Overlay,
+) -> Option<Action> {
     let mut action = None;
     ui.set_width(crate::theme::modal_width(ui, 720.0));
     title(ui, "Settings");
-    // While a route is active, only the favourites and the theme can change.
+    // While a route is active, only the pages that do not change a route can change.
     let locked = s.pilots.active.is_some();
     if locked {
-        ui.label(
-            RichText::new("Routing settings are locked while a route is active. Favourites and Theme stay editable.").color(theme::WARN),
-        );
+        ui.label(RichText::new(LOCK_NOTE).color(theme::WARN));
     }
+    #[cfg(not(windows))]
+    let _ = &overlay;
     let body = (ui.ctx().content_rect().height() - 230.0).clamp(240.0, 480.0);
     let list = 140.0;
     let pad = 16.0;
@@ -505,6 +533,8 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
             match form.page {
                 Page::Ansiblex => return ansiblex_page(ui, form, s, locked),
                 Page::Pochven => return pochven_page(ui, form, s, locked, portraits),
+                #[cfg(windows)]
+                Page::Overlay => return overlay_page(ui, s, portraits, overlay),
                 _ => {}
             }
             ScrollArea::vertical().max_height(body).auto_shrink([false, false]).show(ui, |ui| match form.page {
@@ -512,6 +542,8 @@ fn settings(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, loading: bool
                 Page::Theme => theme_page(ui, s),
                 Page::Wormholes => action = wormholes_page(ui, form, s, locked, loading),
                 Page::Pochven | Page::Ansiblex => {}
+                #[cfg(windows)]
+                Page::Overlay => {}
                 Page::Engine => engine_page(ui, form, s, locked),
             });
         });
@@ -822,13 +854,181 @@ fn pilot_status(pilot: &PilotView) -> (&'static str, Color32) {
     }
 }
 
+/// The text of a position: "x, y".
+#[cfg(windows)]
+fn position_text(pos: config::Pos) -> String {
+    format!("{}, {}", pos.x, pos.y)
+}
+
+/// The buttons of one place. At rest: Position, and Reset when the place has a position. While the
+/// dummy window of this place is open: Save and Cancel. The two places never edit together.
+#[cfg(windows)]
+fn position_buttons(ui: &mut Ui, s: &mut Session, overlay: &mut Overlay, place: config::Place) {
+    let editing = overlay.editing();
+    if editing == Some(place) {
+        if ui.add(AppButton::new("Save").primary()).clicked()
+            && let Some((place, pos)) = overlay.finish_edit()
+        {
+            s.set_overlay_position(place, Some(pos));
+        }
+        if ui.app_button("Cancel").clicked() {
+            overlay.cancel_edit();
+        }
+        return;
+    }
+    let busy = editing.is_some();
+    const BUSY: &str = "Save or cancel the other position first";
+    if ui.add_enabled(!busy, AppButton::new("Position")).on_disabled_hover_text(BUSY).clicked() {
+        overlay.begin_edit(place);
+    }
+    if s.cfg.routing_overlay.position_of(place).is_some()
+        && ui.add_enabled(!busy, AppButton::new("Reset")).on_disabled_hover_text(BUSY).clicked()
+    {
+        s.set_overlay_position(place, None);
+    }
+}
+
+/// The text of the display mode of a client, and its color, for the table of the Overlay page.
+#[cfg(windows)]
+fn display_mode_text(mode: Option<crate::overlay::DisplayMode>) -> (&'static str, Color32, &'static str) {
+    use crate::overlay::DisplayMode;
+    match mode {
+        Some(DisplayMode::Borderless) => ("Borderless", theme::TEXT_DIM, "The overlay shows above this client."),
+        Some(DisplayMode::Windowed) => ("Windowed", theme::TEXT_DIM, "The overlay shows above this client."),
+        Some(DisplayMode::Other) => (
+            "Check mode",
+            theme::WARN,
+            "This client window can be a fullscreen window. A fullscreen client hides the overlay. Use the windowed or the borderless mode.",
+        ),
+        None => ("-", theme::TEXT_DIM, "Not seen yet. Click the client during a route to check its display mode."),
+    }
+}
+
+/// The Overlay page: the switch, the global position, and a table with the position of each
+/// character. The page itself stays still, and the table scrolls.
+#[cfg(windows)]
+fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay: &mut Overlay) {
+    use config::Place;
+    use egui_extras::Column;
+    let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
+    group(ui, "Wormhole overlay");
+    ui.label(dim(
+        "Shows what to do at the next wormhole or filament of the active route, in the system where the jump starts. It shows only while the client of the route character has the focus.",
+    ));
+    ui.add_space(4.0);
+    egui::Grid::new("settings-overlay").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        label(ui, "Enable");
+        let mut on = s.cfg.routing_overlay.enabled;
+        if ui.app_checkbox(&mut on, "").changed() {
+            s.set_overlay_enabled(on);
+            if !on {
+                overlay.cancel_edit();
+            }
+        }
+        ui.end_row();
+    });
+    ui.label(dim("The game client must run in windowed or borderless mode. A fullscreen client hides the overlay."));
+    ui.add_space(14.0);
+
+    group(ui, "Global");
+    ui.horizontal(|ui| {
+        label(ui, "Position");
+        let shown = s.cfg.routing_overlay.position.unwrap_or(router_core::routing_overlay::DEFAULT_POS);
+        let color = if s.cfg.routing_overlay.position.is_some() { theme::TEXT } else { theme::TEXT_DIM };
+        ui.label(RichText::new(position_text(shown)).color(color));
+        position_buttons(ui, s, overlay, Place::Global);
+    });
+    ui.add_space(14.0);
+
+    group(ui, "Per character");
+    ui.label(dim("A character with no position of its own uses the global position."));
+    ui.add_space(4.0);
+    let pilots = s.pilots.characters();
+    if pilots.is_empty() {
+        ui.label(dim("No linked character. Add one in the Pilots panel."));
+        return;
+    }
+    let editing = overlay.editing();
+    let extra = [("Position", Column::exact(80.0)), ("Client", Column::exact(80.0)), ("", Column::exact(160.0))];
+    character_table(
+        ui,
+        "overlay-characters",
+        &pilots,
+        portraits,
+        &extra,
+        |pilot| editing == Some(Place::Character(pilot.id)),
+        |ui, pilot, column| match column {
+            0 => match s.cfg.routing_overlay.position_of(Place::Character(pilot.id)) {
+                Some(pos) => _ = ui.label(RichText::new(position_text(pos)).color(theme::TEXT)),
+                None => _ = ui.label(dim("Global")),
+            },
+            1 => {
+                let (text, color, hover) = display_mode_text(overlay.display_mode(&pilot.name));
+                ui.label(RichText::new(text).color(color)).on_hover_text(hover);
+            }
+            _ => position_buttons(ui, s, overlay, Place::Character(pilot.id)),
+        },
+    );
+}
+
+/// The row height of a table of characters.
+const CHARACTER_ROW: f32 = 40.0;
+
+/// A table of the linked characters: the portrait and the name, then the columns of `extra`. Each
+/// has a header text and a width. `cell` draws one cell of `extra` for a character, by the index
+/// in `extra`. A row that `selected` is true for has the selected look. The table takes the height
+/// that is left, and scrolls.
+fn character_table(
+    ui: &mut Ui,
+    id_salt: &str,
+    pilots: &[PilotView],
+    portraits: &mut Portraits,
+    extra: &[(&str, egui_extras::Column)],
+    selected: impl Fn(&PilotView) -> bool,
+    mut cell: impl FnMut(&mut Ui, &PilotView, usize),
+) {
+    use egui_extras::Column;
+    let table_height = (ui.available_height() - 8.0).max(CHARACTER_ROW * 2.0);
+    let mut table = egui_extras::TableBuilder::new(ui)
+        .id_salt(id_salt)
+        .striped(true)
+        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
+        .column(Column::exact(48.0))
+        .column(Column::remainder().at_least(160.0).clip(true));
+    for (_, column) in extra {
+        table = table.column(*column);
+    }
+    table
+        .max_scroll_height(table_height)
+        .auto_shrink([false, true])
+        .header(22.0, |mut header| {
+            for text in ["", "Character"].into_iter().chain(extra.iter().map(|(text, _)| *text)) {
+                header.col(|ui| _ = ui.label(theme::header_text(text)));
+            }
+        })
+        .body(|body| {
+            body.rows(CHARACTER_ROW, pilots.len(), |mut row| {
+                let pilot = &pilots[row.index()];
+                let is_selected = selected(pilot);
+                row.set_selected(is_selected);
+                row.col(|ui| _ = pilot_portrait(ui, portraits, pilot, 32.0));
+                row.col(|ui| {
+                    let color = if is_selected { Color32::WHITE } else { theme::TEXT };
+                    ui.label(RichText::new(&pilot.name).color(color));
+                });
+                for column in 0..extra.len() {
+                    row.col(|ui| cell(ui, pilot, column));
+                }
+            });
+        });
+}
+
 /// The Pochven page: filament travel and the EVE Metro wormhole map, the two features almost all
 /// about travel via Pochven. Filament travel needs no client ID. The EVE Metro switch, the key,
 /// and a table of the linked characters with their portraits follow it. The service checks the
 /// picked character, its corporation and its alliance. Like the Ansiblex page, the page itself
 /// stays still and the table scrolls.
 fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool, portraits: &mut Portraits) {
-    const ROW: f32 = 40.0;
     let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
     clades_group(ui, s, locked);
     ui.add_space(14.0);
@@ -908,47 +1108,28 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
         ui.label(RichText::new("The selected character is no longer linked. Select another one.").color(theme::WARN));
     }
     let mut pick = None;
-    // The table takes the height that is left.
-    let table_height = (ui.available_height() - 8.0).max(ROW * 2.0);
     use egui_extras::Column;
-    egui_extras::TableBuilder::new(ui)
-        .id_salt("eve-metro-characters")
-        .striped(true)
-        .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
-        .column(Column::exact(48.0))
-        .column(Column::remainder().at_least(160.0).clip(true))
-        .column(Column::exact(110.0))
-        .column(Column::exact(84.0))
-        .max_scroll_height(table_height)
-        .auto_shrink([false, true])
-        .header(22.0, |mut header| {
-            for text in ["", "Character", "Status", ""] {
-                header.col(|ui| _ = ui.label(theme::header_text(text)));
+    let extra = [("Status", Column::exact(110.0)), ("", Column::exact(84.0))];
+    character_table(
+        ui,
+        "eve-metro-characters",
+        &pilots,
+        portraits,
+        &extra,
+        |pilot| picked == Some(pilot.id),
+        |ui, pilot, column| match column {
+            0 => {
+                let (text, color) = pilot_status(pilot);
+                ui.label(RichText::new(text).color(color));
             }
-        })
-        .body(|body| {
-            body.rows(ROW, pilots.len(), |mut row| {
-                let pilot = &pilots[row.index()];
-                let selected = picked == Some(pilot.id);
-                row.set_selected(selected);
-                row.col(|ui| _ = pilot_portrait(ui, portraits, pilot, 32.0));
-                row.col(|ui| {
-                    let color = if selected { Color32::WHITE } else { theme::TEXT };
-                    ui.label(RichText::new(&pilot.name).color(color));
-                });
-                row.col(|ui| {
-                    let (text, color) = pilot_status(pilot);
-                    ui.label(RichText::new(text).color(color));
-                });
-                row.col(|ui| {
-                    if selected {
-                        ui.label(RichText::new("In use").color(theme::accent(ui)));
-                    } else if ui.add_enabled(!disabled, AppButton::new("Use")).on_disabled_hover_text(disabled_hover).clicked() {
-                        pick = Some(pilot.id);
-                    }
-                });
-            });
-        });
+            _ if picked == Some(pilot.id) => _ = ui.label(RichText::new("In use").color(theme::accent(ui))),
+            _ => {
+                if ui.add_enabled(!disabled, AppButton::new("Use")).on_disabled_hover_text(disabled_hover).clicked() {
+                    pick = Some(pilot.id);
+                }
+            }
+        },
+    );
     if let Some(id) = pick {
         s.cfg.eve_metro.character = Some(id);
         s.eve_metro_saved();
@@ -1390,6 +1571,54 @@ mod tests {
         // Drawing changes no setting.
         assert_eq!(s.cfg.eve_metro.character, Some(99));
         assert!(!s.settings.clades.pochven);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn the_overlay_page_draws_every_state() {
+        use config::{Place, Pos};
+        let (mut s, tmp) = session_with_pilots();
+        let mut portraits = Portraits::without_download(&[1, 2]);
+        let mut overlay = Overlay::default();
+        let ctx = egui::Context::default();
+        theme::apply_default(&ctx);
+        theme::set_font(&ctx);
+        let mut draw = |s: &mut Session, overlay: &mut Overlay| {
+            let mut output = ctx.run_ui(Default::default(), |ui| overlay_page(ui, s, &mut portraits, overlay));
+            output.textures_delta.clear();
+        };
+        // The overlay is off and no position is set.
+        draw(&mut s, &mut overlay);
+        // The overlay is on, with a global position and the own position of one character.
+        s.cfg.routing_overlay.enabled = true;
+        s.cfg.routing_overlay.set_position(Place::Global, Some(Pos { x: 10, y: 20 }));
+        s.cfg.routing_overlay.set_position(Place::Character(2), Some(Pos { x: -5, y: 7 }));
+        draw(&mut s, &mut overlay);
+        // The editor is open for the global place, then for a character.
+        overlay.begin_edit(Place::Global);
+        draw(&mut s, &mut overlay);
+        overlay.begin_edit(Place::Character(1));
+        draw(&mut s, &mut overlay);
+        // No linked character.
+        s.pilots = router_core::esi::pilots::Pilots::offline_with_client_id(tmp.path().join("active-route.json"), &[]);
+        draw(&mut s, &mut overlay);
+        // Drawing changes no setting and no position.
+        assert!(s.cfg.routing_overlay.enabled);
+        assert_eq!(s.cfg.routing_overlay.position_of(Place::Global), Some(Pos { x: 10, y: 20 }));
+        assert_eq!(s.cfg.routing_overlay.position_of(Place::Character(2)), Some(Pos { x: -5, y: 7 }));
+        assert_eq!(overlay.editing(), Some(Place::Character(1)));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn a_client_that_the_overlay_did_not_see_shows_a_dash() {
+        use crate::overlay::DisplayMode;
+        assert_eq!(display_mode_text(None).0, "-");
+        assert_eq!(display_mode_text(Some(DisplayMode::Borderless)).0, "Borderless");
+        assert_eq!(display_mode_text(Some(DisplayMode::Windowed)).0, "Windowed");
+        // Only the unknown shape warns.
+        let (text, color, _) = display_mode_text(Some(DisplayMode::Other));
+        assert_eq!((text, color), ("Check mode", theme::WARN));
     }
 
     #[test]

@@ -2,14 +2,14 @@
 //! window with the `windows` crate. Other systems get an `Overlay` that does nothing.
 
 #[cfg(windows)]
-#[allow(dead_code, reason = "The settings page uses the display mode in a later step.")]
 mod mode;
 #[cfg(windows)]
-#[allow(dead_code, reason = "The settings page uses the display mode in a later step.")]
 mod win;
 #[cfg(windows)]
 mod window;
 
+#[cfg(windows)]
+pub use mode::DisplayMode;
 #[cfg(windows)]
 pub use window::Overlay;
 

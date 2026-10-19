@@ -9,13 +9,15 @@
 //! The probe runs in `logic`. eframe calls `logic` also while the main window is minimized, and
 //! a command to show the overlay window then starts the pass that draws it. The window is drawn in `show`.
 
+use super::mode::DisplayMode;
 use super::win;
 use crate::app::Session;
 use crate::pilots_view::system_name;
 use crate::theme;
 use egui::{Context, CursorIcon, Frame, Id, Margin, Pos2, RichText, Sense, TextStyle, ViewportBuilder, ViewportCommand, ViewportId, vec2};
 use router_core::config::{Place, Pos};
-use router_core::routing_overlay::{content, content_for_title, resolve_position};
+use router_core::routing_overlay::{DEFAULT_POS, content, content_for_title, parse_client_title, resolve_position};
+use std::collections::HashMap;
 use std::time::{Duration, Instant};
 
 /// The title of the window. It cannot match the title of a client, which starts with "EVE - ".
@@ -23,9 +25,6 @@ const TITLE: &str = "eve-router overlay";
 
 /// The time between two reads of the focused window.
 const POLL: Duration = Duration::from_millis(250);
-
-/// The place of the window for a character that has none of its own, and no global place.
-const DEFAULT_POS: Pos = Pos { x: 40, y: 40 };
 
 /// The title of the dummy window of the position editor. It cannot match the title of a client either.
 const EDITOR_TITLE: &str = "eve-router overlay position";
@@ -48,6 +47,8 @@ pub struct Overlay {
     /// The last command that `logic` sent was `Visible(true)`.
     shown: bool,
     last_poll: Option<Instant>,
+    /// The display mode of the client of each character, from the last read. The key is the character name.
+    modes: HashMap<String, DisplayMode>,
     /// The position editor, while the user moves the dummy window.
     editor: Option<Editor>,
 }
@@ -80,58 +81,69 @@ fn here(s: &Session, route: &router_core::esi::active::ActiveRoute) -> Option<u3
 
 impl Overlay {
     /// Open the dummy window for a place. A dummy window for another place closes.
-    #[allow(dead_code, reason = "The Overlay settings page calls this in the next step.")]
     pub fn begin_edit(&mut self, place: Place) {
         self.editor = Some(Editor { place, at: None });
     }
 
     /// The place that the user moves, while the dummy window is open.
-    #[allow(dead_code, reason = "The Overlay settings page calls this in the next step.")]
     pub fn editing(&self) -> Option<Place> {
         self.editor.as_ref().map(|e| e.place)
     }
 
     /// Close the dummy window and keep the old position.
-    #[allow(dead_code, reason = "The Overlay settings page calls this in the next step.")]
     pub fn cancel_edit(&mut self) {
         self.editor = None;
     }
 
     /// Close the dummy window. The result is the place and the position of the window, for the
     /// caller to save. A window that no pass has drawn gives `None`.
-    #[allow(dead_code, reason = "The Overlay settings page calls this in the next step.")]
     pub fn finish_edit(&mut self) -> Option<(Place, Pos)> {
         let editor = self.editor.take()?;
         Some((editor.place, editor.at?))
     }
 
+    /// The display mode that the last read of the client of this character gave. A character that
+    /// the overlay did not see in front yet gives `None`.
+    pub fn display_mode(&self, character_name: &str) -> Option<DisplayMode> {
+        self.modes.get(character_name).copied()
+    }
+
     /// Read the focused window, and show or hide the overlay window. With the overlay off, or with
-    /// the pilot outside the departure system of the next manual hop, no call to Windows happens.
+    /// no active route, no call to Windows happens. During a route, the read of the focused window
+    /// repeats each `POLL`, and it records the display mode of a client that it finds.
     pub fn logic(&mut self, ctx: &Context, s: &Session) {
-        // The dummy window replaces the overlay window.
-        if self.editor.is_some() {
-            self.alive = false;
-            self.last_poll = None;
-            self.send(ctx, false, None);
-            return;
-        }
         let config = &s.cfg.routing_overlay;
-        let route = s.pilots.active.as_ref().filter(|r| config.enabled && content(r, here(s, r)).is_some());
+        let route = s.pilots.active.as_ref().filter(|_| config.enabled && self.editor.is_none());
         let Some(route) = route else {
+            // The dummy window replaces the overlay window while the editor is open.
             self.alive = false;
             self.last_poll = None;
             self.send(ctx, false, None);
             return;
         };
         ctx.request_repaint_after(POLL);
+        let here = here(s, route);
+        let departing = content(route, here).is_some();
+        if !departing {
+            // `show` draws no window, so no window exists. The next one starts hidden.
+            self.alive = false;
+        }
         if self.last_poll.is_some_and(|t| t.elapsed() < POLL) {
             return;
         }
         self.last_poll = Some(Instant::now());
-        // Read the title first. Ask for the program only when the title is the title of the route character.
-        let here = here(s, route);
-        let want = win::foreground()
-            .is_some_and(|fg| fg.title().is_some_and(|title| content_for_title(&title, Some(route), here).is_some()) && fg.is_eve_client());
+        // Read the title first. Ask for the program only when the title is the title of a client.
+        let client = win::foreground().and_then(|fg| {
+            let title = fg.title()?;
+            let name = parse_client_title(&title)?.to_owned();
+            fg.is_eve_client().then_some((fg, title, name))
+        });
+        if let Some((fg, _, name)) = &client
+            && let Some(geometry) = fg.geometry()
+        {
+            self.modes.insert(name.clone(), geometry.mode());
+        }
+        let want = departing && client.is_some_and(|(_, title, _)| content_for_title(&title, Some(route), here).is_some());
         self.send(ctx, want, resolve_position(config, route.character));
     }
 

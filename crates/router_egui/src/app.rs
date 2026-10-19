@@ -726,8 +726,15 @@ impl Session {
         self.save();
     }
 
+    /// Turn the routing overlay on or off, and save it. The overlay works on Windows only.
+    #[cfg(windows)]
+    pub fn set_overlay_enabled(&mut self, on: bool) {
+        self.cfg.routing_overlay.enabled = on;
+        self.save();
+    }
+
     /// Set the position of the routing overlay for a place, and save it. `None` resets the position.
-    #[allow(dead_code, reason = "The Overlay settings page calls this in the next step.")]
+    #[cfg(windows)]
     pub fn set_overlay_position(&mut self, place: router_core::config::Place, pos: Option<router_core::config::Pos>) {
         self.cfg.routing_overlay.set_position(place, pos);
         self.save();
@@ -1394,6 +1401,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg(windows)]
     fn the_overlay_position_is_saved_and_reset() {
         use router_core::config::{Place, Pos};
         let (mut s, _tmp) = session();

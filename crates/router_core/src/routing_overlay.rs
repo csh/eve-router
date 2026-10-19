@@ -85,6 +85,9 @@ pub fn content_for_title(title: &str, route: Option<&ActiveRoute>, here: Option<
     (parse_client_title(title)? == route.character_name).then(|| content(route, here)).flatten()
 }
 
+/// The place of the overlay for a character that has none of its own, with no global place.
+pub const DEFAULT_POS: Pos = Pos { x: 40, y: 40 };
+
 /// Where the overlay sits for a character: the own position of the character, else the global
 /// position. `None` means that the user set neither, so the app uses its built-in place.
 pub fn resolve_position(config: &RoutingOverlayConfig, character: u64) -> Option<Pos> {
