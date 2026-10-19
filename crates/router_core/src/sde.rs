@@ -2,24 +2,24 @@
 
 use crate::error::FileError;
 use rayon::prelude::*;
-use serde::Deserialize;
 use serde::de::DeserializeOwned;
+use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::Path;
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Names {
     pub en: String,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Position {
     pub x: f64,
     pub y: f64,
     pub z: f64,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SdeSystem {
     #[serde(rename = "_key")]
     pub id: u32,
@@ -33,20 +33,20 @@ pub struct SdeSystem {
     pub position: Position,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct Destination {
     #[serde(rename = "solarSystemID")]
     pub system_id: u32,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SdeStargate {
     #[serde(rename = "solarSystemID")]
     pub system_id: u32,
     pub destination: Destination,
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 pub struct SdeRegion {
     #[serde(rename = "_key")]
     pub id: u32,
@@ -70,6 +70,28 @@ pub struct SdeData {
 pub fn read_jsonl<T: DeserializeOwned + Send>(path: &Path) -> Result<Vec<T>, FileError> {
     let text = fs::read_to_string(path).map_err(FileError::io(path))?;
     text.par_lines().filter(|line| !line.trim().is_empty()).map(|line| serde_json::from_str(line).map_err(FileError::json(path))).collect()
+}
+
+/// Keep only the fields of `T` in each line of a JSONL file, and write the lines again.
+/// The router reads only these fields, so the rest is dead weight on the disk.
+pub fn slim<T: DeserializeOwned + Serialize + Send>(data: &[u8]) -> Result<Vec<u8>, serde_json::Error> {
+    let text = String::from_utf8_lossy(data);
+    let lines: Vec<String> = text
+        .par_lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(|line| serde_json::from_str::<T>(line).and_then(|v| serde_json::to_string(&v)))
+        .collect::<Result<_, _>>()?;
+    Ok(lines
+        .iter()
+        .flat_map(|l| {
+            [
+                l.as_str(),
+                "
+",
+            ]
+        })
+        .collect::<String>()
+        .into_bytes())
 }
 
 /// Load the map files from an SDE directory. The three files load at the same time.

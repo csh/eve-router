@@ -286,7 +286,7 @@ fn inflate(data: &[u8], size: u64) -> std::io::Result<Vec<u8>> {
     Ok(out)
 }
 
-/// Fetch `FILES` from the zip into `dir`, and make `ships.json` from the ship source files.
+/// Fetch `FILES` from the zip into `dir`, slim the map files, and make `ships.json` from the ship source files.
 /// The source files are not kept. Return the number of compressed bytes. `on_bytes` gets
 /// `(done, total)` at the start and after each part of the download.
 pub(crate) fn download(src: &dyn RangeSource, dir: &Path, on_bytes: OnBytes) -> Result<u64, SdeError> {
@@ -322,6 +322,7 @@ pub(crate) fn download(src: &dyn RangeSource, dir: &Path, on_bytes: OnBytes) -> 
     // FILES ends with _sde.jsonl, so the build number changes last.
     for name in FILES {
         let data = files.remove(name).unwrap_or_default();
+        let data = slimmed(name, data)?;
         // Write a temporary file, then rename it, so a reader never sees half a file.
         let path = dir.join(name);
         let tmp = path.with_extension("jsonl.part");
@@ -329,6 +330,18 @@ pub(crate) fn download(src: &dyn RangeSource, dir: &Path, on_bytes: OnBytes) -> 
         fs::rename(&tmp, &path).map_err(FileError::io(&path))?;
     }
     Ok(total)
+}
+
+/// Cut a map file down to the fields that the router reads. Other files stay as they are.
+fn slimmed(name: &str, data: Vec<u8>) -> Result<Vec<u8>, SdeError> {
+    use crate::sde::{SdeRegion, SdeStargate, SdeSystem, slim};
+    let result = match name {
+        "mapSolarSystems.jsonl" => slim::<SdeSystem>(&data),
+        "mapStargates.jsonl" => slim::<SdeStargate>(&data),
+        "mapRegions.jsonl" => slim::<SdeRegion>(&data),
+        _ => return Ok(data),
+    };
+    result.map_err(|e| SdeError::Entry { name: name.to_string(), message: e.to_string() })
 }
 
 /// The build number in the `_sde.jsonl` data.
@@ -379,6 +392,28 @@ mod tests {
         assert!(ships.ships.iter().all(|s| s.name != "Drone"));
         assert_eq!(crate::sde::build_number(&dir), Some(123));
         assert_eq!(local_build(&dir), Some(123));
+    }
+
+    #[test]
+    fn map_files_keep_only_the_fields_the_router_reads() {
+        let tmp = tempfile::tempdir().unwrap();
+        download(&FIXTURE.to_vec(), tmp.path(), &|_, _| {}).unwrap();
+        let line = |name: &str| fs::read_to_string(tmp.path().join(name)).unwrap().lines().next().unwrap().to_string();
+        let keys = |name: &str| -> Vec<String> {
+            let v: serde_json::Value = serde_json::from_str(&line(name)).unwrap();
+            let mut keys: Vec<String> = v.as_object().unwrap().keys().cloned().collect();
+            keys.sort();
+            keys
+        };
+        assert_eq!(keys("mapSolarSystems.jsonl"), ["_key", "constellationID", "name", "position", "regionID", "securityStatus"]);
+        assert_eq!(keys("mapStargates.jsonl"), ["destination", "solarSystemID"]);
+        assert_eq!(keys("mapRegions.jsonl"), ["_key", "name"]);
+        // The languages other than English are gone too.
+        assert_eq!(line("mapRegions.jsonl"), r#"{"_key":10000001,"name":{"en":"Derelik"}}"#);
+        // The slim files still load.
+        let data = crate::sde::load(tmp.path()).unwrap();
+        assert_eq!(data.systems[0].position.x, 1.5e16);
+        assert_eq!(data.systems[0].security, 0.5);
     }
 
     #[test]

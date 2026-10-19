@@ -15,9 +15,10 @@ use std::path::Path;
 pub const FILE: &str = "ships.json";
 
 /// The shape of `ships.json`. Bump this when a field's meaning changes, so `sde_update` makes
-/// the file again even when the SDE build number does not change. A ship with no bridge cost
+/// the file again even when the SDE build number does not change. A bump also makes the
+/// router fetch the SDE again, so it slims the map files. A ship with no bridge cost
 /// or no mass still deserializes, so only a true shape change needs a bump.
-pub const SCHEMA: u32 = 3;
+pub const SCHEMA: u32 = 4;
 
 /// The SDE files that the table comes from.
 pub const SOURCES: [&str; 4] = ["types.jsonl", "typeDogma.jsonl", "groups.jsonl", "typeLists.jsonl"];
