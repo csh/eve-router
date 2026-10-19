@@ -66,6 +66,8 @@ enum Saved {
 const SAVED_TIME: Duration = Duration::from_secs(3);
 /// The row height of the two tables of the Avoid window, and the rows that each shows before it scrolls.
 const AVOID_ROW: f32 = 28.0;
+/// The header row of those tables. The scroll height counts it.
+const AVOID_HEAD: f32 = 22.0;
 const AVOID_ROWS: f32 = 7.0;
 
 impl SettingsForm {
@@ -267,9 +269,9 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
             .column(Column::initial(200.0).at_least(120.0).clip(true))
             .column(Column::exact(84.0))
             .column(Column::exact(84.0))
-            .max_scroll_height(AVOID_ROWS * AVOID_ROW)
+            .max_scroll_height(AVOID_HEAD + AVOID_ROWS * AVOID_ROW)
             .auto_shrink([false, true])
-            .header(22.0, |mut header| {
+            .header(AVOID_HEAD, |mut header| {
                 for text in ["System", "Security", "Region", "", ""] {
                     header.col(|ui| _ = ui.label(theme::header_text(text)));
                 }
@@ -332,9 +334,9 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
             .column(Column::initial(200.0).at_least(120.0).clip(true))
             .column(Column::exact(84.0))
             .column(Column::exact(84.0))
-            .max_scroll_height(AVOID_ROWS * AVOID_ROW)
+            .max_scroll_height(AVOID_HEAD + AVOID_ROWS * AVOID_ROW)
             .auto_shrink([false, true])
-            .header(22.0, |mut header| {
+            .header(AVOID_HEAD, |mut header| {
                 for text in ["Start", "Sig", "End", "Sig", ""] {
                     header.col(|ui| _ = ui.label(theme::header_text(text)));
                 }
