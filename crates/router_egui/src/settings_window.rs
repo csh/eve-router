@@ -315,7 +315,7 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
     if !s.closed.is_empty() {
         ui.add_space(12.0);
         ui.label(theme::header_text("Closed wormholes"));
-        ui.label(RichText::new("Routes skip these until you close the app.").color(theme::TEXT_DIM));
+        ui.label(RichText::new("Ignore these connections until the next app restart.").color(theme::TEXT_DIM));
         ui.add_space(4.0);
         let name = |id: u32| s.uni.by_id.get(&id).map_or_else(|| id.to_string(), |&n| s.uni.name(n).to_string());
         // The columns have the widths of the avoid table above, so the two tables line up.
