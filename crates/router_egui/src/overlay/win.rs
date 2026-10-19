@@ -2,10 +2,14 @@
 //! title and the file name of its program. They send no input, and they read no memory of another
 //! process. The router never lists the windows of the desktop.
 
+use super::mode::Geometry;
 use std::path::Path;
-use windows::Win32::Foundation::HWND;
+use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
-use windows::Win32::UI::WindowsAndMessaging::{GetForegroundWindow, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId};
+use windows::Win32::UI::WindowsAndMessaging::{
+    GWL_STYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+};
 use windows::core::{Owned, PWSTR};
 
 /// The file name of the program of a game client. The folder differs between installs.
@@ -45,6 +49,28 @@ impl Foreground {
     /// more rights, and the overlay does not show for that client.
     pub fn is_eve_client(self) -> bool {
         self.process_id().and_then(image_file_name).is_some_and(|name| name.eq_ignore_ascii_case(CLIENT_EXE))
+    }
+
+    /// The window rectangle, the monitor rectangle and the style bits of the window. A failed
+    /// call gives `None`.
+    pub fn geometry(self) -> Option<Geometry> {
+        let mut window = RECT::default();
+        // SAFETY: `window` lives longer than the call, and the call writes one `RECT` through the reference.
+        unsafe { GetWindowRect(self.0, &mut window) }.ok()?;
+        // SAFETY: The call has no pointer argument. With the flag `MONITOR_DEFAULTTONEAREST` it
+        // always gives a monitor, also for a window that is on no monitor.
+        let monitor = unsafe { MonitorFromWindow(self.0, MONITOR_DEFAULTTONEAREST) };
+        if monitor.is_invalid() {
+            return None;
+        }
+        let mut info = MONITORINFO { cbSize: size_of::<MONITORINFO>().try_into().ok()?, ..Default::default() };
+        // SAFETY: `info` lives longer than the call. `cbSize` holds its size, as the call requires.
+        unsafe { GetMonitorInfoW(monitor, &mut info) }.ok().ok()?;
+        // SAFETY: The call changes nothing. It gives 0 when it fails, and 0 is not a style that a
+        // visible window has.
+        let style = unsafe { GetWindowLongPtrW(self.0, GWL_STYLE) };
+        // The style is a 32-bit value in the low half of the result.
+        (style != 0).then_some(Geometry { window, monitor: info.rcMonitor, style: style as u32 })
     }
 
     fn process_id(self) -> Option<u32> {
