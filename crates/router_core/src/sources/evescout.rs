@@ -3,7 +3,7 @@
 //! The feed needs no key. The router fetches it at each startup, so the Thera and Turnur
 //! switches work at once, with no restart.
 
-use crate::log::{self, LogEntry};
+use crate::log::{self, LogEntry, LogEntryKind, LogOp};
 use crate::sources::{self, FetchError, OverlayWarning, SigType};
 use crate::wormhole::{Expiry, Size, SourceData, SourceId, Wormhole, parse_utc};
 use crate::wormhole_types::{WhCode, WormholeTypes};
@@ -161,7 +161,12 @@ fn start_with(url: &str, cache_path: PathBuf, now: u64, use_fresh: bool) -> Pend
 pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTypes) -> Load {
     match pending {
         Pending::Cache(data) => {
-            let log = vec![LogEntry { time: crate::wormhole::now(), op: "evescout.fetch", ok: true, reason: "cache is fresh".into() }];
+            let log = vec![LogEntry {
+                time: crate::wormhole::now(),
+                op: LogOp::EveScoutFetch,
+                kind: LogEntryKind::CacheFresh,
+                message: "cache is fresh".into(),
+            }];
             Load { data: Some(data), log, ..Load::default() }
         }
         Pending::Fetch { thread, started, origin, cache, cache_path } => {
@@ -175,11 +180,11 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
                 Ok(data)
             });
             let chosen = sources::choose(SourceId::EveScout, converted, cache, &cache_path);
-            let (ok, reason) = match &chosen.error {
-                Some(error) => (false, error.reason(SourceId::EveScout)),
-                None => (true, log::loaded(chosen.data.as_ref().map_or(0, |d| d.holes.len()))),
+            let (kind, message) = match &chosen.error {
+                Some(error) => (error.kind(), error.message(SourceId::EveScout)),
+                None => (LogEntryKind::Loaded, log::loaded(chosen.data.as_ref().map_or(0, |d| d.holes.len()))),
             };
-            let log = vec![LogEntry { time: started, op: "evescout.fetch", ok, reason }];
+            let log = vec![LogEntry { time: started, op: LogOp::EveScoutFetch, kind, message }];
             Load { data: chosen.data, report, warnings: chosen.warning.into_iter().collect(), log }
         }
     }
@@ -312,14 +317,19 @@ mod tests {
         let (url, _) = serve("503 Service Unavailable", "{}", Duration::ZERO);
         let (_tmp, path) = temp();
         let load = finish(start(&url, path, FETCHED), |_| true, &types());
-        assert_eq!((load.log.len(), load.log[0].op, load.log[0].ok, load.log[0].time), (1, "evescout.fetch", false, FETCHED));
-        assert!(load.log[0].reason.contains("503"), "{}", load.log[0].reason);
+        assert_eq!(
+            (load.log.len(), load.log[0].op, load.log[0].kind, load.log[0].time),
+            (1, LogOp::EveScoutFetch, LogEntryKind::Offline, FETCHED)
+        );
 
         let (url, _) = serve("200 OK", &fixture_text(), Duration::ZERO);
         let (_tmp, path) = temp();
         let load = finish(start(&url, path, FETCHED), |_| true, &types());
         let holes = load.data.as_ref().unwrap().holes.len();
-        assert_eq!(load.log, [LogEntry { time: FETCHED, op: "evescout.fetch", ok: true, reason: log::loaded(holes) }]);
+        assert_eq!(
+            load.log,
+            [LogEntry { time: FETCHED, op: LogOp::EveScoutFetch, kind: LogEntryKind::Loaded, message: log::loaded(holes) }]
+        );
     }
 
     #[test]

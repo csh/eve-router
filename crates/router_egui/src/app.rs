@@ -10,7 +10,7 @@ use router_core::esi::pilots::Pilots;
 use router_core::esi::store::{Keyring, StoreError, TokenStore};
 use router_core::esi::{self, active::active_path};
 use router_core::labels::Shortcuts;
-use router_core::log::{self, LogEntry};
+use router_core::log::{self, LogEntry, LogEntryKind, LogOp};
 use router_core::overlay::{self, OverlayReport, Pair};
 use router_core::refresh::{self, Refresher, RouteChange, Setup, Snapshot, kept_route, route_change};
 use router_core::route::{Route, Stop};
@@ -502,7 +502,12 @@ impl Session {
             Err(TryRecvError::Disconnected) => {
                 self.refresher = None;
                 self.notify(Level::Error, REFRESH_STOPPED);
-                let row = LogEntry { time: router_core::wormhole::now(), op: "refresh", ok: false, reason: "the worker stopped".into() };
+                let row = LogEntry {
+                    time: router_core::wormhole::now(),
+                    op: LogOp::Refresh,
+                    kind: LogEntryKind::WorkerStopped,
+                    message: "the worker stopped".into(),
+                };
                 log::push(&mut self.log, [row]);
             }
         }
@@ -863,7 +868,8 @@ mod tests {
     #[test]
     fn a_refresh_adds_its_rows_to_the_log() {
         let (mut s, _tmp) = session();
-        let row = |time| LogEntry { time, op: "nexum.fetch", ok: true, reason: "Loaded 1 wormhole connection".into() };
+        let row =
+            |time| LogEntry { time, op: LogOp::NexumFetch, kind: LogEntryKind::Loaded, message: "Loaded 1 wormhole connection".into() };
         let mut snap = snapshot(Vec::new());
         snap.log = vec![row(1)];
         s.apply_snapshot(snap);
@@ -881,7 +887,10 @@ mod tests {
         drop(snapshots);
         s.poll_refresh();
         assert_eq!(s.log.len(), 1);
-        assert_eq!((s.log[0].op, s.log[0].ok, s.log[0].reason.as_str()), ("refresh", false, "the worker stopped"));
+        assert_eq!(
+            (s.log[0].op, s.log[0].kind, s.log[0].message.as_str()),
+            (LogOp::Refresh, LogEntryKind::WorkerStopped, "the worker stopped")
+        );
     }
 
     #[test]

@@ -6,6 +6,7 @@ pub mod evescout;
 pub mod nexum;
 
 use crate::error::{FileError, write_atomic};
+use crate::log::LogEntryKind;
 use crate::wormhole::{MassStatus, SourceData, SourceId, local_time};
 use serde::Deserialize;
 use std::fmt;
@@ -65,8 +66,17 @@ pub enum FetchError {
 }
 
 impl FetchError {
+    /// The kind of log row that a failed fetch gives.
+    pub fn kind(&self) -> LogEntryKind {
+        match self {
+            FetchError::Auth => LogEntryKind::Auth,
+            FetchError::NotFound => LogEntryKind::NotFound,
+            FetchError::Offline(_) => LogEntryKind::Offline,
+        }
+    }
+
     /// The cause, for the log. The status line has a longer text.
-    pub fn reason(&self, source: SourceId) -> String {
+    pub fn message(&self, source: SourceId) -> String {
         match (self, source) {
             (FetchError::Auth, SourceId::EveScout) => "request refused".into(),
             (FetchError::Auth, SourceId::Nexum) => "bad API key or no access to the map".into(),

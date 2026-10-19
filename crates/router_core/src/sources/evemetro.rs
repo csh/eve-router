@@ -9,7 +9,7 @@
 
 use crate::config::EveMetroConfig;
 use crate::esi::client::Esi;
-use crate::log::{self, LogEntry};
+use crate::log::{self, LogEntry, LogEntryKind, LogOp};
 use crate::sources::nexum::earlier;
 use crate::sources::{self, FetchError, MassName, OverlayWarning};
 use crate::wormhole::{Expiry, HOUR, Size, SourceData, SourceId, Wormhole, parse_utc};
@@ -256,7 +256,12 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
     match pending {
         Pending::None => Load::default(),
         Pending::Cache(data) => {
-            let log = vec![LogEntry { time: crate::wormhole::now(), op: "evemetro.fetch", ok: true, reason: "cache is fresh".into() }];
+            let log = vec![LogEntry {
+                time: crate::wormhole::now(),
+                op: LogOp::EveMetroFetch,
+                kind: LogEntryKind::CacheFresh,
+                message: "cache is fresh".into(),
+            }];
             Load { data: Some(data), log, ..Load::default() }
         }
         Pending::Fetch { thread, started, origin, cache, cache_path } => {
@@ -274,15 +279,16 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
             // cache: the cache stays as it was, with its own warning and log row.
             if report.no_access {
                 let warnings = vec![OverlayWarning::MetroNoAccess];
-                let log = vec![LogEntry { time: started, op: "evemetro.fetch", ok: false, reason: "no access".into() }];
+                let log =
+                    vec![LogEntry { time: started, op: LogOp::EveMetroFetch, kind: LogEntryKind::NoAccess, message: "no access".into() }];
                 return Load { data: cache, report, warnings, log };
             }
             let chosen = sources::choose(SourceId::EveMetro, converted, cache, &cache_path);
-            let (ok, reason) = match &chosen.error {
-                Some(error) => (false, error.reason(SourceId::EveMetro)),
-                None => (true, log::loaded(chosen.data.as_ref().map_or(0, |d| d.holes.len()))),
+            let (kind, message) = match &chosen.error {
+                Some(error) => (error.kind(), error.message(SourceId::EveMetro)),
+                None => (LogEntryKind::Loaded, log::loaded(chosen.data.as_ref().map_or(0, |d| d.holes.len()))),
             };
-            let log = vec![LogEntry { time: started, op: "evemetro.fetch", ok, reason }];
+            let log = vec![LogEntry { time: started, op: LogOp::EveMetroFetch, kind, message }];
             Load { data: chosen.data, report, warnings: chosen.warning.into_iter().collect(), log }
         }
     }
@@ -465,8 +471,8 @@ mod tests {
         let result = load(&cfg(), &esi, &metro, path.clone());
         assert!(result.warnings.is_empty());
         assert_eq!(result.data.as_ref().map(|d| d.holes.len()), Some(2));
-        assert_eq!(result.log[0].op, "evemetro.fetch");
-        assert!(result.log[0].ok);
+        assert_eq!(result.log[0].op, LogOp::EveMetroFetch);
+        assert!(result.log[0].kind.is_ok());
         let cached = sources::read_cache(&path).expect("no cache file");
         assert_eq!(cached.origin, Some(origin_at(&metro, 42)));
         assert_eq!(origin(&cfg()), Some(format!("{URL}/connections#42")));
@@ -486,7 +492,7 @@ mod tests {
         assert_eq!(result.warnings, [OverlayWarning::MetroNoAccess]);
         assert_eq!(result.data, None);
         assert!(result.report.no_access);
-        assert!(!result.log[0].ok);
+        assert_eq!(result.log[0].kind, LogEntryKind::NoAccess);
     }
 
     /// A character can lose access for a moment (a late payment, a corp move). The empty reply
@@ -525,6 +531,7 @@ mod tests {
         let result = load(&cfg(), &esi, &metro, path);
         assert_eq!(result.data.as_ref().map(|d| d.holes.len()), Some(2));
         assert_eq!(sources::warning_text(&result.warnings).as_deref(), Some("EVE Metro key rejected"));
-        assert_eq!(result.log[0].reason, "bad API key");
+        assert_eq!(result.log[0].kind, LogEntryKind::Auth);
+        assert_eq!(result.log[0].message, "bad API key");
     }
 }

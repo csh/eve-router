@@ -8,7 +8,7 @@ use router_core::log::{LogEntry, local_clock_text};
 
 /// The text of the result column. A text, not only a color, tells the two results apart.
 fn result_text(entry: &LogEntry) -> &'static str {
-    if entry.ok { "ok" } else { "failed" }
+    if entry.kind.is_ok() { "ok" } else { "failed" }
 }
 
 /// The title of the Log window. The OS shows it in the task bar, and the app finds the window by it.
@@ -82,10 +82,10 @@ fn table(ui: &mut egui::Ui, log: &[LogEntry]) {
             body.rows(22.0, log.len(), |mut row| {
                 let entry = &log[log.len() - 1 - row.index()];
                 row.col(|ui| _ = ui.label(RichText::new(local_clock_text(entry.time)).color(theme::TEXT_DIM).monospace()));
-                row.col(|ui| _ = ui.label(RichText::new(entry.op).color(theme::TEXT)));
-                let color = if entry.ok { theme::OK } else { theme::ERROR };
+                row.col(|ui| _ = ui.label(RichText::new(entry.op.to_string()).color(theme::TEXT)));
+                let color = if entry.kind.is_ok() { theme::OK } else { theme::ERROR };
                 row.col(|ui| _ = ui.label(RichText::new(result_text(entry)).color(color)));
-                row.col(|ui| _ = ui.label(RichText::new(&entry.reason).color(theme::TEXT)));
+                row.col(|ui| _ = ui.label(RichText::new(&entry.message).color(theme::TEXT)));
             });
         });
 }
@@ -93,12 +93,13 @@ fn table(ui: &mut egui::Ui, log: &[LogEntry]) {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use router_core::log::{LogEntryKind, LogOp};
 
     #[test]
     fn the_result_is_a_word() {
-        let mut entry = LogEntry { time: 0, op: "nexum.fetch", ok: true, reason: String::new() };
+        let mut entry = LogEntry { time: 0, op: LogOp::NexumFetch, kind: LogEntryKind::Loaded, message: String::new() };
         assert_eq!(result_text(&entry), "ok");
-        entry.ok = false;
+        entry.kind = LogEntryKind::Offline;
         assert_eq!(result_text(&entry), "failed");
     }
 }

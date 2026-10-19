@@ -347,7 +347,7 @@ impl Worker {
 mod tests {
     use super::*;
     use crate::config::ApiKey;
-    use crate::log::LogEntry;
+    use crate::log::{LogEntry, LogEntryKind, LogOp};
     use crate::sources::CACHE_FRESH_SECS;
     use crate::test_support::{FIXTURE_TIME, hole, serve, serve_live, serve_routes, shared_universe, universe};
     use crate::universe::Link;
@@ -464,11 +464,14 @@ mod tests {
 
     #[test]
     fn build_collects_the_log_rows_of_both_sources() {
-        let row = |op, reason: &str| LogEntry { time: 7, op, ok: true, reason: reason.into() };
-        let wh = nexum::Load { log: vec![row("nexum.fetch", "Loaded 2 wormhole connections")], ..Default::default() };
-        let scout = evescout::Load { log: vec![row("evescout.fetch", "Loaded 1 wormhole connection")], ..Default::default() };
+        let row = |op, message: &str| LogEntry { time: 7, op, kind: LogEntryKind::Loaded, message: message.into() };
+        let wh = nexum::Load { log: vec![row(LogOp::NexumFetch, "Loaded 2 wormhole connections")], ..Default::default() };
+        let scout = evescout::Load { log: vec![row(LogOp::EveScoutFetch, "Loaded 1 wormhole connection")], ..Default::default() };
         let (snap, _) = build(universe(), &OverlayReport::default(), &wh, &scout, &Default::default(), 0);
-        assert_eq!(snap.log, [row("nexum.fetch", "Loaded 2 wormhole connections"), row("evescout.fetch", "Loaded 1 wormhole connection")]);
+        assert_eq!(
+            snap.log,
+            [row(LogOp::NexumFetch, "Loaded 2 wormhole connections"), row(LogOp::EveScoutFetch, "Loaded 1 wormhole connection")]
+        );
     }
 
     /// An EVE-Scout feed with one Thera wormhole to `to`. It has no expiry, so the test clock cannot end it.
@@ -602,7 +605,7 @@ mod tests {
         assert_eq!(data.holes.len(), 1);
         assert_eq!(snap.shortcuts.metro, 1);
         assert!(snap.shortcuts.sources.iter().any(|(source, _)| *source == SourceId::EveMetro));
-        assert!(snap.log.iter().any(|l| l.op == "evemetro.fetch" && l.ok));
+        assert!(snap.log.iter().any(|l| l.op == LogOp::EveMetroFetch && l.kind.is_ok()));
     }
 
     #[test]
@@ -613,7 +616,7 @@ mod tests {
         // The default settings are off. A tick sends no request to EVE Metro.
         let snap = worker.tick(FIXTURE_TIME, false);
         assert!(!snap.all.iter().any(|d| d.source == SourceId::EveMetro));
-        assert!(!snap.log.iter().any(|l| l.op == "evemetro.fetch"));
+        assert!(!snap.log.iter().any(|l| l.op == LogOp::EveMetroFetch));
         assert_eq!(snap.shortcuts.metro, 0);
     }
 
@@ -664,7 +667,12 @@ mod tests {
         r.refresh();
         let snap = r.recv_timeout(Duration::from_secs(10)).expect("no refresh after the message");
         assert!(has_hole(&snap.uni, THERA, JITA));
-        let fetch = LogEntry { time: FIXTURE_TIME, op: "evescout.fetch", ok: true, reason: "Loaded 1 wormhole connection".into() };
+        let fetch = LogEntry {
+            time: FIXTURE_TIME,
+            op: LogOp::EveScoutFetch,
+            kind: LogEntryKind::Loaded,
+            message: "Loaded 1 wormhole connection".into(),
+        };
         assert_eq!(snap.log, [fetch]);
     }
 

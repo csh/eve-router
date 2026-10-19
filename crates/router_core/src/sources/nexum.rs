@@ -4,7 +4,7 @@
 //! `server/src/data/whLifetimes.ts`).
 
 use crate::config::NexumConfig;
-use crate::log::{self, LogEntry};
+use crate::log::{self, LogEntry, LogEntryKind, LogOp};
 use crate::sources::{self, FetchError, MassName, OverlayWarning, SigType};
 use crate::wormhole::{Expiry, HOUR, Size, SourceData, SourceId, Wormhole, parse_utc};
 use crate::wormhole_types::{WhCode, WormholeTypes};
@@ -532,7 +532,12 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
     match pending {
         Pending::None => Load::default(),
         Pending::Cache(data) => {
-            let log = vec![LogEntry { time: crate::wormhole::now(), op: "nexum.fetch", ok: true, reason: "cache is fresh".into() }];
+            let log = vec![LogEntry {
+                time: crate::wormhole::now(),
+                op: LogOp::NexumFetch,
+                kind: LogEntryKind::CacheFresh,
+                message: "cache is fresh".into(),
+            }];
             Load { data: Some(data), log, ..Load::default() }
         }
         Pending::Fetch { thread, started, origin, cache, cache_path, skip_unsigned } => {
@@ -549,14 +554,14 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
             let chosen = sources::choose(SourceId::Nexum, converted, cache, &cache_path);
             let sig_warning = (sig_failures > 0).then_some(OverlayWarning::NexumSignatures { failed: sig_failures });
             let warnings: Vec<OverlayWarning> = chosen.warning.into_iter().chain(sig_warning).collect();
-            let row = |op, ok, reason: String| LogEntry { time: started, op, ok, reason };
+            let row = |op, kind, message: String| LogEntry { time: started, op, kind, message };
             let mut log = vec![match (&chosen.error, &chosen.data) {
-                (Some(error), _) => row("nexum.fetch", false, error.reason(SourceId::Nexum)),
-                (None, data) => row("nexum.fetch", true, log::loaded(data.as_ref().map_or(0, |d| d.holes.len()))),
+                (Some(error), _) => row(LogOp::NexumFetch, error.kind(), error.message(SourceId::Nexum)),
+                (None, data) => row(LogOp::NexumFetch, LogEntryKind::Loaded, log::loaded(data.as_ref().map_or(0, |d| d.holes.len()))),
             }];
             if sig_failures > 0 {
-                let reason = if sig_failures == 1 { "1 system not loaded".into() } else { format!("{sig_failures} systems not loaded") };
-                log.push(row("nexum.signatures", false, reason));
+                let message = if sig_failures == 1 { "1 system not loaded".into() } else { format!("{sig_failures} systems not loaded") };
+                log.push(row(LogOp::NexumSignatures, LogEntryKind::SignaturesFailed, message));
             }
             Load { data: chosen.data, report, warnings, log }
         }
@@ -960,8 +965,14 @@ mod tests {
         let (_tmp, path) = temp();
         let load = finish(start(&cfg(&url), path, FETCHED), |id| id != 39_999_999, &types());
         let holes = load.data.as_ref().unwrap().holes.len();
-        let row = |op, ok, reason: &str| LogEntry { time: FETCHED, op, ok, reason: reason.into() };
-        assert_eq!(load.log, [row("nexum.fetch", true, &log::loaded(holes)), row("nexum.signatures", false, "1 system not loaded")]);
+        let row = |op, kind, message: &str| LogEntry { time: FETCHED, op, kind, message: message.into() };
+        assert_eq!(
+            load.log,
+            [
+                row(LogOp::NexumFetch, LogEntryKind::Loaded, &log::loaded(holes)),
+                row(LogOp::NexumSignatures, LogEntryKind::SignaturesFailed, "1 system not loaded")
+            ]
+        );
     }
 
     #[test]
@@ -970,7 +981,7 @@ mod tests {
         let (_tmp, path) = temp();
         let load = finish(start(&cfg(&url), path, FETCHED), |_| true, &types());
         let reason = "bad API key or no access to the map";
-        assert_eq!(load.log, [LogEntry { time: FETCHED, op: "nexum.fetch", ok: false, reason: reason.into() }]);
+        assert_eq!(load.log, [LogEntry { time: FETCHED, op: LogOp::NexumFetch, kind: LogEntryKind::Auth, message: reason.into() }]);
     }
 
     #[test]
@@ -987,7 +998,10 @@ mod tests {
         crate::sources::write_cache(&path, &cached).unwrap();
         let load = finish(start(&cfg(url), path, crate::wormhole::now()), |_| true, &types());
         let row = &load.log[..];
-        assert_eq!((row.len(), row[0].op, row[0].ok, row[0].reason.as_str()), (1, "nexum.fetch", true, "cache is fresh"));
+        assert_eq!(
+            (row.len(), row[0].op, row[0].kind, row[0].message.as_str()),
+            (1, LogOp::NexumFetch, LogEntryKind::CacheFresh, "cache is fresh")
+        );
         // No settings: no request, no row.
         assert!(finish(Pending::None, |_| true, &types()).log.is_empty());
     }
