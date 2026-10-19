@@ -6,8 +6,8 @@ use crate::theme::{self, panel, panel_with};
 use crate::widgets::{AppButton, UiExt};
 use egui::load::SizedTexture;
 use egui::{
-    Align, Color32, ColorImage, CornerRadius, Frame, Id, Label, Layout, Margin, Modal, RichText, Sense, Stroke, StrokeKind, TextEdit,
-    TextureHandle, TextureOptions, Ui, vec2,
+    Align, Color32, ColorImage, CornerRadius, Frame, Id, Label, Layout, Margin, Modal, RichText, Sense, Stroke, TextEdit, TextureHandle,
+    TextureOptions, Ui, vec2,
 };
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor_icons::icons;
@@ -95,15 +95,11 @@ fn decode(bytes: &[u8]) -> Option<ColorImage> {
 }
 
 /// One avatar. The name is not on hover, because the name shows beside the avatar. The route
-/// table has no name beside it, so `avatar_row` adds the hover. The active pilot has an accent ring. An offline pilot
-/// shows at 40 % alpha. Before the portrait loads, the initials show.
+/// table has no name beside it, so `avatar_row` adds the hover. An offline pilot shows at 40 %
+/// alpha. Before the portrait loads, the initials show.
 pub fn avatar(ui: &mut Ui, portraits: &mut Portraits, pilot: &PilotView, size: f32) -> egui::Response {
     let tint = if pilot.live.online == Some(false) { Color32::from_white_alpha(102) } else { Color32::WHITE };
-    let response = portrait_picture(ui, portraits, pilot.id, &pilot.name, tint, size);
-    if pilot.active {
-        ui.painter().rect_stroke(response.rect, CornerRadius::same(3), Stroke::new(1.0, theme::accent(ui)), StrokeKind::Outside);
-    }
-    response
+    portrait_picture(ui, portraits, pilot.id, &pilot.name, tint, size)
 }
 
 /// The portrait of a character, with no ring and no dimming: a list that picks a character uses
