@@ -6,7 +6,7 @@
 use crate::overlay::Geometry;
 use std::ffi::c_void;
 use std::path::Path;
-use windows::Win32::Foundation::{COLORREF, HWND, RECT};
+use windows::Win32::Foundation::{COLORREF, HWND, MAX_PATH, RECT};
 use windows::Win32::Graphics::Dwm::{
     DWMWA_BORDER_COLOR, DWMWA_COLOR_NONE, DWMWA_WINDOW_CORNER_PREFERENCE, DWMWCP_DONOTROUND, DWMWINDOWATTRIBUTE, DwmSetWindowAttribute,
 };
@@ -20,9 +20,6 @@ use windows::core::{HSTRING, Owned, PCWSTR, PWSTR};
 
 /// The file name of the program of a game client. The folder differs between installs.
 const CLIENT_EXE: &str = "exefile.exe";
-
-/// The longest path that Windows allows, in UTF-16 units, with the terminating null.
-const MAX_IMAGE_PATH: usize = 32_768;
 
 /// The window that has the focus.
 #[derive(Clone, Copy, Debug)]
@@ -141,9 +138,10 @@ fn image_file_name(process_id: u32) -> Option<String> {
     let process = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, process_id) }.ok()?;
     // SAFETY: `OpenProcess` gave the handle to this code, and nothing else owns it. `Owned` closes it one time.
     let process = unsafe { Owned::new(process) };
-    // One buffer on the stack holds the longest path that Windows allows, so no call needs a retry.
-    let mut buffer = [0u16; MAX_IMAGE_PATH];
-    let mut length = MAX_IMAGE_PATH as u32;
+    // One buffer on the stack holds `MAX_PATH` units. A program that is installed sits in a path
+    // that short. A longer path makes the call fail, and the overlay does not show for that client.
+    let mut buffer = [0u16; MAX_PATH as usize];
+    let mut length = MAX_PATH;
     // SAFETY: The handle is open with the right to query. `buffer` has room for `length` units. The
     // call writes at most that many, and sets `length` to the count that it wrote, without the null.
     unsafe { QueryFullProcessImageNameW(*process, PROCESS_NAME_WIN32, PWSTR::from_raw(buffer.as_mut_ptr()), &raw mut length) }.ok()?;
