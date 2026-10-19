@@ -6,6 +6,7 @@ use egui::{
     Color32, CornerRadius, FontData, FontDefinitions, FontFamily, FontId, Frame, Margin, Pos2, RichText, Shadow, Stroke, TextStyle, Ui,
     Vec2, vec2,
 };
+use router_core::esi::active::Hop;
 use std::sync::Arc;
 
 pub const BG: Color32 = Color32::from_rgb(0x07, 0x07, 0x07);
@@ -29,6 +30,16 @@ pub const WORMHOLE: Color32 = Color32::from_rgb(0xB0, 0x70, 0xE0);
 pub const BRIDGE: Color32 = Color32::from_rgb(0x60, 0xA0, 0xFF);
 /// A Triglavian filament hop: a deep orange-red, apart from `WARN` and `ERROR`.
 pub const FILAMENT: Color32 = Color32::from_rgb(0xD1, 0x3B, 0x1E);
+
+/// The color of a link in the route tables. A gate and the start use the dim text color.
+pub fn link_color(hop: Hop) -> Color32 {
+    match hop {
+        Hop::Wormhole => WORMHOLE,
+        Hop::Bridge => BRIDGE,
+        Hop::Filament => FILAMENT,
+        Hop::Start | Hop::Gate => TEXT_DIM,
+    }
+}
 
 /// The fill of a stop row in the route table, and of a hovered row.
 pub const ROW_FILL: Color32 = Color32::from_rgb(0x10, 0x12, 0x13);
@@ -363,6 +374,15 @@ pub fn modal_width(ui: &Ui, want: f32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn each_link_has_its_own_color() {
+        assert_eq!(link_color(Hop::Wormhole), WORMHOLE);
+        assert_eq!(link_color(Hop::Bridge), BRIDGE);
+        assert_eq!(link_color(Hop::Filament), FILAMENT);
+        assert_eq!(link_color(Hop::Gate), TEXT_DIM);
+        assert_eq!(link_color(Hop::Start), TEXT_DIM);
+    }
 
     #[test]
     fn each_theme_has_its_own_button_colors() {

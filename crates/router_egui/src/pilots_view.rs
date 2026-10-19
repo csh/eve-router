@@ -11,7 +11,7 @@ use egui::{
 };
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor_icons::icons;
-use router_core::esi::active::{ActiveRoute, Hop};
+use router_core::esi::active::ActiveRoute;
 use router_core::esi::client::{IMAGES_URL, portrait};
 use router_core::esi::pilots::{HullSync, PilotView, Pilots, StartPlan, pilots_by_step};
 use router_core::labels::{hull_label, manual_hop_hint, ship_text};
@@ -801,12 +801,8 @@ impl PilotsUi {
                             ui.add(Label::new(RichText::new(region).color(theme::TEXT_DIM)).truncate());
                         });
                         row.col(|ui| {
-                            let (via, color) = match step.hop {
-                                Hop::Wormhole => (format!("{} — manual", step.via), theme::WORMHOLE),
-                                Hop::Filament => (format!("{} — manual", step.via), theme::FILAMENT),
-                                Hop::Bridge => (step.via.clone(), theme::BRIDGE),
-                                _ => (step.via.clone(), theme::TEXT_DIM),
-                            };
+                            let via = if step.hop.is_manual() { format!("{} — manual", step.via) } else { step.via.clone() };
+                            let color = theme::link_color(step.hop);
                             let via = via.replace('\u{2192}', "»");
                             ui.add(Label::new(RichText::new(&via).color(dim(color))).truncate());
                         });

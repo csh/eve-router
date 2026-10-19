@@ -49,6 +49,16 @@ pub enum Hop {
 }
 
 impl Hop {
+    /// The hop that a graph link makes.
+    pub fn of(link: &Link) -> Hop {
+        match link {
+            Link::Stargate => Hop::Gate,
+            Link::Wormhole(_) => Hop::Wormhole,
+            Link::JumpBridge => Hop::Bridge,
+            Link::Filament(_) => Hop::Filament,
+        }
+    }
+
     /// True for a hop that the autopilot cannot make: a wormhole or a filament.
     pub fn is_manual(self) -> bool {
         matches!(self, Hop::Wormhole | Hop::Filament)
@@ -128,11 +138,10 @@ impl ActiveRoute {
                 step_of_node[i] = steps.len();
                 continue;
             }
-            let (hop, sig) = match &uni.graph[edge] {
-                Link::Stargate => (Hop::Gate, None),
-                Link::Wormhole(w) => (Hop::Wormhole, w.sig_at(uni.system(route.path.nodes[i - 1]).id)),
-                Link::JumpBridge => (Hop::Bridge, None),
-                Link::Filament(_) => (Hop::Filament, None),
+            let hop = Hop::of(&uni.graph[edge]);
+            let sig = match &uni.graph[edge] {
+                Link::Wormhole(w) => w.sig_at(uni.system(route.path.nodes[i - 1]).id),
+                _ => None,
             };
             step_of_node[i] = steps.len();
             steps.push(Step { system, hop, via: link_label(uni, rules, edge, now), sig });

@@ -13,6 +13,7 @@ use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers,
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor_icons::icons;
 use petgraph::graph::NodeIndex;
+use router_core::esi::active::Hop;
 use router_core::labels::{jumps_label, link_label, on_off, pilot_label, route_summary, route_tsv};
 use router_core::route::{Mode, Stop};
 use router_core::sources::FetchError;
@@ -659,11 +660,9 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                         Some(e) => link_label(uni, &s.settings.rules, e, s.now).replace('\u{2192}', "»"),
                         None => String::new(),
                     };
-                    let via_color = match via.as_str() {
-                        v if v.starts_with("Wormhole") => theme::WORMHOLE,
-                        v if v.starts_with("Ansiblex") => theme::BRIDGE,
-                        v if v.starts_with("Filament") => theme::FILAMENT,
-                        _ => theme::TEXT_DIM,
+                    let via_color = match step.checked_sub(1).map(|i| Hop::of(&uni.graph[route.path.edges[i]])) {
+                        Some(hop) => theme::link_color(hop),
+                        None => theme::TEXT_DIM,
                     };
                     let stop = route.stop_at(step);
                     row.set_selected(selected_step == Some(step));
