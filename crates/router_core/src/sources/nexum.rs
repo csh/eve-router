@@ -5,9 +5,9 @@
 
 use crate::config::NexumConfig;
 use crate::log::{self, LogEntry};
-use crate::sources::{self, FetchError};
-use crate::wormhole::{Expiry, HOUR, MassStatus, Size, SourceData, SourceId, Wormhole, parse_utc};
-use crate::wormhole_types::WormholeTypes;
+use crate::sources::{self, FetchError, MassName, SigType};
+use crate::wormhole::{Expiry, HOUR, Size, SourceData, SourceId, Wormhole, parse_utc};
+use crate::wormhole_types::{WhCode, WormholeTypes};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
@@ -38,17 +38,84 @@ pub struct NexumSystem {
     pub name: Option<String>,
 }
 
+/// The kind of a connection. Only `standard` is a wormhole. A new kind is `Other`.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ConnectionType {
+    Standard,
+    #[serde(other)]
+    Other,
+}
+
+/// The size name of Nexum. Nexum has no `capital` name.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum NexumSize {
+    Small,
+    Medium,
+    Large,
+    Xl,
+    #[serde(other)]
+    Unknown,
+}
+
+impl NexumSize {
+    pub fn size(self) -> Option<Size> {
+        match self {
+            NexumSize::Small => Some(Size::Small),
+            NexumSize::Medium => Some(Size::Medium),
+            NexumSize::Large => Some(Size::Large),
+            NexumSize::Xl => Some(Size::XLarge),
+            NexumSize::Unknown => None,
+        }
+    }
+}
+
+/// The time status of a connection: `fresh`, `expired` or `lessThanNh`, an upper limit of N hours.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(from = "String")]
+pub enum TimeStatus {
+    Fresh,
+    Expired,
+    LessThan(u64),
+    Other,
+}
+
+impl From<String> for TimeStatus {
+    fn from(text: String) -> TimeStatus {
+        match text.as_str() {
+            "fresh" => TimeStatus::Fresh,
+            "expired" => TimeStatus::Expired,
+            other => other
+                .strip_prefix("lessThan")
+                .and_then(|t| t.strip_suffix('h'))
+                .and_then(|t| t.parse().ok())
+                .map_or(TimeStatus::Other, TimeStatus::LessThan),
+        }
+    }
+}
+
+impl TimeStatus {
+    /// The upper limit in hours. Only `lessThanNh` gives one.
+    pub fn hours(self) -> Option<u64> {
+        match self {
+            TimeStatus::LessThan(h) => Some(h),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Deserialize, Clone)]
 #[serde(rename_all = "camelCase")]
 pub struct NexumConnection {
     pub source_id: String,
     pub target_id: String,
-    pub connection_type: String,
-    pub size: Option<String>,
+    pub connection_type: ConnectionType,
+    pub size: Option<NexumSize>,
     #[serde(rename = "type")]
     pub wh_type: Option<String>,
-    pub mass_status: Option<String>,
-    pub time_status: Option<String>,
+    pub mass_status: Option<MassName>,
+    pub time_status: Option<TimeStatus>,
     pub lifetime_expires_at: Option<String>,
     pub eol_at: Option<String>,
     pub created_at: Option<String>,
@@ -68,7 +135,7 @@ pub struct NexumSig {
     /// For example "ABC-123".
     pub sig_id: Option<String>,
     /// For example "wormhole" or "data".
-    pub sig_type: Option<String>,
+    pub sig_type: Option<SigType>,
     /// Free text from the scout: a system name, a class such as "NS", or "Drifter".
     pub wh_leads_to: Option<String>,
 }
@@ -130,7 +197,7 @@ pub fn sig_systems(map: &NexumMap) -> Vec<String> {
     let mut ids: Vec<String> = map
         .connections
         .iter()
-        .filter(|c| c.connection_type == "standard" && !c.broken)
+        .filter(|c| c.connection_type == ConnectionType::Standard && !c.broken)
         .flat_map(|c| [c.source_id.as_str(), c.target_id.as_str()])
         .filter(|id| real.contains(id))
         .map(str::to_string)
@@ -225,30 +292,6 @@ impl NexumReport {
     }
 }
 
-/// The time status gives an upper limit: "lessThan4h" gives 4. "fresh" and "expired" give `None`.
-fn status_hours(status: &str) -> Option<u64> {
-    status.strip_prefix("lessThan")?.strip_suffix('h')?.parse().ok()
-}
-
-fn parse_size(size: &str) -> Option<Size> {
-    match size {
-        "small" => Some(Size::Small),
-        "medium" => Some(Size::Medium),
-        "large" => Some(Size::Large),
-        "xl" => Some(Size::XLarge),
-        _ => None,
-    }
-}
-
-fn parse_mass(mass: &str) -> Option<MassStatus> {
-    match mass {
-        "stable" => Some(MassStatus::Stable),
-        "destabilized" => Some(MassStatus::Destabilized),
-        "critical" => Some(MassStatus::Critical),
-        _ => None,
-    }
-}
-
 /// The earlier of two expiry values.
 pub(crate) fn earlier(a: Option<Expiry>, b: Option<Expiry>) -> Option<Expiry> {
     match (a, b) {
@@ -273,13 +316,13 @@ fn expiry(c: &NexumConnection, ends: [u32; 2], types: &WormholeTypes, fetched_at
     } else if let Some(eol) = time(&c.eol_at) {
         Some(Expiry { at: eol.saturating_add(4 * HOUR) })
     } else {
-        match c.wh_type.as_deref().and_then(|t| types.life_hours(t, ends)) {
+        match c.wh_type.as_deref().and_then(WhCode::parse).and_then(|t| types.life_hours(&t, ends)) {
             Some(hours) => time(&c.created_at).map(|created| Expiry { at: created.saturating_add((hours * 3600.0) as u64) }),
             None => None,
         }
     };
     // The server text gives any number, so the math saturates.
-    let status = c.time_status.as_deref().and_then(status_hours).map(|h| Expiry { at: fetched_at.saturating_add(h.saturating_mul(HOUR)) });
+    let status = c.time_status.and_then(TimeStatus::hours).map(|h| Expiry { at: fetched_at.saturating_add(h.saturating_mul(HOUR)) });
     earlier(base, status)
 }
 
@@ -293,9 +336,9 @@ fn end_sig(link: Option<&str>, from: &str, to: Option<&str>, sigs: &SystemSigs, 
         return sig.sig_id.clone();
     }
     let to = to.filter(|_| single)?.trim();
-    let mut found = list.iter().filter(|s| {
-        s.sig_type.as_deref() == Some("wormhole") && s.wh_leads_to.as_deref().is_some_and(|w| w.trim().eq_ignore_ascii_case(to))
-    });
+    let mut found = list
+        .iter()
+        .filter(|s| s.sig_type == Some(SigType::Wormhole) && s.wh_leads_to.as_deref().is_some_and(|w| w.trim().eq_ignore_ascii_case(to)));
     let first = found.next()?;
     if found.next().is_some() { None } else { first.sig_id.clone() }
 }
@@ -314,7 +357,7 @@ pub fn convert(
     let names: HashMap<&str, &str> = map.systems.iter().filter_map(|s| Some((s.id.as_str(), s.name.as_deref()?))).collect();
     // The number of wormhole connections between each two systems.
     let mut pair_count: HashMap<(&str, &str), usize> = HashMap::new();
-    for c in map.connections.iter().filter(|c| c.connection_type == "standard" && !c.broken) {
+    for c in map.connections.iter().filter(|c| c.connection_type == ConnectionType::Standard && !c.broken) {
         let (x, y) = (c.source_id.as_str(), c.target_id.as_str());
         *pair_count.entry((x.min(y), x.max(y))).or_default() += 1;
     }
@@ -333,12 +376,12 @@ pub fn convert(
     }
 
     let mut holes = Vec::new();
-    for c in map.connections.iter().filter(|c| c.connection_type == "standard") {
+    for c in map.connections.iter().filter(|c| c.connection_type == ConnectionType::Standard) {
         if c.broken {
             report.broken += 1;
             continue;
         }
-        if c.time_status.as_deref() == Some("expired") {
+        if c.time_status == Some(TimeStatus::Expired) {
             report.expired += 1;
             continue;
         }
@@ -356,11 +399,11 @@ pub fn convert(
             continue;
         }
         // An empty type text counts as no type.
-        let wh_type = c.wh_type.as_deref().map(str::trim).filter(|t| !t.is_empty());
+        let wh_type = c.wh_type.as_deref().and_then(WhCode::parse);
         // Nexum takes the size from a known type. A K162 or a hole with no type keeps the stored size.
-        let (size, max_jump_kg) = match wh_type.and_then(|t| types.get(t)) {
+        let (size, max_jump_kg) = match wh_type.as_ref().and_then(|t| types.get(t)) {
             Some(t) => (Some(Size::from_jump_kg(t.max_jump_kg)), Some(t.max_jump_kg)),
-            None => (c.size.as_deref().and_then(parse_size), None),
+            None => (c.size.and_then(NexumSize::size), None),
         };
         let (x, y) = (c.source_id.as_str(), c.target_id.as_str());
         let single = pair_count.get(&(x.min(y), x.max(y))) == Some(&1);
@@ -369,9 +412,9 @@ pub fn convert(
         holes.push(Wormhole {
             size,
             max_jump_kg,
-            mass: c.mass_status.as_deref().and_then(parse_mass),
+            mass: c.mass_status.and_then(MassName::status),
             expiry,
-            wh_type: wh_type.map(str::to_string),
+            wh_type,
             ..Wormhole::new(a, b, source_sig, target_sig, SourceId::Nexum)
         });
     }
@@ -527,6 +570,7 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::wormhole::MassStatus;
     use crate::wormhole_types::WormholeType;
 
     /// 2026-10-05T12:00:00Z.
@@ -642,7 +686,7 @@ mod tests {
         assert_eq!(typed.size, Some(Size::Large));
         assert_eq!(typed.max_jump_kg, Some(375_000_000.0));
         assert_eq!(typed.mass, Some(MassStatus::Stable));
-        assert_eq!(typed.wh_type.as_deref(), Some("B274"));
+        assert_eq!(typed.wh_type.as_ref().map(WhCode::as_str), Some("B274"));
         // createdAt 02:00 + 24 h is before the time status limit (12:00 + 24 h).
         assert_eq!(typed.expiry, Some(Expiry { at: FETCHED - 10 * HOUR + 24 * HOUR }));
         assert_eq!(typed.sources, vec![SourceId::Nexum]);
@@ -723,25 +767,32 @@ mod tests {
     /// class of an EVE-Scout "xlarge" hole, and the Capital class stays apart.
     #[test]
     fn sizes_match_eve_scout() {
-        use crate::sources::evescout;
-        for (nexum, scout) in [("small", "small"), ("medium", "medium"), ("large", "large"), ("xl", "xlarge")] {
-            assert_eq!(parse_size(nexum), evescout::parse_size(scout), "{nexum}");
+        use crate::sources::evescout::ScoutSize;
+        let nexum = |t: &str| serde_json::from_str::<NexumSize>(&format!("\"{t}\"")).unwrap().size();
+        let scout = |t: &str| serde_json::from_str::<ScoutSize>(&format!("\"{t}\"")).unwrap().size();
+        for (n, s) in [("small", "small"), ("medium", "medium"), ("large", "large"), ("xl", "xlarge")] {
+            assert_eq!(nexum(n), scout(s), "{n}");
         }
-        assert_eq!(evescout::parse_size("capital"), Some(Size::Capital));
-        assert_ne!(parse_size("xl"), evescout::parse_size("capital"));
+        assert_eq!(scout("capital"), Some(Size::Capital));
+        assert_ne!(nexum("xl"), scout("capital"));
     }
 
     #[test]
     fn value_mapping() {
-        assert_eq!(parse_size("xl"), Some(Size::XLarge));
-        assert_eq!(parse_size("capital"), None);
-        assert_eq!(parse_size("huge"), None);
-        assert_eq!(parse_mass("critical"), Some(MassStatus::Critical));
-        assert_eq!(parse_mass("verge"), None);
-        assert_eq!(status_hours("lessThan1h"), Some(1));
-        assert_eq!(status_hours("lessThan24h"), Some(24));
-        assert_eq!(status_hours("fresh"), None);
-        assert_eq!(status_hours("expired"), None);
+        let size = |t: &str| serde_json::from_str::<NexumSize>(&format!("\"{t}\"")).unwrap().size();
+        assert_eq!(size("xl"), Some(Size::XLarge));
+        assert_eq!(size("capital"), None);
+        assert_eq!(size("huge"), None);
+        let mass = |t: &str| serde_json::from_str::<MassName>(&format!("\"{t}\"")).unwrap().status();
+        assert_eq!(mass("critical"), Some(crate::wormhole::MassStatus::Critical));
+        assert_eq!(mass("verge"), None);
+        let status = |t: &str| TimeStatus::from(t.to_string());
+        assert_eq!(status("lessThan1h").hours(), Some(1));
+        assert_eq!(status("lessThan24h").hours(), Some(24));
+        assert_eq!(status("fresh"), TimeStatus::Fresh);
+        assert_eq!(status("expired"), TimeStatus::Expired);
+        assert_eq!(status("fresh").hours(), None);
+        assert_eq!(status("lessThanXh"), TimeStatus::Other);
     }
 
     use crate::config::{ApiKey, NexumConfig};

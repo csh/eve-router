@@ -4,26 +4,51 @@
 //! switches work at once, with no restart.
 
 use crate::log::{self, LogEntry};
-use crate::sources::{self, FetchError};
+use crate::sources::{self, FetchError, SigType};
 use crate::wormhole::{Expiry, Size, SourceData, SourceId, Wormhole, parse_utc};
-use crate::wormhole_types::WormholeTypes;
+use crate::wormhole_types::{WhCode, WormholeTypes};
 use serde::Deserialize;
 use std::path::PathBuf;
 use std::thread::JoinHandle;
 
 pub const URL: &str = "https://api.eve-scout.com/v2/public/signatures";
 
+/// The ship size name of the feed: `small`, `medium`, `large`, `xlarge` or `capital`.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ScoutSize {
+    Small,
+    Medium,
+    Large,
+    XLarge,
+    Capital,
+    #[serde(other)]
+    Unknown,
+}
+
+impl ScoutSize {
+    pub fn size(self) -> Option<Size> {
+        match self {
+            ScoutSize::Small => Some(Size::Small),
+            ScoutSize::Medium => Some(Size::Medium),
+            ScoutSize::Large => Some(Size::Large),
+            ScoutSize::XLarge => Some(Size::XLarge),
+            ScoutSize::Capital => Some(Size::Capital),
+            ScoutSize::Unknown => None,
+        }
+    }
+}
+
 /// One entry of the feed. The router reads only these fields.
 #[derive(Deserialize)]
 pub struct Signature {
-    pub signature_type: String,
+    pub signature_type: SigType,
     /// False while a scout has not yet found the other end.
     #[serde(default)]
     pub completed: bool,
     /// The type of the end that is not a K162, for example "J377".
     pub wh_type: Option<String>,
-    /// `small`, `medium`, `large`, `xlarge` or `capital`.
-    pub max_ship_size: Option<String>,
+    pub max_ship_size: Option<ScoutSize>,
     pub expires_at: Option<String>,
     /// Thera or Turnur.
     pub out_system_id: u32,
@@ -54,23 +79,12 @@ impl EveScoutReport {
     }
 }
 
-pub(crate) fn parse_size(size: &str) -> Option<Size> {
-    match size {
-        "small" => Some(Size::Small),
-        "medium" => Some(Size::Medium),
-        "large" => Some(Size::Large),
-        "xlarge" => Some(Size::XLarge),
-        "capital" => Some(Size::Capital),
-        _ => None,
-    }
-}
-
 /// Convert the feed. `known` says if an EVE system ID is in the SDE.
 pub fn convert(sigs: &[Signature], known: impl Fn(u32) -> bool, types: &WormholeTypes, fetched_at: u64) -> (SourceData, EveScoutReport) {
     let mut report = EveScoutReport::default();
     let mut holes = Vec::new();
     for s in sigs {
-        let Some(in_id) = s.in_system_id.filter(|_| s.signature_type == "wormhole" && s.completed) else {
+        let Some(in_id) = s.in_system_id.filter(|_| s.signature_type == SigType::Wormhole && s.completed) else {
             report.incomplete += 1;
             continue;
         };
@@ -86,16 +100,16 @@ pub fn convert(sigs: &[Signature], known: impl Fn(u32) -> bool, types: &Wormhole
         }
         // An empty type text counts as no type. A known type gives the exact limit.
         // Else the scout's ship size gives the class.
-        let wh_type = s.wh_type.as_deref().map(str::trim).filter(|t| !t.is_empty());
-        let (size, max_jump_kg) = match wh_type.and_then(|t| types.get(t)) {
+        let wh_type = s.wh_type.as_deref().and_then(WhCode::parse);
+        let (size, max_jump_kg) = match wh_type.as_ref().and_then(|t| types.get(t)) {
             Some(t) => (Some(Size::from_jump_kg(t.max_jump_kg)), Some(t.max_jump_kg)),
-            None => (s.max_ship_size.as_deref().and_then(parse_size), None),
+            None => (s.max_ship_size.and_then(ScoutSize::size), None),
         };
         holes.push(Wormhole {
             size,
             max_jump_kg,
             expiry,
-            wh_type: wh_type.map(str::to_string),
+            wh_type,
             ..Wormhole::new(s.out_system_id, in_id, s.out_signature.clone(), s.in_signature.clone(), SourceId::EveScout)
         });
     }
@@ -213,7 +227,7 @@ mod tests {
         // Turnur to J231245: a known type, so the exact limit.
         let j377 = find(&data, TURNUR, 31001232);
         assert_eq!((j377.size, j377.max_jump_kg), (Some(Size::Medium), Some(62_000_000.0)));
-        assert_eq!(j377.wh_type.as_deref(), Some("J377"));
+        assert_eq!(j377.wh_type.as_ref().map(WhCode::as_str), Some("J377"));
         assert_eq!(j377.expiry, Some(Expiry { at: parse_utc("2026-10-05T19:38:34Z").unwrap() }));
         assert_eq!(j377.mass, None);
         assert_eq!(j377.sources, vec![SourceId::EveScout]);

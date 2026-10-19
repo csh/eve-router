@@ -6,10 +6,42 @@ pub mod evescout;
 pub mod nexum;
 
 use crate::error::{FileError, write_atomic};
-use crate::wormhole::{SourceData, SourceId, local_time};
+use crate::wormhole::{MassStatus, SourceData, SourceId, local_time};
+use serde::Deserialize;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
+
+/// The kind of a signature in the Nexum and EVE-Scout data. A new kind is `Other`.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum SigType {
+    Wormhole,
+    #[serde(other)]
+    Other,
+}
+
+/// The mass status in the Nexum and EVE Metro data. A new name is `Unknown`.
+#[derive(Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum MassName {
+    Stable,
+    Destabilized,
+    Critical,
+    #[serde(other)]
+    Unknown,
+}
+
+impl MassName {
+    pub fn status(self) -> Option<MassStatus> {
+        match self {
+            MassName::Stable => Some(MassStatus::Stable),
+            MassName::Destabilized => Some(MassStatus::Destabilized),
+            MassName::Critical => Some(MassStatus::Critical),
+            MassName::Unknown => None,
+        }
+    }
+}
 
 /// The timeout of one request.
 pub const TIMEOUT: Duration = Duration::from_secs(5);

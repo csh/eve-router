@@ -47,17 +47,55 @@ pub struct WormholeTypes {
     pub types: Vec<WormholeType>,
 }
 
+/// A wormhole type code, for example "B274". The code has no spaces and is in upper case, as in the SDE.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(from = "String", into = "String")]
+pub struct WhCode(String);
+
+impl WhCode {
+    /// The code in a text from a source. An empty text gives `None`.
+    pub fn parse(text: &str) -> Option<WhCode> {
+        let text = text.trim();
+        (!text.is_empty()).then(|| WhCode(text.to_ascii_uppercase()))
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+
+    pub fn is_k162(&self) -> bool {
+        self.0 == K162
+    }
+}
+
+impl From<String> for WhCode {
+    fn from(text: String) -> WhCode {
+        WhCode(text.trim().to_ascii_uppercase())
+    }
+}
+
+impl From<&str> for WhCode {
+    fn from(text: &str) -> WhCode {
+        WhCode::from(text.to_string())
+    }
+}
+
+impl From<WhCode> for String {
+    fn from(code: WhCode) -> String {
+        code.0
+    }
+}
+
 impl WormholeTypes {
-    /// The type for a code, case-insensitive. K162 and an unknown code give `None`.
-    pub fn get(&self, code: &str) -> Option<&WormholeType> {
-        let code = code.trim();
-        self.types.iter().find(|t| t.code.eq_ignore_ascii_case(code))
+    /// The type for a code. K162 and an unknown code give `None`.
+    pub fn get(&self, code: &WhCode) -> Option<&WormholeType> {
+        self.types.iter().find(|t| t.code == code.as_str())
     }
 
     /// The maximum life in hours of a wormhole between the systems `ends`. A K162 gives 16 h
     /// with a Drifter system at one end, else 48 h. An unknown code gives `None`.
-    pub fn life_hours(&self, code: &str, ends: [u32; 2]) -> Option<f64> {
-        if code.trim().eq_ignore_ascii_case(K162) {
+    pub fn life_hours(&self, code: &WhCode, ends: [u32; 2]) -> Option<f64> {
+        if code.is_k162() {
             let drifter = ends.iter().any(|id| DRIFTER_SYSTEMS.contains(id));
             return Some(if drifter { K162_DRIFTER_LIFE_HOURS } else { K162_LIFE_HOURS });
         }
@@ -141,25 +179,25 @@ mod tests {
         // K162 has no dogma. "Wormhole Beacon" is not a wormhole code.
         assert_eq!(table.types, vec![b274]);
         assert_eq!(table.build, Some(1));
-        assert_eq!(table.get("b274").unwrap().max_jump_kg, 375_000_000.0);
+        assert_eq!(table.get(&"b274".into()).unwrap().max_jump_kg, 375_000_000.0);
         let ends = [30000142, 31002230];
-        assert_eq!(table.life_hours("B274", ends), Some(24.0));
-        assert_eq!(table.life_hours("k162", ends), Some(48.0));
-        assert_eq!(table.life_hours("Z999", ends), None);
+        assert_eq!(table.life_hours(&"B274".into(), ends), Some(24.0));
+        assert_eq!(table.life_hours(&"k162".into(), ends), Some(48.0));
+        assert_eq!(table.life_hours(&"Z999".into(), ends), None);
         // A K162 to a Drifter system (Liberated Barbican), at either end, lives at most 16 h.
-        assert_eq!(table.life_hours("K162", [30002481, 31000002]), Some(16.0));
-        assert_eq!(table.life_hours("K162", [31000006, 30002033]), Some(16.0));
+        assert_eq!(table.life_hours(&"K162".into(), [30002481, 31000002]), Some(16.0));
+        assert_eq!(table.life_hours(&"K162".into(), [31000006, 30002033]), Some(16.0));
         // A typed hole keeps its SDE life.
-        assert_eq!(table.life_hours("B274", [30002481, 31000002]), Some(24.0));
-        assert!(table.get(K162).is_none());
+        assert_eq!(table.life_hours(&"B274".into(), [30002481, 31000002]), Some(24.0));
+        assert!(table.get(&K162.into()).is_none());
     }
 
     #[test]
     fn repo_table_matches_sde() {
         let table = load(&crate::test_support::sde_dir()).unwrap();
         assert_eq!(table.types.len(), 99);
-        assert_eq!(table.get("B274").unwrap().max_jump_kg, 375_000_000.0);
+        assert_eq!(table.get(&"B274".into()).unwrap().max_jump_kg, 375_000_000.0);
         // The SDE value, not the Nexum chart value (24 h).
-        assert_eq!(table.life_hours("C248", [30000142, 31002230]), Some(16.0));
+        assert_eq!(table.life_hours(&"C248".into(), [30000142, 31002230]), Some(16.0));
     }
 }

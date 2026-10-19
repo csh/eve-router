@@ -1,6 +1,7 @@
 //! The shared wormhole record. Each source converts its data to this record.
 //! The router reads only this record, never the raw format of a source.
 
+use crate::wormhole_types::WhCode;
 use chrono::{DateTime, Local, TimeZone};
 use serde::{Deserialize, Serialize};
 use std::fmt::Display;
@@ -122,7 +123,7 @@ pub struct Wormhole {
     pub mass: Option<MassStatus>,
     pub expiry: Option<Expiry>,
     /// For example "K162".
-    pub wh_type: Option<String>,
+    pub wh_type: Option<WhCode>,
     /// The signature in system `a`, for example "ABC-123". A scout can give only "ABC".
     #[serde(default)]
     pub sig_a: Option<String>,
@@ -477,7 +478,7 @@ pub mod tests {
         assert_eq!(m.max_jump_kg, Some(410_000_000.0));
         assert_eq!(m.mass, Some(MassStatus::Destabilized));
         assert_eq!(m.expiry, Some(Expiry { at: 400 }));
-        assert_eq!(m.wh_type.as_deref(), Some("K162"));
+        assert_eq!(m.wh_type.as_ref().map(WhCode::as_str), Some("K162"));
         assert_eq!((m.sig_a.as_deref(), m.sig_b.as_deref()), (Some("ABC-123"), Some("DEF-456")));
         assert_eq!(m.sources, vec![SourceId::Nexum, SourceId::EveScout]);
     }
@@ -524,5 +525,15 @@ pub mod tests {
         ];
         let merged = merge(&[data(SourceId::Nexum, vec![hole(1, 2)]), data(SourceId::EveScout, two)], 0);
         assert_eq!(merged.len(), 2);
+    }
+
+    /// A cache file from an older version stores the type code as plain text, in any case.
+    #[test]
+    fn an_old_cache_code_loads_as_a_code() {
+        let mut json = serde_json::to_value(Wormhole::new(1, 2, None, None, SourceId::Nexum)).unwrap();
+        json["wh_type"] = " b274 ".into();
+        let hole: Wormhole = serde_json::from_value(json).unwrap();
+        assert_eq!(hole.wh_type, Some(WhCode::from("B274")));
+        assert_eq!(serde_json::to_value(&hole).unwrap()["wh_type"], "B274");
     }
 }

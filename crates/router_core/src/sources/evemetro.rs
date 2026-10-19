@@ -11,9 +11,9 @@ use crate::config::EveMetroConfig;
 use crate::esi::client::Esi;
 use crate::log::{self, LogEntry};
 use crate::sources::nexum::earlier;
-use crate::sources::{self, FetchError};
-use crate::wormhole::{Expiry, HOUR, MassStatus, Size, SourceData, SourceId, Wormhole, parse_utc};
-use crate::wormhole_types::WormholeTypes;
+use crate::sources::{self, FetchError, MassName};
+use crate::wormhole::{Expiry, HOUR, Size, SourceData, SourceId, Wormhole, parse_utc};
+use crate::wormhole_types::{WhCode, WormholeTypes};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 use std::thread::JoinHandle;
@@ -82,8 +82,7 @@ pub struct MetroEdge {
     signature_dst: Option<String>,
     wormhole_type_src: Option<String>,
     wormhole_type_dst: Option<String>,
-    /// `critical` or `stable`.
-    wormhole_mass: Option<String>,
+    wormhole_mass: Option<MassName>,
     /// `critical` (less than one hour left) or `stable`.
     wormhole_eol: Option<String>,
     created_time: Option<String>,
@@ -123,20 +122,11 @@ impl MetroReport {
     }
 }
 
-fn parse_mass(mass: &str) -> Option<MassStatus> {
-    match mass {
-        "stable" => Some(MassStatus::Stable),
-        "destabilized" => Some(MassStatus::Destabilized),
-        "critical" => Some(MassStatus::Critical),
-        _ => None,
-    }
-}
-
 /// The type of the end that is not a K162, for the life rule and the size. Two K162 ends, neither
 /// identified yet, give `None`.
-fn pick_type<'a>(src: &'a Option<String>, dst: &'a Option<String>) -> Option<&'a str> {
-    let clean = |t: &'a Option<String>| t.as_deref().map(str::trim).filter(|t| !t.is_empty());
-    let real = |t: &&str| !t.eq_ignore_ascii_case("K162");
+fn pick_type(src: &Option<String>, dst: &Option<String>) -> Option<WhCode> {
+    let clean = |t: &Option<String>| t.as_deref().and_then(WhCode::parse);
+    let real = |t: &WhCode| !t.is_k162();
     clean(src).filter(real).or(clean(dst).filter(real))
 }
 
@@ -169,6 +159,7 @@ pub fn convert(reply: &MetroReply, known: impl Fn(u32) -> bool, types: &Wormhole
             // one hour is left. The earlier limit wins.
             let created = e.created_time.as_deref().and_then(parse_utc);
             let by_life = wh_type
+                .as_ref()
                 .and_then(|t| types.life_hours(t, [a, b]))
                 .zip(created)
                 .map(|(hours, created)| Expiry { at: created.saturating_add((hours * 3600.0) as u64) });
@@ -178,16 +169,16 @@ pub fn convert(reply: &MetroReply, known: impl Fn(u32) -> bool, types: &Wormhole
                 report.expired += 1;
                 continue;
             }
-            let (size, max_jump_kg) = match wh_type.and_then(|t| types.get(t)) {
+            let (size, max_jump_kg) = match wh_type.as_ref().and_then(|t| types.get(t)) {
                 Some(t) => (Some(Size::from_jump_kg(t.max_jump_kg)), Some(t.max_jump_kg)),
                 None => (None, None),
             };
             holes.push(Wormhole {
                 size,
                 max_jump_kg,
-                mass: e.wormhole_mass.as_deref().and_then(parse_mass),
+                mass: e.wormhole_mass.and_then(MassName::status),
                 expiry,
-                wh_type: wh_type.map(str::to_string),
+                wh_type,
                 ..Wormhole::new(a, b, clean_sig(&e.signature_src), clean_sig(&e.signature_dst), SourceId::EveMetro)
             });
         }
@@ -302,6 +293,7 @@ mod tests {
     use super::*;
     use crate::config::ApiKey;
     use crate::test_support::{serve, serve_routes};
+    use crate::wormhole::MassStatus;
     use crate::wormhole_types::WormholeType;
     use std::collections::HashMap;
 
@@ -342,7 +334,7 @@ mod tests {
 
         // A text ID and a stable wormhole. The K162 end gives way to the type F216.
         let jita = data.holes.iter().find(|h| h.a == 30_000_142).expect("no Jita wormhole");
-        assert_eq!((jita.b, jita.wh_type.as_deref()), (30_001_001, Some("F216")));
+        assert_eq!((jita.b, jita.wh_type.as_ref().map(WhCode::as_str)), (30_001_001, Some("F216")));
         assert_eq!((jita.mass, jita.expiry), (Some(MassStatus::Stable), None));
         assert_eq!(jita.sig_at(30_001_001).as_deref(), Some("ABC"));
         assert_eq!(jita.sig_at(30_000_142).as_deref(), Some("XYZ"));
@@ -350,7 +342,7 @@ mod tests {
 
         // A critical wormhole: less than one hour is left, and a critical mass.
         let amarr = data.holes.iter().find(|h| h.a == 30_001_001 && h.b == 30_002_187).expect("no Amarr wormhole");
-        assert_eq!((amarr.mass, amarr.wh_type.as_deref()), (Some(MassStatus::Critical), Some("C729")));
+        assert_eq!((amarr.mass, amarr.wh_type.as_ref().map(WhCode::as_str)), (Some(MassStatus::Critical), Some("C729")));
         assert_eq!(amarr.expiry, Some(Expiry { at: FETCHED + HOUR }));
         assert_eq!(amarr.sig_at(30_002_187), None);
         assert!(!amarr.usable(FETCHED, None));
