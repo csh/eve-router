@@ -956,6 +956,9 @@ fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay
 /// The row height of a table of characters.
 const CHARACTER_ROW: f32 = 40.0;
 
+/// The space between a long name and the next column of a table of characters.
+const NAME_GAP: f32 = 8.0;
+
 /// A table of the linked characters: the portrait and the name, then the columns of `extra`. Each
 /// has a header text and a width. `cell` draws one cell of `extra` for a character, by the index
 /// in `extra`. A row that `selected` is true for has the selected look. The table takes the height
@@ -996,7 +999,9 @@ fn character_table(
                 row.col(|ui| _ = pilot_portrait(ui, portraits, pilot, 32.0));
                 row.col(|ui| {
                     let color = if is_selected { Color32::WHITE } else { theme::TEXT };
-                    ui.label(RichText::new(&pilot.name).color(color));
+                    // A long name ends with "…" a few points before the next column, not at its edge.
+                    ui.set_max_width((ui.available_width() - NAME_GAP).max(0.0));
+                    ui.add(egui::Label::new(RichText::new(&pilot.name).color(color)).truncate());
                 });
                 for column in 0..extra.len() {
                     row.col(|ui| cell(ui, pilot, column));
