@@ -7,7 +7,7 @@ use crate::esi::pilots::Pilots;
 use crate::overlay::OverlayReport;
 use crate::route::Route;
 use crate::settings::{HullSource, Settings};
-use crate::sources::{evemetro, evescout, nexum};
+use crate::sources::{OverlayWarning, evemetro, evescout, nexum, warning_text};
 use crate::universe::{Clade, Link, Universe, display_sec};
 use crate::wormhole::{Expiry, MassStatus, Size, SourceData, SourceId, THERA, TURNUR, Wormhole, expiry_text};
 use petgraph::graph::EdgeIndex;
@@ -28,8 +28,8 @@ pub struct Shortcuts {
     pub turnur: usize,
     /// The source and the fetch time of each set of wormhole data.
     pub sources: Vec<(SourceId, u64)>,
-    /// A problem with the overlay data, for the status line at startup.
-    pub warning: Option<String>,
+    /// The problems with the overlay data, for the status line at startup.
+    pub warnings: Vec<OverlayWarning>,
 }
 
 impl Shortcuts {
@@ -37,10 +37,10 @@ impl Shortcuts {
         let (wormholes, bridges) = uni.shortcut_counts();
         let mut warnings = Vec::new();
         if !report.unknown.is_empty() {
-            warnings.push(format!("Bridges: unknown systems: {}", report.unknown.join(", ")));
+            warnings.push(OverlayWarning::BridgeUnknownSystems(report.unknown.clone()));
         }
         if !report.same.is_empty() {
-            warnings.push(format!("Bridges: same system at both ends: {}", report.same.join(", ")));
+            warnings.push(OverlayWarning::BridgeSameSystem(report.same.clone()));
         }
         let unknown_ids = [
             (SourceId::Nexum, &wh.report.unknown),
@@ -49,13 +49,12 @@ impl Shortcuts {
         ];
         for (source, unknown) in unknown_ids {
             if !unknown.is_empty() {
-                let ids: Vec<String> = unknown.iter().map(u32::to_string).collect();
-                warnings.push(format!("{}: unknown system IDs: {}", source.label(), ids.join(", ")));
+                warnings.push(OverlayWarning::UnknownIds { source, ids: unknown.clone() });
             }
         }
-        warnings.extend(wh.warning.clone());
-        warnings.extend(scout.warning.clone());
-        warnings.extend(metro.warning.clone());
+        warnings.extend(wh.warnings.iter().cloned());
+        warnings.extend(scout.warnings.iter().cloned());
+        warnings.extend(metro.warnings.iter().cloned());
         let pairs = |data: &Option<SourceData>| {
             data.iter().flat_map(|d| &d.holes).map(|h| (h.a, h.b)).collect::<std::collections::HashSet<_>>().len()
         };
@@ -68,8 +67,13 @@ impl Shortcuts {
             thera: uni.hub_count(THERA),
             turnur: uni.hub_count(TURNUR),
             sources: wh.data.iter().chain(&scout.data).chain(&metro.data).map(|d| (d.source, d.fetched_at)).collect(),
-            warning: (!warnings.is_empty()).then(|| warnings.join(" · ")),
+            warnings,
         }
+    }
+
+    /// The warnings as one line, or `None` for no warning.
+    pub fn warning_text(&self) -> Option<String> {
+        warning_text(&self.warnings)
     }
 }
 
@@ -474,18 +478,24 @@ mod tests {
 
     #[test]
     fn shortcuts_warning_text() {
-        use crate::sources::{evescout, nexum};
+        use crate::sources::{FetchError, evescout, nexum};
         let uni = crate::test_support::universe();
         let report = OverlayReport { unknown: vec!["Nowhere".into()], ..Default::default() };
-        let mut wh = nexum::Load { warning: Some("Nexum offline, map from 14:02".into()), ..Default::default() };
+        let fetch =
+            |source, cached_at| OverlayWarning::Fetch { source, error: FetchError::Offline("down".into()), cached_at: Some(cached_at) };
+        let mut wh = nexum::Load { warnings: vec![fetch(SourceId::Nexum, 1)], ..Default::default() };
         wh.report.unknown = vec![1, 2];
-        let mut scout = evescout::Load { warning: Some("EVE-Scout offline, feed from 14:02".into()), ..Default::default() };
+        let mut scout = evescout::Load { warnings: vec![fetch(SourceId::EveScout, 1)], ..Default::default() };
         scout.report.unknown = vec![3];
-        let warning = Shortcuts::new(uni, &report, &wh, &scout, &Default::default()).warning.unwrap();
+        let warning = Shortcuts::new(uni, &report, &wh, &scout, &Default::default()).warning_text().unwrap();
+        let (nexum, eve_scout) = (fetch(SourceId::Nexum, 1).to_string(), fetch(SourceId::EveScout, 1).to_string());
         assert_eq!(
             warning,
-            "Bridges: unknown systems: Nowhere · Nexum: unknown system IDs: 1, 2 · EVE-Scout: unknown system IDs: 3 · Nexum offline, map from 14:02 · EVE-Scout offline, feed from 14:02"
+            format!(
+                "Bridges: unknown systems: Nowhere · Nexum: unknown system IDs: 1, 2 · EVE-Scout: unknown system IDs: 3 · {nexum} · {eve_scout}"
+            )
         );
+        assert!(nexum.starts_with("Nexum offline, map from "), "{nexum}");
     }
 
     #[test]

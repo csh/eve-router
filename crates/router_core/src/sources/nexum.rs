@@ -5,7 +5,7 @@
 
 use crate::config::NexumConfig;
 use crate::log::{self, LogEntry};
-use crate::sources::{self, FetchError, MassName, SigType};
+use crate::sources::{self, FetchError, MassName, OverlayWarning, SigType};
 use crate::wormhole::{Expiry, HOUR, Size, SourceData, SourceId, Wormhole, parse_utc};
 use crate::wormhole_types::{WhCode, WormholeTypes};
 use serde::Deserialize;
@@ -426,8 +426,8 @@ pub fn convert(
 pub struct Load {
     pub data: Option<SourceData>,
     pub report: NexumReport,
-    /// A problem for the status line, for example "Nexum offline, map from 14:02".
-    pub warning: Option<String>,
+    /// The problems for the status line, for example "Nexum offline, map from 14:02".
+    pub warnings: Vec<OverlayWarning>,
     /// The rows for the log: one for the fetch, and for Nexum one for the failed signatures.
     pub log: Vec<LogEntry>,
 }
@@ -547,22 +547,18 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
                 data
             });
             let chosen = sources::choose(SourceId::Nexum, converted, cache, &cache_path);
-            let sig_warning = match sig_failures {
-                0 => None,
-                1 => Some("Nexum signatures: 1 system not loaded".to_string()),
-                n => Some(format!("Nexum signatures: {n} systems not loaded")),
-            };
-            let warnings: Vec<String> = chosen.warning.into_iter().chain(sig_warning).collect();
+            let sig_warning = (sig_failures > 0).then_some(OverlayWarning::NexumSignatures { failed: sig_failures });
+            let warnings: Vec<OverlayWarning> = chosen.warning.into_iter().chain(sig_warning).collect();
             let row = |op, ok, reason: String| LogEntry { time: started, op, ok, reason };
             let mut log = vec![match (&chosen.error, &chosen.data) {
-                (Some(cause), _) => row("nexum.fetch", false, cause.clone()),
+                (Some(error), _) => row("nexum.fetch", false, error.reason(SourceId::Nexum)),
                 (None, data) => row("nexum.fetch", true, log::loaded(data.as_ref().map_or(0, |d| d.holes.len()))),
             }];
             if sig_failures > 0 {
                 let reason = if sig_failures == 1 { "1 system not loaded".into() } else { format!("{sig_failures} systems not loaded") };
                 log.push(row("nexum.signatures", false, reason));
             }
-            Load { data: chosen.data, report, warning: (!warnings.is_empty()).then(|| warnings.join(" · ")), log }
+            Load { data: chosen.data, report, warnings, log }
         }
     }
 }
@@ -833,7 +829,7 @@ mod tests {
         let pending = start(&cfg("http://127.0.0.1:9"), path, FETCHED);
         let load = finish(pending, |_| true, &types());
         assert_eq!(load.data, Some(cached));
-        assert_eq!(load.warning, None);
+        assert!(load.warnings.is_empty());
     }
 
     #[test]
@@ -864,7 +860,7 @@ mod tests {
         crate::sources::write_cache(&path, &old).unwrap();
         let load = finish(start(&cfg(&url), path, FETCHED), |_| true, &types());
         assert_eq!(load.data, Some(old));
-        assert_eq!(load.warning.as_deref(), Some("Nexum key rejected"));
+        assert_eq!(sources::warning_text(&load.warnings).as_deref(), Some("Nexum key rejected"));
     }
 
     #[test]
@@ -904,7 +900,7 @@ mod tests {
         crate::sources::write_cache(&path, &other).unwrap();
         let load = finish(start(&cfg(&url), path, FETCHED), |_| true, &types());
         assert_eq!(load.data, None);
-        assert_eq!(load.warning.as_deref(), Some("Nexum map not found"));
+        assert_eq!(sources::warning_text(&load.warnings).as_deref(), Some("Nexum map not found"));
     }
 
     #[test]
@@ -953,7 +949,7 @@ mod tests {
         assert_eq!(sig_pair(find(&data, 30000142, 31002230)), (Some("BTA-111"), Some("JIT-202")));
         // The Dodixie request failed. The Dodixie wormhole stays, with no signature, and the status says so.
         assert_eq!(sig_pair(find(&data, 30002659, 31000005)), (None, None));
-        assert_eq!(load.warning.as_deref(), Some("Nexum signatures: 1 system not loaded"));
+        assert_eq!(sources::warning_text(&load.warnings).as_deref(), Some("Nexum signatures: 1 system not loaded"));
         // The cache holds the signatures.
         assert_eq!(crate::sources::read_cache(&path), Some(data));
     }
@@ -1002,7 +998,7 @@ mod tests {
         let (_tmp, path) = temp();
         let load = finish(start(&cfg(&url), path, FETCHED), |_| true, &types());
         assert_eq!(load.data, None);
-        assert_eq!(load.warning.as_deref(), Some("Nexum offline"));
+        assert_eq!(sources::warning_text(&load.warnings).as_deref(), Some("Nexum offline"));
     }
 
     #[test]

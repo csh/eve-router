@@ -8,6 +8,7 @@ pub mod nexum;
 use crate::error::{FileError, write_atomic};
 use crate::wormhole::{MassStatus, SourceData, SourceId, local_time};
 use serde::Deserialize;
+use std::fmt;
 use std::fs;
 use std::path::Path;
 use std::time::Duration;
@@ -50,7 +51,7 @@ pub const CACHE_FRESH_SECS: u64 = 300;
 /// The largest response body. A large alliance map is a few MB.
 const MAX_BODY: u64 = 64 * 1024 * 1024;
 
-#[derive(Debug, PartialEq, Eq, thiserror::Error)]
+#[derive(Debug, Clone, PartialEq, Eq, thiserror::Error)]
 pub enum FetchError {
     /// 401 or 403: the key is wrong, or it has no access to the map.
     #[error("the server refused the request")]
@@ -151,12 +152,55 @@ pub fn cache_is_fresh(data: &SourceData, now: u64) -> bool {
     data.fetched_at <= now && now - data.fetched_at < CACHE_FRESH_SECS
 }
 
-/// The data that the router uses, and the text for the status line.
+/// A problem with the overlay data, for the status line and the notices. Two equal values are the
+/// same problem, so a notice shows one time for each problem.
+#[derive(Debug, Clone, PartialEq)]
+pub enum OverlayWarning {
+    /// The Ansiblex file names systems that the SDE does not know.
+    BridgeUnknownSystems(Vec<String>),
+    /// The Ansiblex file has a bridge with the same system at both ends.
+    BridgeSameSystem(Vec<String>),
+    /// A source names EVE system IDs that the SDE does not know.
+    UnknownIds { source: SourceId, ids: Vec<u32> },
+    /// A failed fetch. `cached_at` is the fetch time of the cache that the router uses instead.
+    Fetch { source: SourceId, error: FetchError, cached_at: Option<u64> },
+    /// The cache file did not write. The text is the cause.
+    CacheWrite(String),
+    /// Nexum did not give the signatures of this many systems.
+    NexumSignatures { failed: usize },
+    /// EVE Metro denies access to the linked character.
+    MetroNoAccess,
+}
+
+impl fmt::Display for OverlayWarning {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            OverlayWarning::BridgeUnknownSystems(names) => write!(f, "Bridges: unknown systems: {}", names.join(", ")),
+            OverlayWarning::BridgeSameSystem(names) => write!(f, "Bridges: same system at both ends: {}", names.join(", ")),
+            OverlayWarning::UnknownIds { source, ids } => {
+                let ids: Vec<String> = ids.iter().map(u32::to_string).collect();
+                write!(f, "{}: unknown system IDs: {}", source.label(), ids.join(", "))
+            }
+            OverlayWarning::Fetch { source, error, cached_at } => f.write_str(&error.status(*source, *cached_at)),
+            OverlayWarning::CacheWrite(cause) => write!(f, "Cannot write the wormhole cache: {cause}"),
+            OverlayWarning::NexumSignatures { failed: 1 } => f.write_str("Nexum signatures: 1 system not loaded"),
+            OverlayWarning::NexumSignatures { failed } => write!(f, "Nexum signatures: {failed} systems not loaded"),
+            OverlayWarning::MetroNoAccess => f.write_str("EVE Metro: this character has no access"),
+        }
+    }
+}
+
+/// The warnings as one line, or `None` for no warning.
+pub fn warning_text(warnings: &[OverlayWarning]) -> Option<String> {
+    (!warnings.is_empty()).then(|| warnings.iter().map(ToString::to_string).collect::<Vec<_>>().join(" · "))
+}
+
+/// The data that the router uses, and the problem for the status line.
 pub struct Chosen {
     pub data: Option<SourceData>,
-    pub warning: Option<String>,
-    /// The cause of a failed fetch, for the log.
-    pub error: Option<String>,
+    pub warning: Option<OverlayWarning>,
+    /// The failed fetch. The log shows its cause.
+    pub error: Option<FetchError>,
 }
 
 /// Choose between a fetch result and the cache. A success writes the cache.
@@ -164,12 +208,12 @@ pub struct Chosen {
 pub fn choose(source: SourceId, fetched: Result<SourceData, FetchError>, cache: Option<SourceData>, cache_path: &Path) -> Chosen {
     match fetched {
         Ok(data) => {
-            let warning = write_cache(cache_path, &data).err().map(|e| format!("Cannot write the wormhole cache: {e}"));
+            let warning = write_cache(cache_path, &data).err().map(|e| OverlayWarning::CacheWrite(e.to_string()));
             Chosen { data: Some(data), warning, error: None }
         }
         Err(e) => {
-            let warning = Some(e.status(source, cache.as_ref().map(|c| c.fetched_at)));
-            Chosen { data: cache, warning, error: Some(e.reason(source)) }
+            let warning = Some(OverlayWarning::Fetch { source, error: e.clone(), cached_at: cache.as_ref().map(|c| c.fetched_at) });
+            Chosen { data: cache, warning, error: Some(e) }
         }
     }
 }
@@ -284,11 +328,11 @@ mod tests {
         // A failure uses the cache and gives a status line.
         let chosen = choose(SourceId::Nexum, Err(FetchError::Auth), Some(sample(4000)), &path);
         assert_eq!(chosen.data, Some(sample(4000)));
-        assert_eq!(chosen.warning.as_deref(), Some("Nexum key rejected"));
+        assert_eq!(chosen.warning.map(|w| w.to_string()).as_deref(), Some("Nexum key rejected"));
         // A failure with no cache gives no wormholes.
         let chosen = choose(SourceId::Nexum, Err(FetchError::Offline("timeout".into())), None, &path);
         assert_eq!(chosen.data, None);
-        assert_eq!(chosen.warning.as_deref(), Some("Nexum offline"));
+        assert_eq!(chosen.warning.map(|w| w.to_string()).as_deref(), Some("Nexum offline"));
     }
 
     #[test]

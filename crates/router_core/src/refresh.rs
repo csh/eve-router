@@ -533,7 +533,7 @@ mod tests {
         routes.lock().unwrap().insert("/scout".into(), feed(AMARR));
         let changed = wait_for(&r, |s| has_hole(&s.uni, THERA, AMARR));
         assert!(!has_hole(&changed.uni, THERA, JITA));
-        assert_eq!(changed.shortcuts.warning, None);
+        assert!(changed.shortcuts.warnings.is_empty());
     }
 
     #[test]
@@ -547,11 +547,11 @@ mod tests {
         // A path that is not in the routes gets a 500.
         routes.lock().unwrap().clear();
         // First the cache gives the data, and the warning gives the time of the cache.
-        let cached = wait_for(&r, |s| s.shortcuts.warning.is_some());
+        let cached = wait_for(&r, |s| !s.shortcuts.warnings.is_empty());
         assert!(has_hole(&cached.uni, THERA, JITA));
         // With no cache, the worker uses the data of the last refresh.
         std::fs::remove_file(&cache).unwrap();
-        let kept = wait_for(&r, |s| s.shortcuts.warning.as_deref() == Some("EVE-Scout offline"));
+        let kept = wait_for(&r, |s| s.shortcuts.warning_text().as_deref() == Some("EVE-Scout offline"));
         assert!(has_hole(&kept.uni, THERA, JITA));
         assert_eq!(kept.all.len(), 1);
     }
@@ -727,7 +727,7 @@ mod tests {
         setup.last = vec![scout_load().data.unwrap()];
         let r = Refresher::start(setup, moving_clock(), || {});
         let snap = r.recv_timeout(Duration::from_secs(10)).expect("no first refresh");
-        assert_eq!(snap.shortcuts.warning.as_deref(), Some("EVE-Scout offline"));
+        assert_eq!(snap.shortcuts.warning_text().as_deref(), Some("EVE-Scout offline"));
         assert!(has_hole(&snap.uni, THERA, JITA));
     }
 

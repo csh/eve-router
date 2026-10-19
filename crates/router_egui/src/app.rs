@@ -15,8 +15,8 @@ use router_core::overlay::{self, OverlayReport, Pair};
 use router_core::refresh::{self, Refresher, RouteChange, Setup, Snapshot, kept_route, route_change};
 use router_core::route::{Route, Stop};
 use router_core::settings::{Settings, split_systems};
-use router_core::sources::evemetro;
 use router_core::sources::nexum::MapInfo;
+use router_core::sources::{OverlayWarning, evemetro};
 use router_core::startup::StartupError;
 use router_core::universe::Universe;
 use router_core::wormhole::SourceData;
@@ -185,7 +185,7 @@ pub struct Session {
     /// The reason for the last "Jump bridges off" notice, so a notice shows only when it changes.
     bridges_reason: Option<String>,
     /// The fetch warning of the last notice, so a notice shows only when it changes.
-    fetch_warning: Option<String>,
+    fetch_warnings: Vec<OverlayWarning>,
     /// The start, the midpoints and the destination, in route order.
     pub waypoints: Vec<NodeIndex>,
     pub routes: Vec<Route>,
@@ -225,7 +225,7 @@ impl Session {
             refreshed_at: None,
             notices: Vec::new(),
             bridges_reason: None,
-            fetch_warning: None,
+            fetch_warnings: Vec::new(),
             waypoints: Vec::new(),
             routes: Vec::new(),
             selected: 0,
@@ -240,9 +240,9 @@ impl Session {
             pilots: Pilots::offline(active_path(&cfg_path)),
         };
         session.recompute();
-        session.fetch_warning = session.shortcuts.warning.clone();
-        if let Some(warning) = session.fetch_warning.clone() {
-            session.notify(Level::Warning, warning);
+        session.fetch_warnings = session.shortcuts.warnings.clone();
+        for warning in session.fetch_warnings.clone() {
+            session.notify(Level::Warning, warning.to_string());
         }
         session
     }
@@ -468,13 +468,12 @@ impl Session {
         }
         // A fetch problem gives a notice, as at startup. The same problem on the next refresh
         // gives no second notice. A problem that goes and comes back gives a new one.
-        let warning = self.shortcuts.warning.clone();
-        if warning != self.fetch_warning {
-            if let Some(warning) = &warning {
-                self.notify(Level::Warning, warning.clone());
-            }
-            self.fetch_warning = warning;
+        let warnings = self.shortcuts.warnings.clone();
+        let new: Vec<String> = warnings.iter().filter(|w| !self.fetch_warnings.contains(w)).map(ToString::to_string).collect();
+        for text in new {
+            self.notify(Level::Warning, text);
         }
+        self.fetch_warnings = warnings;
     }
 
     /// Take the newest map from the refresh worker, if it sent one. Call this each frame.
@@ -722,8 +721,9 @@ mod tests {
     use router_core::labels::{jumps_label, route_extras};
     use router_core::log::LogEntry;
     use router_core::refresh::{Control, EVE_METRO_LOADING, NEXUM_LOADING};
+    use router_core::sources::FetchError;
     use router_core::test_support::{FIXTURE_TIME, fake_refresher, hole, overlay_universe, settings, snapshot};
-    use router_core::wormhole::Wormhole;
+    use router_core::wormhole::{SourceId, Wormhole};
 
     /// A session that writes its config to a new temporary directory. Keep the directory until the test ends.
     fn session() -> (Session, tempfile::TempDir) {
@@ -943,19 +943,39 @@ mod tests {
     fn a_fetch_warning_gives_a_notice_once_per_problem() {
         let (mut s, _tmp) = session();
         s.notices.clear();
-        let snapshot = |warning: Option<&str>| {
+        let snapshot = |offline: bool| {
             let mut snap = snapshot(Vec::new());
-            snap.shortcuts.warning = warning.map(String::from);
+            if offline {
+                let error = FetchError::Offline("down".into());
+                snap.shortcuts.warnings = vec![OverlayWarning::Fetch { source: SourceId::Nexum, error, cached_at: None }];
+            }
             snap
         };
-        s.apply_snapshot(snapshot(Some("Nexum offline")));
-        s.apply_snapshot(snapshot(Some("Nexum offline")));
+        s.apply_snapshot(snapshot(true));
+        s.apply_snapshot(snapshot(true));
         assert_eq!(s.notices.len(), 1, "the same problem shows one time");
         // The window shows the notice. A problem that goes and comes back shows again.
         s.notices.clear();
-        s.apply_snapshot(snapshot(None));
-        s.apply_snapshot(snapshot(Some("Nexum offline")));
+        s.apply_snapshot(snapshot(false));
+        s.apply_snapshot(snapshot(true));
         assert_eq!(s.notices.len(), 1);
+    }
+
+    #[test]
+    fn a_second_warning_gives_only_its_own_notice() {
+        let (mut s, _tmp) = session();
+        s.notices.clear();
+        let offline = |source| OverlayWarning::Fetch { source, error: FetchError::Offline("down".into()), cached_at: None };
+        let snapshot = |warnings: Vec<OverlayWarning>| {
+            let mut snap = snapshot(Vec::new());
+            snap.shortcuts.warnings = warnings;
+            snap
+        };
+        s.apply_snapshot(snapshot(vec![offline(SourceId::Nexum)]));
+        s.notices.clear();
+        s.apply_snapshot(snapshot(vec![offline(SourceId::Nexum), offline(SourceId::EveScout)]));
+        assert_eq!(s.notices.len(), 1);
+        assert_eq!(s.notices[0].text, "EVE-Scout offline");
     }
 
     #[test]

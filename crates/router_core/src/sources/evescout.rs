@@ -4,7 +4,7 @@
 //! switches work at once, with no restart.
 
 use crate::log::{self, LogEntry};
-use crate::sources::{self, FetchError, SigType};
+use crate::sources::{self, FetchError, OverlayWarning, SigType};
 use crate::wormhole::{Expiry, Size, SourceData, SourceId, Wormhole, parse_utc};
 use crate::wormhole_types::{WhCode, WormholeTypes};
 use serde::Deserialize;
@@ -121,8 +121,8 @@ pub fn convert(sigs: &[Signature], known: impl Fn(u32) -> bool, types: &Wormhole
 pub struct Load {
     pub data: Option<SourceData>,
     pub report: EveScoutReport,
-    /// A problem for the status line, for example "EVE-Scout offline, feed from 14:02".
-    pub warning: Option<String>,
+    /// The problems for the status line, for example "EVE-Scout offline, feed from 14:02".
+    pub warnings: Vec<OverlayWarning>,
     /// The rows for the log: one for the fetch, and for Nexum one for the failed signatures.
     pub log: Vec<LogEntry>,
 }
@@ -176,11 +176,11 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
             });
             let chosen = sources::choose(SourceId::EveScout, converted, cache, &cache_path);
             let (ok, reason) = match &chosen.error {
-                Some(cause) => (false, cause.clone()),
+                Some(error) => (false, error.reason(SourceId::EveScout)),
                 None => (true, log::loaded(chosen.data.as_ref().map_or(0, |d| d.holes.len()))),
             };
             let log = vec![LogEntry { time: started, op: "evescout.fetch", ok, reason }];
-            Load { data: chosen.data, report, warning: chosen.warning, log }
+            Load { data: chosen.data, report, warnings: chosen.warning.into_iter().collect(), log }
         }
     }
 }
@@ -279,7 +279,7 @@ mod tests {
         let data = load.data.unwrap();
         assert_eq!((data.holes.len(), data.fetched_at), (28, FETCHED));
         assert_eq!(data.origin.as_deref(), Some(url.as_str()));
-        assert_eq!(load.warning, None);
+        assert!(load.warnings.is_empty());
         assert_eq!(sources::read_cache(&path), Some(data));
     }
 
@@ -303,7 +303,7 @@ mod tests {
         sources::write_cache(&path, &old).unwrap();
         let load = finish(start(&url, path, FETCHED), |_| true, &types());
         assert_eq!(load.data, Some(old));
-        let warning = load.warning.unwrap();
+        let warning = sources::warning_text(&load.warnings).unwrap();
         assert!(warning.starts_with("EVE-Scout offline, feed from "), "{warning}");
     }
 
@@ -328,6 +328,6 @@ mod tests {
         let (_tmp, path) = temp();
         let load = finish(start(&url, path, FETCHED), |_| true, &types());
         assert_eq!(load.data, None);
-        assert_eq!(load.warning.as_deref(), Some("EVE-Scout offline"));
+        assert_eq!(sources::warning_text(&load.warnings).as_deref(), Some("EVE-Scout offline"));
     }
 }

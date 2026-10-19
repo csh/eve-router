@@ -11,7 +11,7 @@ use crate::config::EveMetroConfig;
 use crate::esi::client::Esi;
 use crate::log::{self, LogEntry};
 use crate::sources::nexum::earlier;
-use crate::sources::{self, FetchError, MassName};
+use crate::sources::{self, FetchError, MassName, OverlayWarning};
 use crate::wormhole::{Expiry, HOUR, Size, SourceData, SourceId, Wormhole, parse_utc};
 use crate::wormhole_types::{WhCode, WormholeTypes};
 use serde::{Deserialize, Serialize};
@@ -191,8 +191,8 @@ pub fn convert(reply: &MetroReply, known: impl Fn(u32) -> bool, types: &Wormhole
 pub struct Load {
     pub data: Option<SourceData>,
     pub report: MetroReport,
-    /// A problem for the status line, for example "EVE Metro offline, map from 14:02".
-    pub warning: Option<String>,
+    /// The problems for the status line, for example "EVE Metro offline, map from 14:02".
+    pub warnings: Vec<OverlayWarning>,
     /// The rows for the log: one for the fetch.
     pub log: Vec<LogEntry>,
 }
@@ -273,17 +273,17 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
             // replace a good cache with nothing, so it is treated like a fetch failure for the
             // cache: the cache stays as it was, with its own warning and log row.
             if report.no_access {
-                let warning = Some("EVE Metro: this character has no access".to_string());
+                let warnings = vec![OverlayWarning::MetroNoAccess];
                 let log = vec![LogEntry { time: started, op: "evemetro.fetch", ok: false, reason: "no access".into() }];
-                return Load { data: cache, report, warning, log };
+                return Load { data: cache, report, warnings, log };
             }
             let chosen = sources::choose(SourceId::EveMetro, converted, cache, &cache_path);
             let (ok, reason) = match &chosen.error {
-                Some(cause) => (false, cause.clone()),
+                Some(error) => (false, error.reason(SourceId::EveMetro)),
                 None => (true, log::loaded(chosen.data.as_ref().map_or(0, |d| d.holes.len()))),
             };
             let log = vec![LogEntry { time: started, op: "evemetro.fetch", ok, reason }];
-            Load { data: chosen.data, report, warning: chosen.warning, log }
+            Load { data: chosen.data, report, warnings: chosen.warning.into_iter().collect(), log }
         }
     }
 }
@@ -463,7 +463,7 @@ mod tests {
         let path = tmp.path().join("eve-metro.json");
         let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "200 OK", &fixture_text());
         let result = load(&cfg(), &esi, &metro, path.clone());
-        assert_eq!(result.warning, None);
+        assert!(result.warnings.is_empty());
         assert_eq!(result.data.as_ref().map(|d| d.holes.len()), Some(2));
         assert_eq!(result.log[0].op, "evemetro.fetch");
         assert!(result.log[0].ok);
@@ -483,7 +483,7 @@ mod tests {
         let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "200 OK", r#"{"access":false}"#);
         // No cache exists yet, so there is nothing to keep.
         let result = load(&cfg(), &esi, &metro, tmp.path().join("eve-metro.json"));
-        assert_eq!(result.warning.as_deref(), Some("EVE Metro: this character has no access"));
+        assert_eq!(result.warnings, [OverlayWarning::MetroNoAccess]);
         assert_eq!(result.data, None);
         assert!(result.report.no_access);
         assert!(!result.log[0].ok);
@@ -507,7 +507,7 @@ mod tests {
         sources::write_cache(&path, &old).unwrap();
         let result = load(&cfg(), &esi, &metro, path.clone());
         assert_eq!(result.data.as_ref().map(|d| d.holes.len()), Some(2), "the cached map stays");
-        assert_eq!(result.warning.as_deref(), Some("EVE Metro: this character has no access"));
+        assert_eq!(result.warnings, [OverlayWarning::MetroNoAccess]);
         // The cache file on disk is untouched too, not just the in-memory result.
         assert_eq!(sources::read_cache(&path).as_ref().map(|d| d.holes.len()), Some(2));
     }
@@ -524,7 +524,7 @@ mod tests {
         sources::write_cache(&path, &old).unwrap();
         let result = load(&cfg(), &esi, &metro, path);
         assert_eq!(result.data.as_ref().map(|d| d.holes.len()), Some(2));
-        assert_eq!(result.warning.as_deref(), Some("EVE Metro key rejected"));
+        assert_eq!(sources::warning_text(&result.warnings).as_deref(), Some("EVE Metro key rejected"));
         assert_eq!(result.log[0].reason, "bad API key");
     }
 }
