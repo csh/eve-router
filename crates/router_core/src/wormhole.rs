@@ -251,12 +251,88 @@ pub fn merge(sources: &[SourceData], now: u64) -> Vec<Wormhole> {
 }
 
 fn same_hole(a: &Wormhole, b: &Wormhole) -> bool {
-    // An end with a known signature in both records must have the same three letters.
-    let agree = |x: &Option<String>, y: &Option<String>| match (x.as_deref().and_then(sig_letters), y.as_deref().and_then(sig_letters)) {
+    (a.a, a.b) == (b.a, b.b) && ends_agree(&a.sig_a, &b.sig_a) && ends_agree(&a.sig_b, &b.sig_b)
+}
+
+/// An end with a known signature in both records must have the same three letters.
+fn ends_agree(x: &Option<String>, y: &Option<String>) -> bool {
+    match (x.as_deref().and_then(sig_letters), y.as_deref().and_then(sig_letters)) {
         (Some(x), Some(y)) => x == y,
         _ => true,
-    };
-    (a.a, a.b) == (b.a, b.b) && agree(&a.sig_a, &b.sig_a) && agree(&a.sig_b, &b.sig_b)
+    }
+}
+
+/// A wormhole that the pilot marked as closed. The mapping tool can still list it. One entry
+/// removes one hole, so a second hole between the same systems stays open.
+#[derive(Clone, Debug, PartialEq)]
+pub struct ClosedHole {
+    /// The system IDs, as in `Wormhole`: `a` is the lower value.
+    pub a: u32,
+    pub b: u32,
+    /// The signature letters at each end, as known when the pilot closed the hole.
+    pub sig_a: Option<String>,
+    pub sig_b: Option<String>,
+    /// These two only break a tie between holes with the same signatures.
+    pub size: Option<Size>,
+    pub expiry: Option<Expiry>,
+    /// The count of matching holes when `apply_closed` first used the entry. `None` before that.
+    pub seen: Option<usize>,
+}
+
+impl ClosedHole {
+    /// The entry for a hole of the map.
+    pub fn of(w: &Wormhole) -> ClosedHole {
+        ClosedHole {
+            a: w.a,
+            b: w.b,
+            sig_a: w.sig_a.as_deref().and_then(sig_letters),
+            sig_b: w.sig_b.as_deref().and_then(sig_letters),
+            size: w.size,
+            expiry: w.expiry,
+            seen: None,
+        }
+    }
+
+    /// The entry for a jump from the system `from` to the system `to`. `sig` is the signature
+    /// in `from`. The active route holds only this data of a wormhole.
+    pub fn from_jump(from: u32, to: u32, sig: Option<&str>, size: Option<Size>, expiry: Option<Expiry>) -> ClosedHole {
+        let sig = sig.and_then(sig_letters);
+        let (a, b, sig_a, sig_b) = if from <= to { (from, to, sig, None) } else { (to, from, None, sig) };
+        ClosedHole { a, b, sig_a, sig_b, size, expiry, seen: None }
+    }
+
+    /// True if the hole can be the closed one: the same pair, and no end has two known
+    /// signatures that differ.
+    pub fn matches(&self, w: &Wormhole) -> bool {
+        (self.a, self.b) == (w.a, w.b) && ends_agree(&self.sig_a, &w.sig_a) && ends_agree(&self.sig_b, &w.sig_b)
+    }
+
+    /// How close a matching hole is to the closed one. A higher value is closer.
+    fn closeness(&self, w: &Wormhole) -> (usize, bool) {
+        let known = |x: &Option<String>, y: &Option<String>| x.is_some() && x.as_deref() == y.as_deref().and_then(sig_letters).as_deref();
+        let exact = usize::from(known(&self.sig_a, &w.sig_a)) + usize::from(known(&self.sig_b, &w.sig_b));
+        (exact, self.size == w.size && self.expiry == w.expiry)
+    }
+}
+
+/// Take the closed holes out of `holes`. Each entry removes the one hole that is closest to it.
+/// An entry retires, and leaves `closed`, when fewer holes match than at its first use: the
+/// closed hole probably left the map, so a look-alike must stay open.
+pub fn apply_closed(mut holes: Vec<Wormhole>, closed: &mut Vec<ClosedHole>) -> Vec<Wormhole> {
+    closed.retain_mut(|c| {
+        let found: Vec<usize> = (0..holes.len()).filter(|&i| c.matches(&holes[i])).collect();
+        let seen = *c.seen.get_or_insert(found.len());
+        // The earliest hole wins a tie.
+        let best = found.iter().copied().rev().max_by_key(|&i| c.closeness(&holes[i]));
+        match best {
+            Some(i) if found.len() >= seen => {
+                holes.remove(i);
+                true
+            }
+            _ => false,
+        }
+    });
+    holes
 }
 
 /// Merge `h` into `o`: the smaller size and limit, the worse mass status, the earlier expiry,
@@ -353,6 +429,79 @@ pub mod tests {
         assert!(!no_thera.allows(&to_thera) && !no_thera.allows(&both));
         assert!(no_turnur.allows(&to_thera) && !no_turnur.allows(&both));
         assert!(no_thera.allows(&other) && no_turnur.allows(&other));
+    }
+
+    /// A wormhole between Jita and Amarr with the signature letters at each end.
+    fn signed(sig_a: Option<&str>, sig_b: Option<&str>) -> Wormhole {
+        Wormhole::new(30000142, 30002187, sig_a.map(Into::into), sig_b.map(Into::into), SourceId::Nexum)
+    }
+
+    fn sigs(holes: &[Wormhole]) -> Vec<(Option<String>, Option<String>)> {
+        holes.iter().map(|h| (h.sig_a.clone(), h.sig_b.clone())).collect()
+    }
+
+    #[test]
+    fn a_closed_hole_removes_only_the_hole_with_its_signature() {
+        let holes = vec![signed(Some("ABC-123"), None), signed(Some("DEF-456"), None)];
+        let mut closed = vec![ClosedHole::of(&holes[0])];
+        let kept = apply_closed(holes, &mut closed);
+        assert_eq!(sigs(&kept), vec![(Some("DEF-456".into()), None)]);
+        assert_eq!(closed.len(), 1);
+        assert_eq!(closed[0].seen, Some(1));
+    }
+
+    #[test]
+    fn a_closed_hole_prefers_the_exact_signature_over_an_unknown_one() {
+        let holes = vec![signed(None, None), signed(Some("ABC-123"), None)];
+        let mut closed = vec![ClosedHole::of(&holes[1])];
+        let kept = apply_closed(holes, &mut closed);
+        assert_eq!(sigs(&kept), vec![(None, None)]);
+    }
+
+    #[test]
+    fn two_identical_holes_keep_one_after_one_closes() {
+        let holes = vec![signed(None, None), signed(None, None)];
+        let mut closed = vec![ClosedHole::of(&holes[0])];
+        assert_eq!(apply_closed(holes.clone(), &mut closed).len(), 1);
+        // Closing both in turn leaves none.
+        let mut both = vec![ClosedHole::of(&holes[0]), ClosedHole::of(&holes[1])];
+        assert!(apply_closed(holes, &mut both).is_empty());
+    }
+
+    #[test]
+    fn a_learned_signature_keeps_the_hole_closed() {
+        let mut closed = vec![ClosedHole::of(&signed(Some("ABC-123"), None))];
+        let kept = apply_closed(vec![signed(Some("ABC-123"), Some("XYZ-999")), signed(Some("DEF-456"), None)], &mut closed);
+        assert_eq!(sigs(&kept), vec![(Some("DEF-456".into()), None)]);
+    }
+
+    #[test]
+    fn an_entry_retires_when_fewer_holes_match_than_before() {
+        let two = vec![signed(None, None), signed(None, None)];
+        let mut closed = vec![ClosedHole::of(&two[0])];
+        let first = apply_closed(two, &mut closed);
+        assert_eq!(first.len(), 1);
+        // The bad hole left the map. The look-alike must stay open.
+        let after = apply_closed(first, &mut closed);
+        assert_eq!(after.len(), 1);
+        assert!(closed.is_empty());
+    }
+
+    #[test]
+    fn a_closed_hole_ignores_other_pairs() {
+        let other = Wormhole::new(30000142, 30002659, None, None, SourceId::Nexum);
+        let mut closed = vec![ClosedHole::of(&signed(None, None))];
+        let kept = apply_closed(vec![other, signed(None, None)], &mut closed);
+        assert_eq!(kept.len(), 1);
+        assert_eq!(kept[0].b, 30002659);
+    }
+
+    #[test]
+    fn a_closed_hole_from_a_jump_names_the_signature_of_the_leaving_end() {
+        // The jump leaves Amarr (the higher ID), so the signature belongs to the `b` end.
+        let closed = ClosedHole::from_jump(30002187, 30000142, Some("abc-123"), None, None);
+        assert_eq!((closed.a, closed.b), (30000142, 30002187));
+        assert_eq!((closed.sig_a, closed.sig_b), (None, Some("ABC".into())));
     }
 
     #[test]

@@ -8,7 +8,7 @@ use crate::overlay::{self, OverlayReport};
 use crate::route::{Path, Route};
 use crate::sources::{self, evemetro, evescout, nexum};
 use crate::universe::{Link, Universe};
-use crate::wormhole::{self, SourceData, SourceId};
+use crate::wormhole::{self, ClosedHole, SourceData, SourceId};
 use crate::wormhole_types::WormholeTypes;
 use petgraph::graph::NodeIndex;
 use std::path::PathBuf;
@@ -35,6 +35,9 @@ pub struct Snapshot {
     pub all: Vec<SourceData>,
     /// The log rows of the fetches of this load.
     pub log: Vec<LogEntry>,
+    /// The holes that the pilot closed and that this map leaves out. An entry that no longer
+    /// has a hole to close is not in the list.
+    pub closed: Vec<ClosedHole>,
 }
 
 /// Build a map: a copy of `base` with the merged wormholes of `wh`, `scout` and `metro` at `now`.
@@ -48,12 +51,26 @@ pub fn build(
     metro: &evemetro::Load,
     now: u64,
 ) -> (Snapshot, usize) {
+    build_closed(base, report, wh, scout, metro, now, Vec::new())
+}
+
+/// As `build`, but the map leaves out the holes in `closed`. See `wormhole::apply_closed`.
+pub fn build_closed(
+    base: &Universe,
+    report: &OverlayReport,
+    wh: &nexum::Load,
+    scout: &evescout::Load,
+    metro: &evemetro::Load,
+    now: u64,
+    mut closed: Vec<ClosedHole>,
+) -> (Snapshot, usize) {
     let mut uni = base.clone();
     let all: Vec<SourceData> = wh.data.iter().chain(&scout.data).chain(&metro.data).cloned().collect();
-    let count = uni.add_wormholes(&wormhole::merge(&all, now));
+    let holes = wormhole::apply_closed(wormhole::merge(&all, now), &mut closed);
+    let count = uni.add_wormholes(&holes);
     let shortcuts = Shortcuts::new(&uni, report, wh, scout, metro);
     let log = wh.log.iter().chain(&scout.log).chain(&metro.log).cloned().collect();
-    (Snapshot { uni: Arc::new(uni), shortcuts, all, log }, count)
+    (Snapshot { uni: Arc::new(uni), shortcuts, all, log, closed }, count)
 }
 
 /// The identity of a route that two maps share: each system, and each link between them.
@@ -199,6 +216,10 @@ pub enum Control {
     EveMetro(EveMetroConfig),
     /// Refresh at once with no fresh-cache check, then start a new interval.
     Refresh,
+    /// Leave this hole out of each map until the app stops. A fresh cache stays in use.
+    Close(ClosedHole),
+    /// Take this entry back, and build the map again. A fresh cache stays in use.
+    Reopen(ClosedHole),
 }
 
 /// The handle of the refresh worker. A drop of the handle stops the worker.
@@ -239,6 +260,17 @@ impl Refresher {
         let _ = self.control.send(Control::Bridges(report));
     }
 
+    /// Leave a hole out of the map, and build the map again at once. The snapshot lists the
+    /// entry in `closed`. A stopped worker ignores the message.
+    pub fn close(&self, hole: ClosedHole) {
+        let _ = self.control.send(Control::Close(hole));
+    }
+
+    /// Put a closed hole back, and build the map again at once. A stopped worker ignores the message.
+    pub fn reopen(&self, hole: ClosedHole) {
+        let _ = self.control.send(Control::Reopen(hole));
+    }
+
     /// Refresh at once, also when a cache is fresh. A stopped worker ignores the message.
     pub fn refresh(&self) {
         let _ = self.control.send(Control::Refresh);
@@ -266,13 +298,21 @@ struct Worker {
     last_nexum: Option<SourceData>,
     last_scout: Option<SourceData>,
     last_metro: Option<SourceData>,
+    /// The holes that the pilot closed. They live as long as the worker, so they never reach a file.
+    closed: Vec<ClosedHole>,
 }
 
 impl Worker {
     /// A worker that keeps the startup data of `setup.last` as the data of the last refresh.
     fn new(setup: Setup) -> Worker {
         let last = |source| setup.last.iter().find(|d| d.source == source).cloned();
-        Worker { last_nexum: last(SourceId::Nexum), last_scout: last(SourceId::EveScout), last_metro: last(SourceId::EveMetro), setup }
+        Worker {
+            last_nexum: last(SourceId::Nexum),
+            last_scout: last(SourceId::EveScout),
+            last_metro: last(SourceId::EveMetro),
+            closed: Vec::new(),
+            setup,
+        }
     }
 
     fn run(mut self, control: Receiver<Control>, snapshots: Sender<Snapshot>, clock: impl Fn() -> u64, wake: impl Fn()) {
@@ -294,6 +334,17 @@ impl Worker {
                     true
                 }
                 Ok(Control::Refresh) => true,
+                Ok(Control::Close(hole)) => {
+                    self.closed.push(hole);
+                    false
+                }
+                Ok(Control::Reopen(hole)) => {
+                    // Two entries can be equal, for two identical holes. Reopen one.
+                    if let Some(i) = self.closed.iter().position(|c| *c == hole) {
+                        self.closed.remove(i);
+                    }
+                    false
+                }
                 Err(RecvTimeoutError::Timeout) => false,
                 // The app dropped the Refresher.
                 Err(RecvTimeoutError::Disconnected) => return,
@@ -339,7 +390,10 @@ impl Worker {
         self.last_nexum.clone_from(&wh.data);
         self.last_scout.clone_from(&scout.data);
         self.last_metro.clone_from(&metro.data);
-        build(&s.base, &s.report, &wh, &scout, &metro, now).0
+        let snapshot = build_closed(&s.base, &s.report, &wh, &scout, &metro, now, self.closed.clone()).0;
+        // The build set `seen` of a new entry and dropped each entry that retired.
+        self.closed.clone_from(&snapshot.closed);
+        snapshot
     }
 }
 
@@ -472,6 +526,56 @@ mod tests {
             snap.log,
             [row(LogOp::NexumFetch, "Loaded 2 wormhole connections"), row(LogOp::EveScoutFetch, "Loaded 1 wormhole connection")]
         );
+    }
+
+    #[test]
+    fn build_closed_leaves_out_one_of_two_parallel_holes() {
+        let signed = |sig: &str| Wormhole { sig_a: Some(sig.into()), ..hole(JITA, AMARR) };
+        let data = SourceData {
+            source: SourceId::Nexum,
+            fetched_at: 0,
+            origin: None,
+            name: None,
+            holes: vec![signed("ABC-123"), signed("DEF-456")],
+        };
+        let wh = nexum::Load { data: Some(data), ..Default::default() };
+        let closed = vec![ClosedHole::of(&signed("ABC-123"))];
+        let (snap, count) = build_closed(universe(), &OverlayReport::default(), &wh, &Default::default(), &Default::default(), 0, closed);
+        assert_eq!(count, 1);
+        assert!(has_hole(&snap.uni, JITA, AMARR));
+        assert_eq!(snap.closed.len(), 1);
+        // The kept hole is the one with the other signature.
+        let (jita, amarr) = (snap.uni.by_id[&JITA], snap.uni.by_id[&AMARR]);
+        let sigs: Vec<Option<String>> = snap
+            .uni
+            .graph
+            .edges_connecting(jita, amarr)
+            .filter_map(|e| match e.weight() {
+                Link::Wormhole(w) => Some(w.sig_a.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(sigs, [Some("DEF-456".to_string())]);
+    }
+
+    #[test]
+    fn the_worker_keeps_a_closed_hole_out_until_it_reopens() {
+        let (url, _) = serve_routes(HashMap::from([("/scout".to_string(), feed(JITA))]));
+        let (setup, _tmp) = setup(format!("{url}/scout"), INTERVAL);
+        let mut worker = Worker::new(setup);
+        let open = worker.tick(FIXTURE_TIME, false);
+        assert!(has_hole(&open.uni, THERA, JITA));
+        let (a, b) = (THERA.min(JITA), THERA.max(JITA));
+        let entry = ClosedHole { a, b, sig_a: None, sig_b: None, size: None, expiry: None, seen: None };
+        worker.closed.push(entry);
+        let closed = worker.tick(FIXTURE_TIME, false);
+        assert!(!has_hole(&closed.uni, THERA, JITA));
+        assert_eq!(closed.closed.len(), 1);
+        assert_eq!(closed.closed[0].seen, Some(1));
+        // The worker keeps the set that the snapshot returned.
+        assert_eq!(worker.closed, closed.closed);
+        worker.closed.clear();
+        assert!(has_hole(&worker.tick(FIXTURE_TIME, false).uni, THERA, JITA));
     }
 
     /// An EVE-Scout feed with one Thera wormhole to `to`. It has no expiry, so the test clock cannot end it.

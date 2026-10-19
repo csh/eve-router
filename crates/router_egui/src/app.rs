@@ -152,7 +152,7 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     let startup::Loaded { sde, hulls, snapshot, base, report, types } =
         startup::load(&startup_cfg, &paths, env_flag(sde_update::SKIP_ENV), progress)?;
     let startup_lines: Vec<String> = sde.message().into_iter().collect();
-    let Snapshot { uni, shortcuts, all, log } = snapshot;
+    let Snapshot { uni, shortcuts, all, log, closed: _ } = snapshot;
     let settings = Settings::from_config(&cfg, &uni, hulls)?;
     // The worker gets the wormholes again each 5 minutes, and wakes the window after each refresh.
     let wake = ctx.clone();
