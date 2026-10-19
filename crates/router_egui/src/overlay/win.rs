@@ -4,12 +4,12 @@
 
 use super::mode::Geometry;
 use std::path::Path;
-use windows::Win32::Foundation::{HWND, RECT};
+use windows::Win32::Foundation::{COLORREF, HWND, RECT};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
 use windows::Win32::UI::WindowsAndMessaging::{
     FindWindowW, GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
-    GetWindowThreadProcessId, SetWindowLongPtrW, WS_EX_NOACTIVATE,
+    GetWindowThreadProcessId, LWA_ALPHA, SetLayeredWindowAttributes, SetWindowLongPtrW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TRANSPARENT,
 };
 use windows::core::{HSTRING, Owned, PCWSTR, PWSTR};
 
@@ -82,22 +82,31 @@ impl Foreground {
     }
 }
 
-/// Make the window with this title a window that never becomes the foreground window: a click on
-/// it does not move the focus from the game client. The window is one of this app. Returns `false`
-/// when no window has the title, or when Windows does not keep the new style.
-pub fn keep_focus_off(title: &str) -> bool {
+/// Make the window with this title a window that takes no input: a click goes through it to the
+/// window below, and it never becomes the foreground window, so the game client keeps the focus.
+/// The window is one of this app. Winit writes the whole extended style again when a window flag
+/// changes, for example when the window shows. So the caller repeats this call while the window
+/// shows. The call changes nothing when the style is already right. Returns `false` when no window
+/// has the title, or when Windows does not keep the new style.
+pub fn pass_input_through(title: &str) -> bool {
     // SAFETY: The call reads the title through a pointer that `HSTRING` keeps alive for the whole
     // call. It gives an error when no window has the title.
     let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR::null(), &HSTRING::from(title)) }) else { return false };
     // SAFETY: A window that is gone gives 0, and the call changes nothing.
     let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
-    let wanted = style | WS_EX_NOACTIVATE.0 as isize;
-    // SAFETY: The value is the old extended style with one more bit. A failed call gives 0, and
-    // the check below reads the style again, because 0 is also the old value of a window that had no style.
+    let wanted = style | (WS_EX_NOACTIVATE | WS_EX_LAYERED | WS_EX_TRANSPARENT).0 as isize;
+    if style == wanted {
+        return true;
+    }
+    // SAFETY: The value is the old extended style with more bits. A failed call gives 0, and the
+    // check below reads the style again, because 0 is also the old value of a window that had no style.
     unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted) };
+    // SAFETY: The window is layered now. A layered window draws nothing until it has an alpha
+    // value. The call gives the whole window an alpha of 255, which is opaque, and no color key.
+    let alpha = unsafe { SetLayeredWindowAttributes(hwnd, COLORREF(0), 255, LWA_ALPHA) };
     // SAFETY: Same as the first read.
     let kept = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
-    kept == wanted
+    alpha.is_ok() && kept == wanted
 }
 
 /// The file name of the program of a process, for example `exefile.exe`.

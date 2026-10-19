@@ -2,9 +2,9 @@
 //! do at the next wormhole or filament of the active route.
 //!
 //! The window exists while the overlay is on and the pilot is in the system that the next hop leaves.
-//! It shows only
-//! while the client of the route character has the focus. The window never takes the focus, and
-//! a click on it does not take the focus, so the client keeps the focus and the title that the probe reads.
+//! It shows only while the client of the route character has the focus. The window takes no input:
+//! a click goes through it, and it never takes the focus, so the client keeps the focus and the
+//! title that the probe reads.
 //!
 //! The probe runs in `logic`. eframe calls `logic` also while the main window is minimized, and
 //! a command to show the overlay window then starts the pass that draws it. The window is drawn in `show`.
@@ -145,15 +145,18 @@ impl Overlay {
         }
         let want = departing && client.is_some_and(|(_, title, _)| content_for_title(&title, Some(route), here).is_some());
         self.send(ctx, want, resolve_position(config, route.character));
+        if self.shown {
+            // Winit writes the extended style again when the window shows, so the call repeats
+            // while the window shows. It changes nothing when the style is right.
+            win::pass_input_through(TITLE);
+        }
     }
 
     fn send(&mut self, ctx: &Context, want: bool, position: Option<Pos>) {
         let Some(visible) = transition(want, self.alive, self.shown) else { return };
         if visible {
-            // Square corners, as the other windows of the app have. A click on the window must not
-            // take the focus from the client.
+            // Square corners, as the other windows of the app have.
             crate::chrome::square_window_titled(TITLE);
-            win::keep_focus_off(TITLE);
             let Pos { x, y } = position.unwrap_or(DEFAULT_POS);
             ctx.send_viewport_cmd_to(viewport_id(), ViewportCommand::OuterPosition(Pos2::new(x as f32, y as f32)));
         }
@@ -175,8 +178,9 @@ impl Overlay {
         let builder = window_builder(TITLE, at)
             // The client keeps the focus: the window does not activate when it shows.
             .with_active(false)
-            // No click-through and no transparency: both make Windows treat the window as a layered
-            // window, and the window then draws nothing. `keep_focus_off` keeps the focus on the client.
+            // No click-through and no transparency in the builder: winit makes such a window a layered
+            // window with no alpha value, and the window then draws nothing. `pass_input_through`
+            // sets the style and the alpha value after the window shows.
             .with_visible(false);
         let (title, detail) = content.lines(|id| system_name(s, id));
         ctx.show_viewport_immediate(viewport_id(), builder, |ui, _class| paint(ui, &title, &detail));
