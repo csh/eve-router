@@ -64,6 +64,9 @@ enum Saved {
 }
 
 const SAVED_TIME: Duration = Duration::from_secs(3);
+/// The row height of the two tables of the Avoid window, and the rows that each shows before it scrolls.
+const AVOID_ROW: f32 = 28.0;
+const AVOID_ROWS: f32 = 7.0;
 
 impl SettingsForm {
     /// Show "Saved" after a button, for a short time, when `field` was saved last.
@@ -264,7 +267,7 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
             .column(Column::initial(200.0).at_least(120.0).clip(true))
             .column(Column::exact(84.0))
             .column(Column::exact(84.0))
-            .max_scroll_height(280.0)
+            .max_scroll_height(AVOID_ROWS * AVOID_ROW)
             .auto_shrink([false, true])
             .header(22.0, |mut header| {
                 for text in ["System", "Security", "Region", "", ""] {
@@ -272,7 +275,7 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
                 }
             })
             .body(|body| {
-                body.rows(28.0, rows.len(), |mut row| {
+                body.rows(AVOID_ROW, rows.len(), |mut row| {
                     let kind = rows[row.index()];
                     match kind {
                         AvoidRow::System(i) => {
@@ -329,7 +332,7 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
             .column(Column::initial(200.0).at_least(120.0).clip(true))
             .column(Column::exact(84.0))
             .column(Column::exact(84.0))
-            .max_scroll_height(140.0)
+            .max_scroll_height(AVOID_ROWS * AVOID_ROW)
             .auto_shrink([false, true])
             .header(22.0, |mut header| {
                 for text in ["Start", "Sig", "End", "Sig", ""] {
@@ -337,7 +340,7 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
                 }
             })
             .body(|body| {
-                body.rows(28.0, s.closed.len(), |mut row| {
+                body.rows(AVOID_ROW, s.closed.len(), |mut row| {
                     let i = row.index();
                     let hole = &s.closed[i];
                     let sig = |ui: &mut Ui, sig: Option<&str>| match sig {
