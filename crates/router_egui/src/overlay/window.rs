@@ -208,9 +208,11 @@ fn show_editor(ctx: &Context, config: &router_core::config::RoutingOverlayConfig
         Place::Global => config.position,
         Place::Character(id) => resolve_position(config, id),
     };
-    // The window starts hidden. The OS shows a new window with a white background for a moment,
-    // before the first pass of the app has drawn it. The window shows after the third pass, as the Log window does.
-    let builder = window_builder(EDITOR_TITLE, start.unwrap_or(DEFAULT_POS)).with_visible(false);
+    // The window starts hidden and transparent. The OS shows a new window with a white background
+    // for a moment, before the first pass of the app has drawn it. The window shows after the
+    // third pass, as the Log window does. The window is not a click-through window, so the
+    // transparency is safe: it draws, as the Log window does.
+    let builder = window_builder(EDITOR_TITLE, start.unwrap_or(DEFAULT_POS)).with_transparent(true).with_visible(false);
     ctx.show_viewport_immediate(editor_viewport_id(), builder, |ui, _class| {
         editor.frames = editor.frames.saturating_add(1);
         match editor.frames {
