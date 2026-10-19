@@ -872,7 +872,7 @@ fn position_buttons(ui: &mut Ui, s: &mut Session, overlay: &mut Overlay, place: 
     }
     let busy = editing.is_some();
     const BUSY: &str = "Save or cancel the other position first";
-    if ui.add_enabled(!busy, AppButton::new("Position")).on_disabled_hover_text(BUSY).clicked() {
+    if ui.add_enabled(!busy, AppButton::new("Adjust Position")).on_disabled_hover_text(BUSY).clicked() {
         overlay.begin_edit(place);
     }
     if s.cfg.routing_overlay.position_of(place).is_some()
@@ -882,20 +882,12 @@ fn position_buttons(ui: &mut Ui, s: &mut Session, overlay: &mut Overlay, place: 
     }
 }
 
-/// The text of the display mode of a client, and its color, for the table of the Overlay page.
+/// True when the client may run in fullscreen mode, and so can hide the overlay. The warning shows
+/// for the one shape that the overlay cannot tell from a fullscreen window. A mode that the overlay
+/// did not see yet gives no warning.
 #[cfg(windows)]
-fn display_mode_text(mode: Option<crate::overlay::DisplayMode>) -> (&'static str, Color32, &'static str) {
-    use crate::overlay::DisplayMode;
-    match mode {
-        Some(DisplayMode::Borderless) => ("Borderless", theme::TEXT_DIM, "The overlay shows above this client."),
-        Some(DisplayMode::Windowed) => ("Windowed", theme::TEXT_DIM, "The overlay shows above this client."),
-        Some(DisplayMode::Other) => (
-            "Check mode",
-            theme::WARN,
-            "This client window can be a fullscreen window. A fullscreen client hides the overlay. Use the windowed or the borderless mode.",
-        ),
-        None => ("-", theme::TEXT_DIM, "Not seen yet. Click the client during a route to check its display mode."),
-    }
+fn may_be_fullscreen(mode: Option<crate::overlay::DisplayMode>) -> bool {
+    mode == Some(crate::overlay::DisplayMode::Other)
 }
 
 /// The Overlay page: the switch, the global position, and a table with the position of each
@@ -925,19 +917,11 @@ fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay
     ui.add_space(14.0);
 
     group(ui, "Global");
-    ui.horizontal(|ui| {
-        label(ui, "Position");
-        // The page shows no coordinates: the dummy window shows the place.
-        match s.cfg.routing_overlay.position {
-            Some(_) => ui.label(RichText::new("Custom").color(theme::TEXT)),
-            None => ui.label(dim("Default")),
-        };
-        position_buttons(ui, s, overlay, Place::Global);
-    });
+    ui.horizontal(|ui| position_buttons(ui, s, overlay, Place::Global));
     ui.add_space(14.0);
 
-    group(ui, "Per character");
-    ui.label(dim("A character with no position of its own uses the global position."));
+    group(ui, "Position override");
+    ui.label(dim("Adjust the overlay position per-character."));
     ui.add_space(4.0);
     let pilots = s.pilots.characters();
     if pilots.is_empty() {
@@ -945,7 +929,7 @@ fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay
         return;
     }
     let editing = overlay.editing();
-    let extra = [("Position", Column::exact(80.0)), ("Client", Column::exact(80.0)), ("", Column::exact(160.0))];
+    let extra = [("Position", Column::exact(72.0)), ("", Column::exact(76.0)), ("", Column::exact(200.0))];
     character_table(
         ui,
         "overlay-characters",
@@ -959,8 +943,10 @@ fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay
                 None => _ = ui.label(dim("Global")),
             },
             1 => {
-                let (text, color, hover) = display_mode_text(overlay.display_mode(&pilot.name));
-                ui.label(RichText::new(text).color(color)).on_hover_text(hover);
+                if may_be_fullscreen(overlay.display_mode(&pilot.name)) {
+                    ui.label(RichText::new("Fullscreen").color(theme::WARN))
+                        .on_hover_text("This client may run in fullscreen mode. A fullscreen client hides the overlay. Use the windowed or the borderless mode.");
+                }
             }
             _ => position_buttons(ui, s, overlay, Place::Character(pilot.id)),
         },
@@ -990,7 +976,7 @@ fn character_table(
         .striped(true)
         .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
         .column(Column::exact(48.0))
-        .column(Column::remainder().at_least(160.0).clip(true));
+        .column(Column::remainder().at_least(120.0).clip(true));
     for (_, column) in extra {
         table = table.column(*column);
     }
@@ -1607,14 +1593,12 @@ mod tests {
 
     #[cfg(windows)]
     #[test]
-    fn a_client_that_the_overlay_did_not_see_shows_a_dash() {
+    fn only_the_unknown_shape_warns_about_fullscreen() {
         use crate::overlay::DisplayMode;
-        assert_eq!(display_mode_text(None).0, "-");
-        assert_eq!(display_mode_text(Some(DisplayMode::Borderless)).0, "Borderless");
-        assert_eq!(display_mode_text(Some(DisplayMode::Windowed)).0, "Windowed");
-        // Only the unknown shape warns.
-        let (text, color, _) = display_mode_text(Some(DisplayMode::Other));
-        assert_eq!((text, color), ("Check mode", theme::WARN));
+        assert!(!may_be_fullscreen(None));
+        assert!(!may_be_fullscreen(Some(DisplayMode::Borderless)));
+        assert!(!may_be_fullscreen(Some(DisplayMode::Windowed)));
+        assert!(may_be_fullscreen(Some(DisplayMode::Other)));
     }
 
     #[test]
