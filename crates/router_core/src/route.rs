@@ -1,7 +1,6 @@
 //! Route costs, k-shortest paths (Yen's algorithm) and waypoint chains.
 
 use crate::ansiblex::{BridgeRules, Hull};
-use crate::config::Clades;
 use crate::universe::{Band, Link, Universe, band};
 use crate::wormhole::{Hubs, Wormhole};
 use petgraph::algo::{astar, dijkstra};
@@ -192,8 +191,8 @@ pub struct RouterOptions {
     pub cap_weight: u32,
     /// The extra cost of a wormhole with no known signature at its departure system, in milli-jumps.
     pub unknown_sig_penalty: u32,
-    /// Which Pochven clades a filament can reach.
-    pub clades: Clades,
+    /// Whether a route can enter Pochven, by a filament or by a wormhole.
+    pub pochven: bool,
     /// Unix seconds. It sets which wormholes are expired.
     pub now: u64,
 }
@@ -208,7 +207,7 @@ impl Default for RouterOptions {
             rules: BridgeRules::default(),
             cap_weight: DEFAULT_CAP_WEIGHT,
             unknown_sig_penalty: DEFAULT_UNKNOWN_SIG_PENALTY,
-            clades: Clades::default(),
+            pochven: false,
             now: 0,
         }
     }
@@ -263,7 +262,7 @@ impl<'a> Router<'a> {
     /// Calculate the node costs and the edge permissions one time, in parallel.
     /// Each search then reads them instead of calculating them again.
     pub fn new(uni: &'a Universe, options: RouterOptions) -> Self {
-        let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, unknown_sig_penalty, clades, now } = options;
+        let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, unknown_sig_penalty, pochven, now } = options;
         let graph = &uni.graph;
         let node_cost = graph
             .raw_nodes()
@@ -299,10 +298,10 @@ impl<'a> Router<'a> {
                             && wormhole_hull_ok
                             && hubs.allows(w)
                             && w.usable(now, hull_kg)
-                            && (clades.pochven || !in_pochven(uni, e.source(), e.target()))
+                            && (pochven || !in_pochven(uni, e.source(), e.target()))
                     }
                     Link::JumpBridge => bridges && rules.allowed(uni, e.target()),
-                    Link::Filament(f) => clades.allows(f.clade) && filament_hull_ok,
+                    Link::Filament(_) => pochven && filament_hull_ok,
                 }
             })
             .collect();
@@ -1206,8 +1205,8 @@ mod tests {
         use petgraph::visit::EdgeRef;
         let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
         let target = uni.graph.edges(perun).next().unwrap().target();
-        let clades = crate::config::Clades { pochven: true };
-        let r = Router::new(uni, RouterOptions { clades, ..Default::default() });
+        let pochven = true;
+        let r = Router::new(uni, RouterOptions { pochven, ..Default::default() });
         let route = r.routes(&[node("Jita"), target], 1).unwrap().remove(0);
         // Two filament edges: the activation, and the jump from the hub into the clade.
         assert_eq!(route.jumps, 2);
@@ -1221,21 +1220,21 @@ mod tests {
         use petgraph::visit::EdgeRef;
         let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
         let target = uni.graph.edges(perun).next().unwrap().target();
-        let clades = crate::config::Clades { pochven: true };
+        let pochven = true;
         // A Titan is on the banned list. No hull set still allows the filament.
         let banned = RouterOptions {
-            clades,
+            pochven,
             rules: BridgeRules { capital: None, hull: hulls().find("Titan"), max_cap: None },
             ..Default::default()
         };
         assert!(Router::new(uni, banned).routes(&[node("Jita"), target], 1).is_err());
         let allowed = RouterOptions {
-            clades,
+            pochven,
             rules: BridgeRules { capital: None, hull: hulls().find("Rifter"), max_cap: None },
             ..Default::default()
         };
         assert!(Router::new(uni, allowed).routes(&[node("Jita"), target], 1).is_ok());
-        let no_hull = RouterOptions { clades, ..Default::default() };
+        let no_hull = RouterOptions { pochven, ..Default::default() };
         assert!(Router::new(uni, no_hull).routes(&[node("Jita"), target], 1).is_ok());
     }
 
@@ -1255,8 +1254,8 @@ mod tests {
 
         assert!(Router::new(&uni, RouterOptions::default()).routes(&[jita, target], 1).is_err());
         // No signature penalty: the test proves the wormhole is usable, not that it beats a filament.
-        let clades = crate::config::Clades { pochven: true };
-        let options = RouterOptions { clades, unknown_sig_penalty: 0, ..Default::default() };
+        let pochven = true;
+        let options = RouterOptions { pochven, unknown_sig_penalty: 0, ..Default::default() };
         let route = Router::new(&uni, options).routes(&[jita, target], 1).unwrap().remove(0);
         assert_eq!(route.jumps, 1);
         assert_eq!(route.wormholes, 1);

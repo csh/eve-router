@@ -191,23 +191,6 @@ impl NexumConfig {
     }
 }
 
-/// The Pochven switch: whether a route can go into Pochven at all, by a filament or by a
-/// wormhole (the EVE Metro map). Off by default, because the feature is new and Pochven is a
-/// long way back. The SDE shows one Triglavian faction only (Triglavian Collective, `500026`):
-/// the three clade corporations share it, with no faction of their own, so one switch covers
-/// all three clades.
-#[derive(Serialize, Deserialize, Default, Clone, Copy, Debug, PartialEq, Eq)]
-#[serde(default)]
-pub struct Clades {
-    pub pochven: bool,
-}
-
-impl Clades {
-    pub fn allows(self, _clade: crate::universe::Clade) -> bool {
-        self.pochven
-    }
-}
-
 /// The EVE Metro settings. The URL is fixed (`sources::evemetro::URL`). One user pays for the
 /// service, so the settings name one linked character. The API checks that character, its
 /// corporation and its alliance.
@@ -328,7 +311,11 @@ pub struct Config {
     pub eve_metro: EveMetroConfig,
     /// The Thera and Turnur switches. Both are on in a file without them.
     pub eve_scout: Hubs,
-    pub clades: Clades,
+    /// The Pochven switch: whether a route can go into Pochven at all, by a filament or by a
+    /// wormhole (the EVE Metro map). Off by default, because the feature is new and Pochven is a
+    /// long way back. One switch covers all three clades: the SDE shows one Triglavian faction
+    /// only (Triglavian Collective, `500026`), and the clade corporations share it.
+    pub pochven: bool,
     /// The Photon UI faction theme. A name that is not known loads as no theme.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_theme")]
     pub theme: Option<FactionTheme>,
@@ -477,7 +464,7 @@ mod tests {
             },
             eve_metro: EveMetroConfig { enabled: true, key: Some(ApiKey("metro_key".into())), character: Some(2112345678) },
             eve_scout: Hubs { thera: false, turnur: true },
-            clades: Clades { pochven: true },
+            pochven: true,
             theme: None,
             compact: false,
             routing_overlay: RoutingOverlayConfig::default(),

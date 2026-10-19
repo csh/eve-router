@@ -526,15 +526,13 @@ mod tests {
     /// (the hub's synthetic ID is never a location ESI can report).
     #[test]
     fn real_route_through_a_filament() {
-        use crate::config::Clades;
         use crate::route::{Router, RouterOptions};
         use petgraph::visit::EdgeRef;
         let uni = universe();
         let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
         let target = uni.graph.edges(perun).next().unwrap().target();
         let jita = uni.exact("Jita").unwrap();
-        let clades = Clades { pochven: true };
-        let options = RouterOptions { clades, ..Default::default() };
+        let options = RouterOptions { pochven: true, ..Default::default() };
         let route = Router::new(uni, options).routes(&[jita, target], 1).unwrap().remove(0);
         assert_eq!(route.jumps, 2, "the hub is still two edges in the route's own path");
 

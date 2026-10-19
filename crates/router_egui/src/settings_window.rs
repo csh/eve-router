@@ -742,11 +742,10 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
     action
 }
 
-/// The Triglavian filament page: a switch for each clade, and a note about the hull restriction.
-/// A clade switch acts at route time, like the EVE-Scout hub switches.
-/// The Clades group of the Pochven page: a switch for each clade. Filament travel needs no
+/// The Pochven group of the Pochven page: the access switch. It acts at route time, like the
+/// EVE-Scout hub switches. Filament travel needs no
 /// client ID, unlike EVE Metro, so it always shows.
-fn clades_group(ui: &mut Ui, s: &mut Session, locked: bool) {
+fn pochven_group(ui: &mut Ui, s: &mut Session, locked: bool) {
     group(ui, "Pochven");
     ui.label(
         RichText::new("Filaments transport one or more pilots to a random system of a clade, assuming an average number of jumps.")
@@ -755,7 +754,7 @@ fn clades_group(ui: &mut Ui, s: &mut Session, locked: bool) {
     ui.add_space(4.0);
     egui::Grid::new("settings-filaments").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         label(ui, "Allow travel via Pochven");
-        let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(&mut s.settings.clades.pochven, "").changed());
+        let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(&mut s.settings.pochven, "").changed());
         row.response.on_disabled_hover_text(LOCKED);
         if row.inner {
             s.recompute();
@@ -1045,7 +1044,7 @@ fn character_table(
 /// stays still and the table scrolls.
 fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool, portraits: &mut Portraits) {
     let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
-    clades_group(ui, s, locked);
+    pochven_group(ui, s, locked);
     ui.add_space(14.0);
     // The source needs a logged-in character, so it needs the EVE client ID, like each SSO
     // feature. Without one, EVE Metro gives nothing, so the whole group stays off the page.
@@ -1055,7 +1054,7 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
     let field = FIELD;
     // A route cannot use EVE Metro while the Access switch above is off. The switch gives the
     // reason, so the controls here only dim, with no second line of text to repeat it.
-    let pochven_off = !s.settings.clades.pochven;
+    let pochven_off = !s.settings.pochven;
     let disabled = locked || pochven_off;
     let disabled_hover = if locked { LOCKED } else { ACCESS_OFF };
     group(ui, "EVE Metro");
@@ -1579,13 +1578,13 @@ mod tests {
         draw(&mut s, true);
         s.pilots = router_core::esi::pilots::Pilots::offline_with_client_id(tmp.path().join("active-route.json"), &[]);
         draw(&mut s, false);
-        // Without a client ID, the EVE Metro part of the page draws only the reason, but the Clades
-        // switches draw regardless: filament travel needs no client ID.
+        // Without a client ID, the EVE Metro part of the page draws only the reason, but the Pochven
+        // switch draws regardless: filament travel needs no client ID.
         s.pilots = router_core::esi::pilots::Pilots::offline(tmp.path().join("active-route.json"));
         draw(&mut s, false);
         // Drawing changes no setting.
         assert_eq!(s.cfg.eve_metro.character, Some(99));
-        assert!(!s.settings.clades.pochven);
+        assert!(!s.settings.pochven);
     }
 
     #[cfg(windows)]

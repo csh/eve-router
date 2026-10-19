@@ -43,7 +43,5 @@
     "thera": false,
     "turnur": true
   },
-  "clades": {
-    "pochven": true
-  }
+  "pochven": true
 }
