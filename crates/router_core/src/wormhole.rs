@@ -275,12 +275,14 @@ pub struct ClosedHole {
     /// These two only break a tie between holes with the same signatures.
     pub size: Option<Size>,
     pub expiry: Option<Expiry>,
+    /// The end that the pilot jumped from, for the lists: `a` or `b`. It plays no part in `matches`.
+    pub start: u32,
     /// The count of matching holes when `apply_closed` first used the entry. `None` before that.
     pub seen: Option<usize>,
 }
 
 impl ClosedHole {
-    /// The entry for a hole of the map.
+    /// The entry for a hole of the map. The start is `a`: use `with_start` for the other end.
     pub fn of(w: &Wormhole) -> ClosedHole {
         ClosedHole {
             a: w.a,
@@ -289,8 +291,23 @@ impl ClosedHole {
             sig_b: w.sig_b.as_deref().and_then(sig_letters),
             size: w.size,
             expiry: w.expiry,
+            start: w.a,
             seen: None,
         }
+    }
+
+    /// The same entry with the system `id` as the start. An `id` that is not an end changes nothing.
+    pub fn with_start(mut self, id: u32) -> ClosedHole {
+        if id == self.a || id == self.b {
+            self.start = id;
+        }
+        self
+    }
+
+    /// The start and the end, each with its system ID and its signature letters.
+    pub fn ends(&self) -> [(u32, Option<&str>); 2] {
+        let (a, b) = ((self.a, self.sig_a.as_deref()), (self.b, self.sig_b.as_deref()));
+        if self.start == self.b { [b, a] } else { [a, b] }
     }
 
     /// The entry for a jump from the system `from` to the system `to`. `sig` is the signature
@@ -298,7 +315,7 @@ impl ClosedHole {
     pub fn from_jump(from: u32, to: u32, sig: Option<&str>, size: Option<Size>, expiry: Option<Expiry>) -> ClosedHole {
         let sig = sig.and_then(sig_letters);
         let (a, b, sig_a, sig_b) = if from <= to { (from, to, sig, None) } else { (to, from, None, sig) };
-        ClosedHole { a, b, sig_a, sig_b, size, expiry, seen: None }
+        ClosedHole { a, b, sig_a, sig_b, size, expiry, start: from, seen: None }
     }
 
     /// True if the hole can be the closed one: the same pair, and no end has two known
@@ -494,6 +511,22 @@ pub mod tests {
         let kept = apply_closed(vec![other, signed(None, None)], &mut closed);
         assert_eq!(kept.len(), 1);
         assert_eq!(kept[0].b, 30002659);
+    }
+
+    #[test]
+    fn a_closed_hole_lists_the_start_first() {
+        let hole = signed(Some("ABC-123"), Some("DEF-456"));
+        // The start is Jita, the lower ID, until the caller sets another one.
+        let closed = ClosedHole::of(&hole);
+        assert_eq!(closed.ends(), [(30000142, Some("ABC")), (30002187, Some("DEF"))]);
+        let back = closed.with_start(30002187);
+        assert_eq!(back.ends(), [(30002187, Some("DEF")), (30000142, Some("ABC"))]);
+        // A system that is not an end changes nothing.
+        assert_eq!(back.clone().with_start(1), back);
+        // The start does not change what the entry matches.
+        assert!(back.matches(&hole));
+        let jump = ClosedHole::from_jump(30002187, 30000142, Some("DEF"), None, None);
+        assert_eq!(jump.ends(), [(30002187, Some("DEF")), (30000142, None)]);
     }
 
     #[test]

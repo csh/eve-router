@@ -566,7 +566,7 @@ mod tests {
         let open = worker.tick(FIXTURE_TIME, false);
         assert!(has_hole(&open.uni, THERA, JITA));
         let (a, b) = (THERA.min(JITA), THERA.max(JITA));
-        let entry = ClosedHole { a, b, sig_a: None, sig_b: None, size: None, expiry: None, seen: None };
+        let entry = ClosedHole { a, b, sig_a: None, sig_b: None, size: None, expiry: None, start: a, seen: None };
         worker.closed.push(entry);
         let closed = worker.tick(FIXTURE_TIME, false);
         assert!(!has_hole(&closed.uni, THERA, JITA));

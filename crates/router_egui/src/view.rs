@@ -717,7 +717,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                         }
                         // The link into this step, if it is a wormhole.
                         let hole = step.checked_sub(1).and_then(|i| match &uni.graph[route.path.edges[i]] {
-                            Link::Wormhole(w) => Some(ClosedHole::of(w)),
+                            Link::Wormhole(w) => Some(ClosedHole::of(w).with_start(uni.system(route.path.nodes[i]).id)),
                             _ => None,
                         });
                         if let Some(hole) = hole {

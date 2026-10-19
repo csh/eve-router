@@ -318,22 +318,37 @@ fn avoid_list(ui: &mut Ui, confirm: &mut bool, search: &mut SearchBox, region_te
         ui.label(RichText::new("Routes skip these until you close the app.").color(theme::TEXT_DIM));
         ui.add_space(4.0);
         let name = |id: u32| s.uni.by_id.get(&id).map_or_else(|| id.to_string(), |&n| s.uni.name(n).to_string());
-        let sig = |sig: &Option<String>| sig.clone().unwrap_or_else(|| "no sig".into());
+        // The columns have the widths of the avoid table above, so the two tables line up.
         use egui_extras::Column;
         egui_extras::TableBuilder::new(ui)
             .id_salt("closed-table")
             .striped(true)
             .cell_layout(egui::Layout::left_to_right(egui::Align::Center))
             .column(Column::remainder().at_least(160.0).clip(true))
+            .column(Column::exact(80.0))
+            .column(Column::initial(200.0).at_least(120.0).clip(true))
+            .column(Column::exact(84.0))
             .column(Column::exact(84.0))
             .max_scroll_height(140.0)
             .auto_shrink([false, true])
+            .header(22.0, |mut header| {
+                for text in ["Start", "Sig", "End", "Sig", ""] {
+                    header.col(|ui| _ = ui.label(theme::header_text(text)));
+                }
+            })
             .body(|body| {
                 body.rows(28.0, s.closed.len(), |mut row| {
                     let i = row.index();
                     let hole = &s.closed[i];
-                    let text = format!("{} ({}) » {} ({})", name(hole.a), sig(&hole.sig_a), name(hole.b), sig(&hole.sig_b));
-                    row.col(|ui| _ = ui.add(egui::Label::new(RichText::new(text).color(theme::TEXT)).truncate()));
+                    let sig = |ui: &mut Ui, sig: Option<&str>| match sig {
+                        Some(letters) => _ = ui.label(RichText::new(letters).color(theme::TEXT)),
+                        None => _ = ui.label(RichText::new("Unknown").color(theme::TEXT_DIM)),
+                    };
+                    let [(start, start_sig), (end, end_sig)] = hole.ends();
+                    row.col(|ui| _ = ui.label(RichText::new(name(start)).color(theme::TEXT)));
+                    row.col(|ui| sig(ui, start_sig));
+                    row.col(|ui| _ = ui.label(RichText::new(name(end)).color(theme::TEXT)));
+                    row.col(|ui| sig(ui, end_sig));
                     row.col(|ui| {
                         if ui.app_button("Reopen").clicked() {
                             reopen = Some(i);
