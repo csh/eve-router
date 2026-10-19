@@ -722,7 +722,7 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                         });
                         if let Some(hole) = hole {
                             ui.separator();
-                            let tip = "Routes skip this wormhole until you close the app. Use it when the wormhole has collapsed.";
+                            let tip = "Ignore this connection until the next app restart. Use it when the wormhole has collapsed.";
                             if ui.app_button("Mark wormhole closed").on_hover_text(tip).clicked() {
                                 toggle = Some(Toggle::Close(hole));
                                 ui.close();

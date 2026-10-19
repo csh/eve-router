@@ -821,7 +821,7 @@ impl PilotsUi {
                             // Only a wormhole that is still ahead can close.
                             if let Some(hole) = closable(active, i) {
                                 widgets::context_menu(&label, |ui| {
-                                    let tip = "Routes skip this wormhole until you close the app. Use it when the wormhole has collapsed.";
+                                    let tip = "Ignore this connection until the next app restart. Use it when the wormhole has collapsed.";
                                     if ui.app_button("Mark wormhole closed").on_hover_text(tip).clicked() {
                                         close = Some(hole);
                                         ui.close();
