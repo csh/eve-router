@@ -1,0 +1,14 @@
+{
+  "number": 1,
+  "character": 7,
+  "character_name": "Alice",
+  "steps": [
+    { "system": 1, "hop": "Start", "via": "" },
+    { "system": 2, "hop": "Gate", "via": "gate" },
+    { "system": 3, "hop": "Wormhole", "via": "Wormhole · Sig. ABC · Large", "sig": "ABC" },
+    { "system": 4, "hop": "Bridge", "via": "Ansiblex · Zone 1 → 2 · 36 TJ" }
+  ],
+  "stops": [0, 3],
+  "progress": 1,
+  "sent_segment": 0
+}

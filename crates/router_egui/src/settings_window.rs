@@ -367,7 +367,7 @@ fn label(ui: &mut Ui, text: &str) {
 }
 
 /// The hover text of a control that a route start locks.
-pub const LOCKED: &str = "Locked while route is active — stop the route to change this";
+pub const LOCKED: &str = "Locked while route is active - stop the route to change this";
 
 /// The hover text of a control that the Pochven Access switch locks.
 const ACCESS_OFF: &str = "Turn on Pochven access above first";

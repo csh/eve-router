@@ -12,7 +12,7 @@
 use super::client::Location;
 use crate::ansiblex::BridgeRules;
 use crate::error::{FileError, write_atomic};
-use crate::labels::link_label;
+use crate::labels::LinkView;
 use crate::route::{Route, Stop};
 use crate::universe::{Link, Universe};
 use serde::{Deserialize, Serialize};
@@ -65,15 +65,31 @@ impl Hop {
     }
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct Step {
     pub system: u32,
     pub hop: Hop,
-    /// The link label at the start of the route, for example "Ansiblex · Zone 1 → 2 · 36 TJ".
-    pub via: String,
+    /// The link at the start of the route. A file from an older version has none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub link: Option<LinkView>,
     /// For a wormhole: the signature letters in the system that the jump leaves, if known.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub sig: Option<String>,
+}
+
+impl Step {
+    /// The text of the link into this step. `now` (Unix seconds) sets the wormhole expiry text.
+    /// A step from an old file has no link data, so it shows the name of its hop.
+    pub fn label(&self, now: u64) -> String {
+        match (&self.link, self.hop) {
+            (Some(link), _) => link.label(now),
+            (None, Hop::Start) => String::new(),
+            (None, Hop::Gate) => "gate".into(),
+            (None, Hop::Wormhole) => "Wormhole".into(),
+            (None, Hop::Bridge) => "Ansiblex".into(),
+            (None, Hop::Filament) => "Filament".into(),
+        }
+    }
 }
 
 /// What a location means for the route.
@@ -91,7 +107,7 @@ pub enum Observation {
     OffRoute { system: u32 },
 }
 
-#[derive(Serialize, Deserialize, Clone, Debug, PartialEq, Eq)]
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
 pub struct ActiveRoute {
     /// The route number in the list, for "Route #1".
     pub number: usize,
@@ -110,16 +126,8 @@ pub struct ActiveRoute {
 }
 
 impl ActiveRoute {
-    /// Freeze a route. `now` (Unix seconds) sets the wormhole labels.
-    pub fn new(
-        uni: &Universe,
-        rules: &BridgeRules,
-        route: &Route,
-        number: usize,
-        character: u64,
-        character_name: &str,
-        now: u64,
-    ) -> ActiveRoute {
+    /// Freeze a route.
+    pub fn new(uni: &Universe, rules: &BridgeRules, route: &Route, number: usize, character: u64, character_name: &str) -> ActiveRoute {
         // A filament jump lands the path on the virtual hub of the clade, then on the clade system.
         // The pilot cannot see the hub and ESI can never report it, so the two edges are one real
         // hop: skip the hub's node, and carry only the step that lands on the clade system.
@@ -129,7 +137,7 @@ impl ActiveRoute {
             let system = uni.system(node).id;
             let Some(&edge) = i.checked_sub(1).and_then(|e| route.path.edges.get(e)) else {
                 step_of_node[i] = steps.len();
-                steps.push(Step { system, hop: Hop::Start, via: String::new(), sig: None });
+                steps.push(Step { system, hop: Hop::Start, link: None, sig: None });
                 continue;
             };
             if let Link::Filament(f) = &uni.graph[edge]
@@ -144,7 +152,7 @@ impl ActiveRoute {
                 _ => None,
             };
             step_of_node[i] = steps.len();
-            steps.push(Step { system, hop, via: link_label(uni, rules, edge, now), sig });
+            steps.push(Step { system, hop, link: Some(LinkView::of(uni, rules, edge)), sig });
         }
         let stops = route.stops.iter().map(|&s| step_of_node[s]).collect();
         Self::from_steps(steps, stops, number, character, character_name)
@@ -316,7 +324,7 @@ mod tests {
                     Some((_, hop)) => *hop,
                     None => Hop::Gate,
                 };
-                Step { system, hop, via: String::new(), sig: None }
+                Step { system, hop, link: None, sig: None }
             })
             .collect();
         ActiveRoute::from_steps(steps, vec![0, systems.len() - 1], 1, 7, "Alice")
@@ -500,14 +508,14 @@ mod tests {
         let nodes = [uni.exact("Jita").unwrap(), uni.exact("UALX-3").unwrap()];
         let routes = s.router(&uni, FIXTURE_TIME).routes(&nodes, 1).unwrap();
         let route = &routes[0];
-        let r = ActiveRoute::new(&uni, &s.rules, route, 1, 7, "Alice", FIXTURE_TIME);
+        let r = ActiveRoute::new(&uni, &s.rules, route, 1, 7, "Alice");
         assert_eq!(r.jumps(), route.jumps);
         assert_eq!(r.manual_hops(), route.wormholes);
         assert_eq!(r.steps[0].hop, Hop::Start);
         assert_eq!(r.steps[0].system, uni.system(nodes[0]).id);
         assert_eq!(r.stop_at(r.jumps()), Some(Stop::Destination));
         for step in r.steps.iter().filter(|s| s.hop == Hop::Bridge) {
-            assert!(step.via.starts_with("Ansiblex"), "{}", step.via);
+            assert!(step.label(FIXTURE_TIME).starts_with("Ansiblex"), "{}", step.label(FIXTURE_TIME));
         }
         // Each system is in exactly one segment, but the first step and each manual hop exit.
         assert_eq!(r.waypoint_count(), r.steps.len() - 1 - r.manual_hops());
@@ -531,12 +539,12 @@ mod tests {
         assert_eq!(route.jumps, 2, "the hub is still two edges in the route's own path");
 
         let s = settings(uni, None);
-        let mut r = ActiveRoute::new(uni, &s.rules, &route, 1, 7, "Alice", FIXTURE_TIME);
+        let mut r = ActiveRoute::new(uni, &s.rules, &route, 1, 7, "Alice");
         // One step merges away: the hub never gets a step of its own.
         assert_eq!(r.steps.len(), route.path.nodes.len() - 1);
         assert_eq!(r.manual_hops(), 1);
         assert_eq!(r.steps[1].hop, Hop::Filament);
-        assert!(r.steps[1].via.starts_with("Filament"), "{}", r.steps[1].via);
+        assert!(r.steps[1].label(FIXTURE_TIME).starts_with("Filament"), "{}", r.steps[1].label(FIXTURE_TIME));
 
         // ESI can only ever report the real landing system, never the hub. The filament step is
         // also the last one, so the pilot has arrived, not merely progressed.
@@ -545,13 +553,31 @@ mod tests {
         assert_eq!(r.progress, 1);
     }
 
+    /// A file from before the link data: the steps have a `via` text and no `link`.
+    #[test]
+    fn an_old_active_route_file_still_loads() {
+        let r: ActiveRoute = serde_json::from_str(include_str!("../../tests/fixtures/active-route-v1.json")).unwrap();
+        assert_eq!(r.steps.len(), 4);
+        assert!(r.steps.iter().all(|s| s.link.is_none()));
+        let labels: Vec<String> = r.steps.iter().map(|s| s.label(FIXTURE_TIME)).collect();
+        assert_eq!(labels, ["", "gate", "Wormhole", "Ansiblex"]);
+        assert_eq!(r.steps[2].sig.as_deref(), Some("ABC"));
+    }
+
+    #[test]
+    fn the_link_data_survives_a_save() {
+        let link = LinkView::Wormhole { sig: Some("ABC".into()), size: None, expiry: None, mass: None };
+        let step = Step { system: 2, hop: Hop::Wormhole, link: Some(link.clone()), sig: None };
+        let back: Step = serde_json::from_str(&serde_json::to_string(&step).unwrap()).unwrap();
+        assert_eq!(back.link, Some(link));
+        assert_eq!(back.label(FIXTURE_TIME), "Wormhole · Sig. ABC");
+    }
+
     #[test]
     fn manual_hop_hint_covers_a_filament() {
         use crate::labels::manual_hop_hint;
-        let steps = vec![
-            Step { system: 1, hop: Hop::Start, via: String::new(), sig: None },
-            Step { system: 2, hop: Hop::Filament, via: "Filament · Krai Perun · ~4 jumps (avg)".into(), sig: None },
-        ];
+        let steps =
+            vec![Step { system: 1, hop: Hop::Start, link: None, sig: None }, Step { system: 2, hop: Hop::Filament, link: None, sig: None }];
         let uni = overlay_universe();
         let r = ActiveRoute::from_steps(steps, vec![0, 1], 1, 7, "Alice");
         // Neither system is a real one in the test universe, so the hint falls back to the ID.

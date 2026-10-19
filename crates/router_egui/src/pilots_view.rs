@@ -688,7 +688,7 @@ impl PilotsUi {
             });
         } else if live.expired {
             bar(ui, theme::WARN, &mut |ui| {
-                ui.label(RichText::new(format!("Tracking paused — {name}'s login expired.")).color(theme::WARN));
+                ui.label(RichText::new(format!("Tracking paused - {name}'s login expired.")).color(theme::WARN));
                 if ui.app_button("Log in again").clicked() {
                     self.login(s);
                 }
@@ -703,7 +703,7 @@ impl PilotsUi {
         } else if active.is_off_route() {
             let here = live.system.map_or_else(|| "?".into(), |id| system_name(s, id));
             bar(ui, theme::WARN, &mut |ui| {
-                ui.label(RichText::new(format!("Off route — {name} is in {here}.")).color(theme::WARN));
+                ui.label(RichText::new(format!("Off route - {name} is in {here}.")).color(theme::WARN));
                 if ui.app_button("Re-route from here").clicked() {
                     match s.pilots.reroute(&s.uni, &s.settings, router_core::wormhole::now()) {
                         Ok(route) => self.reroute = Some(Box::new(route)),
@@ -717,7 +717,7 @@ impl PilotsUi {
         } else if let Some(hint) = manual_hop_hint(&s.uni, active) {
             bar(ui, theme::WORMHOLE, &mut |ui| _ = ui.label(RichText::new(&hint).color(theme::WORMHOLE)));
         } else if s.pilots.limited {
-            ui.label(RichText::new("ESI limited — slowing updates").color(theme::TEXT_DIM).small());
+            ui.label(RichText::new("ESI limited - slowing updates").color(theme::TEXT_DIM).small());
         }
     }
 
@@ -801,7 +801,8 @@ impl PilotsUi {
                             ui.add(Label::new(RichText::new(region).color(theme::TEXT_DIM)).truncate());
                         });
                         row.col(|ui| {
-                            let via = if step.hop.is_manual() { format!("{} — manual", step.via) } else { step.via.clone() };
+                            let via = step.label(router_core::wormhole::now());
+                            let via = if step.hop.is_manual() { format!("{via} - manual") } else { via };
                             let color = theme::link_color(step.hop);
                             let via = via.replace('\u{2192}', "»");
                             ui.add(Label::new(RichText::new(&via).color(dim(color))).truncate());

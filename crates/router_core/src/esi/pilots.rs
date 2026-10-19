@@ -569,7 +569,7 @@ impl Pilots {
             Event::LoginExpired(id) => {
                 self.live.entry(id).or_default().expired = true;
                 let name = self.name(id);
-                self.notices.push(format!("Tracking paused — {name}'s login expired. Log in again."));
+                self.notices.push(format!("Tracking paused - {name}'s login expired. Log in again."));
             }
             Event::Sending { done, .. } => {
                 if let Some(send) = &mut self.send {
@@ -640,7 +640,7 @@ pub struct StartPlan {
 impl StartPlan {
     /// `number` is the route number in the list, from 1.
     pub fn new(uni: &Universe, settings: &Settings, route: &Route, number: usize, pilot: &PilotView, now: u64) -> StartPlan {
-        let planned = ActiveRoute::new(uni, &settings.rules, route, number, pilot.id, &pilot.name, now);
+        let planned = ActiveRoute::new(uni, &settings.rules, route, number, pilot.id, &pilot.name);
         let mut plan = StartPlan { planned, from_here: None, here: None, online: pilot.live.online, error: None, flown: None };
         let flown = pilot.live.ship.as_ref().and_then(|s| settings.hulls.by_type(s.ship_type_id));
         plan.flown = flown.filter(|f| !settings.rules.hull.as_ref().is_some_and(|planned| same_class(planned, f)));
@@ -648,7 +648,7 @@ impl StartPlan {
         plan.here = Some(system);
         let stops: Vec<u32> = plan.planned.stops.iter().skip(1).map(|&i| plan.planned.steps[i].system).collect();
         match route_from(uni, settings, system, &stops, now) {
-            Ok(r) => plan.from_here = Some(ActiveRoute::new(uni, &settings.rules, &r, number, pilot.id, &pilot.name, now)),
+            Ok(r) => plan.from_here = Some(ActiveRoute::new(uni, &settings.rules, &r, number, pilot.id, &pilot.name)),
             Err(e) => plan.error = Some(e.to_string()),
         }
         plan
@@ -668,7 +668,7 @@ impl Pilots {
         let system = self.live.get(&active.character).and_then(|l| l.system).ok_or(PilotError::LocationUnknown)?;
         let stops: Vec<u32> = active.stops.iter().filter(|&&i| i > active.progress).map(|&i| active.steps[i].system).collect();
         let route = route_from(uni, settings, system, &stops, now)?;
-        Ok(ActiveRoute::new(uni, &settings.rules, &route, active.number, active.character, &active.character_name, now))
+        Ok(ActiveRoute::new(uni, &settings.rules, &route, active.number, active.character, &active.character_name))
     }
 }
 
@@ -736,7 +736,7 @@ mod tests {
                 } else {
                     Hop::Gate
                 },
-                via: String::new(),
+                link: None,
                 sig: None,
             })
             .collect();
@@ -957,7 +957,7 @@ mod tests {
         fake.0.lock().unwrap().refresh_rejected = true;
         let (mut p, _tmp) = pilots(&fake);
         until(&mut p, |p| p.live.get(&1).is_some_and(|l| l.expired));
-        assert_eq!(p.notices, ["Tracking paused — Alice's login expired. Log in again."]);
+        assert_eq!(p.notices, ["Tracking paused - Alice's login expired. Log in again."]);
     }
 
     #[test]

@@ -8,9 +8,10 @@ use crate::overlay::OverlayReport;
 use crate::route::Route;
 use crate::settings::{HullSource, Settings};
 use crate::sources::{evemetro, evescout, nexum};
-use crate::universe::{Link, Universe, display_sec};
-use crate::wormhole::{MassStatus, SourceData, SourceId, THERA, TURNUR, Wormhole, expiry_text};
+use crate::universe::{Clade, Link, Universe, display_sec};
+use crate::wormhole::{Expiry, MassStatus, Size, SourceData, SourceId, THERA, TURNUR, Wormhole, expiry_text};
 use petgraph::graph::EdgeIndex;
+use serde::{Deserialize, Serialize};
 
 /// The overlay counts for the "Shortcuts" sidebar box.
 pub struct Shortcuts {
@@ -232,31 +233,86 @@ pub fn route_tsv(uni: &Universe, rules: &BridgeRules, route: &Route, now: u64) -
     lines.join("\n")
 }
 
+/// How a route enters a system, with the data of the label. The active route stores it, and
+/// `label` writes the text at the time of the display, so an expiry stays current.
+#[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
+pub enum LinkView {
+    Gate,
+    Wormhole {
+        /// The signature letters in the system that the jump leaves, if known.
+        sig: Option<String>,
+        size: Option<Size>,
+        expiry: Option<Expiry>,
+        mass: Option<MassStatus>,
+    },
+    JumpBridge {
+        /// The zone of the origin and of the destination. `None` when no capital is set.
+        zones: Option<(u8, u8)>,
+        /// The cost of the jump. `None` when no hull is set.
+        tj: Option<f32>,
+    },
+    Filament {
+        clade: Clade,
+        /// `None` for the activation edge. `Some` for the hub-to-system edge.
+        expected_jumps: Option<f32>,
+    },
+}
+
+impl LinkView {
+    /// The view of an edge of the graph.
+    pub fn of(uni: &Universe, rules: &BridgeRules, edge: EdgeIndex) -> LinkView {
+        let (from, to) = uni.graph.edge_endpoints(edge).unwrap();
+        match &uni.graph[edge] {
+            Link::Stargate => LinkView::Gate,
+            Link::Wormhole(w) => LinkView::wormhole(w, uni.system(from).id),
+            Link::JumpBridge => {
+                // The destination zone sets the cost.
+                let (zones, tj) = match (rules.cost(uni, from), rules.cost(uni, to)) {
+                    (Some(a), Some(b)) => (Some((a.zone, b.zone)), b.tj),
+                    _ => (None, None),
+                };
+                LinkView::JumpBridge { zones, tj }
+            }
+            Link::Filament(f) => LinkView::Filament { clade: f.clade, expected_jumps: f.expected_jumps },
+        }
+    }
+
+    /// The view of a wormhole. `from` is the system that the jump leaves.
+    pub fn wormhole(w: &Wormhole, from: u32) -> LinkView {
+        LinkView::Wormhole { sig: w.sig_at(from), size: w.size, expiry: w.expiry, mass: w.mass }
+    }
+
+    /// For example "Ansiblex · Zone 1 → 2 · 36 TJ". `now` (Unix seconds) sets the wormhole expiry text.
+    pub fn label(&self, now: u64) -> String {
+        match self {
+            LinkView::Gate => "gate".into(),
+            // "Sig. Unknown" tells the pilot to scan. A stable mass shows no text.
+            LinkView::Wormhole { sig, size, expiry, mass } => {
+                let mut parts = vec!["Wormhole".to_string(), format!("Sig. {}", sig.as_deref().unwrap_or("Unknown"))];
+                parts.extend(size.map(|s| s.label().to_string()));
+                parts.extend(expiry.map(|e| expiry_text(e, now)));
+                parts.extend(mass.filter(|&m| m != MassStatus::Stable).map(|m| m.label().to_string()));
+                parts.join(" · ")
+            }
+            LinkView::JumpBridge { zones, tj } => {
+                let mut parts = vec!["Ansiblex".to_string()];
+                parts.extend(zones.map(|(a, b)| format!("Zone {a} → {b}")));
+                parts.extend(tj.map(|tj| format!("{tj} TJ")));
+                parts.join(" · ")
+            }
+            LinkView::Filament { clade, expected_jumps } => match expected_jumps {
+                // The hub-to-system edge: the average travel from a random landing system of the clade.
+                Some(avg) => format!("Filament · {} · ~{} jumps (avg)", clade.label(), avg.round() as i64),
+                // The activation edge: the system to the virtual hub of the clade.
+                None => format!("Filament · {} · activate", clade.label()),
+            },
+        }
+    }
+}
+
 /// How a route enters a system: a gate, a wormhole or a bridge.
 pub fn link_label(uni: &Universe, rules: &BridgeRules, edge: EdgeIndex, now: u64) -> String {
-    match &uni.graph[edge] {
-        Link::Stargate => "gate".into(),
-        Link::Wormhole(w) => {
-            let (from, _) = uni.graph.edge_endpoints(edge).unwrap();
-            wormhole_label(w, uni.system(from).id, now)
-        }
-        Link::JumpBridge => {
-            // "Ansiblex · Zone 1 → 2 · 36 TJ". The destination zone sets the cost.
-            let (from, to) = uni.graph.edge_endpoints(edge).unwrap();
-            let mut parts = vec!["Ansiblex".to_string()];
-            if let (Some(a), Some(b)) = (rules.cost(uni, from), rules.cost(uni, to)) {
-                parts.push(format!("Zone {} → {}", a.zone, b.zone));
-                parts.extend(b.tj.map(|tj| format!("{tj} TJ")));
-            }
-            parts.join(" · ")
-        }
-        Link::Filament(f) => match f.expected_jumps {
-            // The hub-to-system edge: the average travel from a random landing system of the clade.
-            Some(avg) => format!("Filament · {} · ~{} jumps (avg)", f.clade.label(), avg.round() as i64),
-            // The activation edge: the system to the virtual hub of the clade.
-            None => format!("Filament · {} · activate", f.clade.label()),
-        },
-    }
+    LinkView::of(uni, rules, edge).label(now)
 }
 
 /// For example "Wormhole · Sig. ABC · Large · Expires in 3h 10m · Critical".
@@ -264,12 +320,7 @@ pub fn link_label(uni: &Universe, rules: &BridgeRules, edge: EdgeIndex, now: u64
 /// label shows "Sig. Unknown", so the pilot knows to scan. A stable mass shows no text.
 /// The label does not show the type. The hull check uses the type.
 pub fn wormhole_label(w: &Wormhole, from: u32, now: u64) -> String {
-    let mut parts = vec!["Wormhole".to_string()];
-    parts.push(format!("Sig. {}", w.sig_at(from).as_deref().unwrap_or("Unknown")));
-    parts.extend(w.size.map(|s| s.label().to_string()));
-    parts.extend(w.expiry.map(|e| expiry_text(e, now)));
-    parts.extend(w.mass.filter(|&m| m != MassStatus::Stable).map(|m| m.label().to_string()));
-    parts.join(" · ")
+    LinkView::wormhole(w, from).label(now)
 }
 
 #[cfg(test)]
@@ -358,7 +409,7 @@ mod tests {
         use crate::esi::active::{ActiveRoute, Hop, Step};
         let uni = crate::test_support::overlay_universe();
         let id = |name: &str| uni.system(uni.exact(name).unwrap()).id;
-        let step = |name: &str, hop, sig: Option<&str>| Step { system: id(name), hop, via: String::new(), sig: sig.map(String::from) };
+        let step = |name: &str, hop, sig: Option<&str>| Step { system: id(name), hop, link: None, sig: sig.map(String::from) };
         let steps = vec![step("Jita", Hop::Start, None), step("Perimeter", Hop::Gate, None), step("Amarr", Hop::Wormhole, Some("ABC"))];
         let mut r = ActiveRoute::from_steps(steps, vec![0, 2], 1, 7, "Alice");
         assert_eq!(manual_hop_hint(&uni, &r).as_deref(), Some("Next wormhole: Perimeter to Amarr, signature ABC."));

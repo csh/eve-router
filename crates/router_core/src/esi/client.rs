@@ -69,7 +69,7 @@ pub enum EsiError {
     #[error("ESI refused the login")]
     Auth,
     /// 420 or 429: ESI blocks the router for a time.
-    #[error("ESI limited — slowing updates")]
+    #[error("ESI limited - slowing updates")]
     Limited { retry_after: Option<Duration> },
     /// A timeout, a network error, a 5xx status or bad JSON.
     #[error("ESI is not reachable: {0}")]
