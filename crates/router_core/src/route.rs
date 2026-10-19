@@ -42,6 +42,13 @@ pub fn hull_allows_filament(hull: Option<&Hull>) -> bool {
     hull.is_none_or(|h| h.filament_ok)
 }
 
+/// True if the hull can pass a wormhole. No hull set: allow it. `Hull::wormhole_ok` comes from
+/// the SDE type list "WormholeJumpBlacklist" (Titan, Supercarrier), a rule apart from the mass
+/// limit: a Supercarrier is lighter than the largest limit but still cannot pass.
+pub fn hull_allows_wormhole(hull: Option<&Hull>) -> bool {
+    hull.is_none_or(|h| h.wormhole_ok)
+}
+
 /// The cost that each link of a route found earlier adds while the search looks for another route.
 const REUSE_COST: u64 = JUMP / 2;
 
@@ -270,6 +277,7 @@ impl<'a> Router<'a> {
             .collect();
         let hull_kg = rules.hull.as_ref().and_then(|h| h.mass_kg);
         let filament_hull_ok = hull_allows_filament(rules.hull.as_deref());
+        let wormhole_hull_ok = hull_allows_wormhole(rules.hull.as_deref());
         let edge_ok = graph
             .raw_edges()
             .par_iter()
@@ -278,7 +286,11 @@ impl<'a> Router<'a> {
                 // The Pochven switch also gates a wormhole with an end in Pochven (the EVE Metro
                 // map): the switch means "allow Pochven", not "allow a filament only".
                 Link::Wormhole(w) => {
-                    wormholes && hubs.allows(w) && w.usable(now, hull_kg) && (clades.pochven || !in_pochven(uni, e.source(), e.target()))
+                    wormholes
+                        && wormhole_hull_ok
+                        && hubs.allows(w)
+                        && w.usable(now, hull_kg)
+                        && (clades.pochven || !in_pochven(uni, e.source(), e.target()))
                 }
                 Link::JumpBridge => bridges && rules.allowed(uni, e.target()),
                 Link::Filament(f) => clades.allows(f.clade) && filament_hull_ok,
@@ -1265,5 +1277,39 @@ mod tests {
             let hull = hulls().find(ship).unwrap_or_else(|| panic!("no hull named {ship:?}"));
             assert!(hull_allows_filament(Some(&hull)), "{ship} is wrongly banned");
         }
+    }
+
+    /// The SDE type list "WormholeJumpBlacklist" bans the Titan and Supercarrier groups. Dreadnoughts
+    /// and Freighters stay off the list: only their mass limits them.
+    #[test]
+    fn titans_and_supercarriers_cannot_pass_a_wormhole() {
+        for group in ["Titan", "Supercarrier"] {
+            let hull = hulls().find(group).unwrap_or_else(|| panic!("no hull group named {group:?}"));
+            assert!(!hull_allows_wormhole(Some(&hull)), "{group} is not banned");
+        }
+        for group in ["Dreadnought", "Freighter", "Jump Freighter", "Carrier", "Force Auxiliary", "Black Ops", "Battleship"] {
+            let hull = hulls().find(group).unwrap_or_else(|| panic!("no hull group named {group:?}"));
+            assert!(hull_allows_wormhole(Some(&hull)), "{group} is wrongly banned");
+        }
+        assert!(hull_allows_wormhole(None));
+    }
+
+    /// A Supercarrier (1.78e9 kg at most) is under a 2e9 kg limit, so the mass check alone lets
+    /// it pass. The ban list must stop it. A Dreadnought on the same hole passes.
+    #[test]
+    fn a_supercarrier_is_blocked_by_a_wormhole_it_fits() {
+        let mut uni = universe().clone();
+        let (jita, amarr) = (uni.system(node("Jita")).id, uni.system(node("Amarr")).id);
+        let capital = Wormhole { size: Some(Size::Capital), ..hole(jita, amarr) };
+        uni.add_wormholes(&[capital]);
+        let (from, to) = (uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap());
+        let route = |hull: &str| {
+            let rules = BridgeRules { capital: None, hull: hulls().find(hull), max_cap: None };
+            let options = RouterOptions { rules, unknown_sig_penalty: 0, ..Default::default() };
+            Router::new(&uni, options).routes(&[from, to], 1).unwrap().remove(0).wormholes
+        };
+        assert_eq!(route("Dreadnought"), 1);
+        assert_eq!(route("Supercarrier"), 0);
+        assert_eq!(route("Titan"), 0);
     }
 }

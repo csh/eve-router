@@ -17,7 +17,7 @@ pub const FILE: &str = "ships.json";
 /// The shape of `ships.json`. Bump this when a field's meaning changes, so `sde_update` makes
 /// the file again even when the SDE build number does not change. A ship with no bridge cost
 /// or no mass still deserializes, so only a true shape change needs a bump.
-pub const SCHEMA: u32 = 1;
+pub const SCHEMA: u32 = 2;
 
 /// The SDE files that the table comes from.
 pub const SOURCES: [&str; 4] = ["types.jsonl", "typeDogma.jsonl", "groups.jsonl", "typeLists.jsonl"];
@@ -34,6 +34,8 @@ const ATTR_RECHARGE: u32 = 55;
 const ATTR_MAX_JUMP_MASS: u32 = 2798;
 /// The `typeLists.jsonl` entry of the ship groups that cannot activate a Triglavian filament.
 const FILAMENT_BAN_LIST: &str = "InvalidShipGroupsForRandomJump";
+/// The `typeLists.jsonl` entry of the ship groups that cannot pass a wormhole (Titan, Supercarrier).
+const WORMHOLE_BAN_LIST: &str = "WormholeJumpBlacklist";
 
 #[derive(Serialize, Deserialize, Debug)]
 pub struct ShipData {
@@ -65,6 +67,15 @@ pub struct ShipRow {
     /// A `ships.json` from before this field defaults to false: safe until the next SDE update.
     #[serde(default)]
     pub filament_ok: bool,
+    /// False: the SDE lists the ship's group as unable to pass a wormhole, whatever the mass.
+    /// A `ships.json` from before this field defaults to true: the schema bump makes the file
+    /// again at the next SDE update, and the mass check still applies until then.
+    #[serde(default = "default_true")]
+    pub wormhole_ok: bool,
+}
+
+fn default_true() -> bool {
+    true
 }
 
 #[derive(Deserialize)]
@@ -177,6 +188,8 @@ pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, SdeError> {
     };
     let filament_banned_groups: HashSet<u32> =
         src.type_list(FILAMENT_BAN_LIST).ok_or(SdeError::NoTypeList(FILAMENT_BAN_LIST))?.iter().copied().collect();
+    let wormhole_banned_groups: HashSet<u32> =
+        src.type_list(WORMHOLE_BAN_LIST).ok_or(SdeError::NoTypeList(WORMHOLE_BAN_LIST))?.iter().copied().collect();
 
     let mut ships: Vec<ShipRow> = src
         .types
@@ -192,6 +205,7 @@ pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, SdeError> {
                 mass_kg: t.mass,
                 bridge_cost_gj: src.attr(t.id, ATTR_BRIDGE_COST),
                 filament_ok: !filament_banned_groups.contains(&t.group_id),
+                wormhole_ok: !wormhole_banned_groups.contains(&t.group_id),
             })
         })
         .collect();
