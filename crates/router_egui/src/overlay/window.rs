@@ -30,7 +30,7 @@ const POLL: Duration = Duration::from_millis(250);
 const EDITOR_TITLE: &str = "eve-router overlay position";
 
 /// The size of the window, in points.
-const SIZE: [f32; 2] = [260.0, 58.0];
+const SIZE: [f32; 2] = [260.0, 64.0];
 
 fn viewport_id() -> ViewportId {
     ViewportId::from_hash_of("routing-overlay")
@@ -58,6 +58,8 @@ struct Editor {
     place: Place,
     /// The position of the dummy window in the last pass that drew it. `None` before the first pass.
     at: Option<Pos>,
+    /// The passes that drew the dummy window. The window shows after the third one.
+    frames: u32,
 }
 
 /// The position of a window in the config: the corner of the window, in whole points.
@@ -82,7 +84,7 @@ fn here(s: &Session, route: &router_core::esi::active::ActiveRoute) -> Option<u3
 impl Overlay {
     /// Open the dummy window for a place. A dummy window for another place closes.
     pub fn begin_edit(&mut self, place: Place) {
-        self.editor = Some(Editor { place, at: None });
+        self.editor = Some(Editor { place, at: None, frames: 0 });
     }
 
     /// The place that the user moves, while the dummy window is open.
@@ -206,8 +208,20 @@ fn show_editor(ctx: &Context, config: &router_core::config::RoutingOverlayConfig
         Place::Global => config.position,
         Place::Character(id) => resolve_position(config, id),
     };
-    let builder = window_builder(EDITOR_TITLE, start.unwrap_or(DEFAULT_POS));
+    // The window starts hidden. The OS shows a new window with a white background for a moment,
+    // before the first pass of the app has drawn it. The window shows after the third pass, as the Log window does.
+    let builder = window_builder(EDITOR_TITLE, start.unwrap_or(DEFAULT_POS)).with_visible(false);
     ctx.show_viewport_immediate(editor_viewport_id(), builder, |ui, _class| {
+        editor.frames = editor.frames.saturating_add(1);
+        match editor.frames {
+            1 => ui.ctx().request_repaint(),
+            2 => {
+                crate::chrome::square_window_titled(EDITOR_TITLE);
+                ui.ctx().request_repaint();
+            }
+            3 => ui.ctx().send_viewport_cmd(ViewportCommand::Visible(true)),
+            _ => {}
+        }
         paint(ui, "Signature: ABC", "Drag to move");
         let drag = ui.interact(ui.ctx().content_rect(), Id::new("overlay-editor-drag"), Sense::drag());
         if drag.hovered() || drag.dragged() {
@@ -226,7 +240,7 @@ fn show_editor(ctx: &Context, config: &router_core::config::RoutingOverlayConfig
 fn paint(ui: &mut egui::Ui, title: &str, detail: &str) {
     // The window is the box: the dark fill of the app, the lit line of the main window on its top
     // edge, and the text styles of the app. The window never has the focus, so the line is always lit.
-    let panel = Frame::new().fill(theme::BG).inner_margin(Margin { left: 12, right: 12, top: 10, bottom: 8 });
+    let panel = Frame::new().fill(theme::BG).inner_margin(Margin { left: 12, right: 12, top: 10, bottom: 12 });
     egui::CentralPanel::default().frame(panel).show(ui, |ui| {
         ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
         ui.label(RichText::new(title).text_style(TextStyle::Heading).color(theme::accent(ui)));
