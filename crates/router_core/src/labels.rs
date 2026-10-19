@@ -241,12 +241,12 @@ pub fn link_label(uni: &Universe, rules: &BridgeRules, edge: EdgeIndex, now: u64
             wormhole_label(w, uni.system(from).id, now)
         }
         Link::JumpBridge => {
-            // "Ansiblex · Zone 1 → 2 · 36 TJ". The departure zone sets the cost.
+            // "Ansiblex · Zone 1 → 2 · 36 TJ". The destination zone sets the cost.
             let (from, to) = uni.graph.edge_endpoints(edge).unwrap();
             let mut parts = vec!["Ansiblex".to_string()];
             if let (Some(a), Some(b)) = (rules.cost(uni, from), rules.cost(uni, to)) {
                 parts.push(format!("Zone {} → {}", a.zone, b.zone));
-                parts.extend(a.tj.map(|tj| format!("{tj} TJ")));
+                parts.extend(b.tj.map(|tj| format!("{tj} TJ")));
             }
             parts.join(" · ")
         }

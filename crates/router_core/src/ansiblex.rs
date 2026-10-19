@@ -187,10 +187,11 @@ pub struct BridgeRules {
 }
 
 impl BridgeRules {
-    /// The cost of a bridge jump. The departure system sets the zone.
-    pub fn cost(&self, uni: &Universe, from: NodeIndex) -> Option<BridgeCost> {
+    /// The cost of a bridge jump into `to`. The destination system sets the zone, and a jump into
+    /// zone 1 is free.
+    pub fn cost(&self, uni: &Universe, to: NodeIndex) -> Option<BridgeCost> {
         let capital = self.capital?;
-        let (zone, multiplier) = zone(uni.distance_ly(capital, from));
+        let (zone, multiplier) = zone(uni.distance_ly(capital, to));
         let tj = self.hull.as_ref().and_then(|h| h.base_tj).map(|base| base * multiplier);
         let cap_pct = self.hull.as_ref().and_then(|h| h.base_cap_pct).map(|pct| pct * multiplier);
         Some(BridgeCost { zone, multiplier, tj, cap_pct })
@@ -198,11 +199,11 @@ impl BridgeRules {
 
     /// A bridge jump needs a capital and a hull that can use bridges.
     /// With a cap limit, the jump cost must not be more than the limit.
-    pub fn allowed(&self, uni: &Universe, from: NodeIndex) -> bool {
+    pub fn allowed(&self, uni: &Universe, to: NodeIndex) -> bool {
         if self.hull.as_ref().is_some_and(|h| h.base_tj.is_none()) {
             return false;
         }
-        let Some(cost) = self.cost(uni, from) else {
+        let Some(cost) = self.cost(uni, to) else {
             return false;
         };
         match (self.max_cap, cost.tj) {
@@ -270,6 +271,13 @@ mod tests {
         // The gate holds 1250 TJ, so 36 TJ is 2.88%.
         assert!((cost.cap_pct.unwrap() - 2.88).abs() < 1e-4);
         assert_eq!(rules(None, None).cost(uni, uni.exact("QLU-P0").unwrap()).unwrap().cap_pct, None);
+    }
+
+    #[test]
+    fn a_jump_into_zone_1_is_free() {
+        let uni = universe();
+        let r = rules(Some("black-ops"), None);
+        assert_eq!(r.cost(uni, uni.exact("KW-OAM").unwrap()).unwrap().tj, Some(0.0));
     }
 
     #[test]

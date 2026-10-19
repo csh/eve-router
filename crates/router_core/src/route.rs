@@ -280,7 +280,7 @@ impl<'a> Router<'a> {
                 Link::Wormhole(w) => {
                     wormholes && hubs.allows(w) && w.usable(now, hull_kg) && (clades.pochven || !in_pochven(uni, e.source(), e.target()))
                 }
-                Link::JumpBridge => bridges && rules.allowed(uni, e.source()),
+                Link::JumpBridge => bridges && rules.allowed(uni, e.target()),
                 Link::Filament(f) => clades.allows(f.clade) && filament_hull_ok,
             })
             .collect();
@@ -290,7 +290,7 @@ impl<'a> Router<'a> {
             .par_iter()
             .map(|e| match e.weight {
                 Link::JumpBridge if bridges => {
-                    let pct = rules.cost(uni, e.source()).and_then(|c| c.cap_pct).unwrap_or(0.0);
+                    let pct = rules.cost(uni, e.target()).and_then(|c| c.cap_pct).unwrap_or(0.0);
                     (f64::from(pct) * f64::from(cap_weight)).round() as u64
                 }
                 Link::Wormhole(ref w) if wormholes => {
@@ -661,8 +661,8 @@ impl<'a> Router<'a> {
                 }
                 Link::JumpBridge => {
                     route.bridges += 1;
-                    let (from, _) = self.uni.graph.edge_endpoints(e).unwrap();
-                    let cost = self.rules.cost(self.uni, from);
+                    let (_, to) = self.uni.graph.edge_endpoints(e).unwrap();
+                    let cost = self.rules.cost(self.uni, to);
                     tj = tj.zip(cost.and_then(|c| c.tj)).map(|(a, b)| a + b);
                     cap_pct = cap_pct.zip(cost.and_then(|c| c.cap_pct)).map(|(a, b)| a + b);
                 }
@@ -1074,9 +1074,9 @@ mod tests {
     fn a_bridge_costs_by_the_share_of_the_gate_capacitor() {
         let uni = crate::test_support::overlay_universe();
         let rules = BridgeRules { capital: uni.exact("JK-Q77"), hull: hulls().find("Battleship"), max_cap: None };
-        let (from, to) = (uni.exact("QLU-P0").unwrap(), uni.exact("Q5KZ-W").unwrap());
-        // QLU-P0 is in zone 2, so a Battleship uses 33 TJ of 1250 TJ.
-        let pct = rules.cost(&uni, from).unwrap().cap_pct.unwrap();
+        let (from, to) = (uni.exact("Q5KZ-W").unwrap(), uni.exact("QLU-P0").unwrap());
+        // QLU-P0 is in zone 2, so a jump into it takes 33 TJ of 1250 TJ from a Battleship.
+        let pct = rules.cost(&uni, to).unwrap().cap_pct.unwrap();
         assert!(pct > 0.0);
         let route = |cap_weight| {
             let r = Router::new(&uni, RouterOptions { rules: rules.clone(), cap_weight, ..Default::default() });
