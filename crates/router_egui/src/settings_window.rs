@@ -860,7 +860,9 @@ fn pilot_status(pilot: &PilotView) -> (&'static str, Color32) {
 fn position_buttons(ui: &mut Ui, s: &mut Session, overlay: &mut Overlay, place: config::Place) {
     let editing = overlay.editing();
     if editing == Some(place) {
-        if ui.add(AppButton::new("Save").primary()).clicked()
+        // Save waits until the dummy window has drawn and reported its position.
+        let ready = overlay.edit_position().is_some();
+        if ui.add_enabled(ready, AppButton::new("Save").primary()).clicked()
             && let Some((place, pos)) = overlay.finish_edit()
         {
             s.set_overlay_position(place, Some(pos));

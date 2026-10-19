@@ -16,18 +16,21 @@ use crate::pilots_view::system_name;
 use crate::theme;
 use egui::{Context, CursorIcon, Frame, Id, Margin, Pos2, RichText, Sense, TextStyle, ViewportBuilder, ViewportCommand, ViewportId, vec2};
 use router_core::config::{Place, Pos};
-use router_core::routing_overlay::{DEFAULT_POS, content, content_for_title, parse_client_title, resolve_position};
+use router_core::routing_overlay::{Content, DEFAULT_POS, content, content_for_title, parse_client_title, resolve_position};
 use std::collections::HashMap;
+use std::sync::LazyLock;
 use std::time::{Duration, Instant};
 
-/// The title of the window. It cannot match the title of a client, which starts with "EVE - ".
-const TITLE: &str = "eve-router overlay";
+/// The title of the window. It cannot match the title of a client, which starts with "EVE - ". It
+/// holds the process ID, so another instance of the router has another title, and `FindWindowW`
+/// finds only the window of this process.
+static TITLE: LazyLock<String> = LazyLock::new(|| format!("eve-router overlay {}", std::process::id()));
 
 /// The time between two reads of the focused window.
 const POLL: Duration = Duration::from_millis(250);
 
-/// The title of the dummy window of the position editor. It cannot match the title of a client either.
-const EDITOR_TITLE: &str = "eve-router overlay position";
+/// The title of the dummy window of the position editor. It is unique to this process too.
+static EDITOR_TITLE: LazyLock<String> = LazyLock::new(|| format!("eve-router overlay position {}", std::process::id()));
 
 /// The size of the window, in points.
 const SIZE: [f32; 2] = [260.0, 64.0];
@@ -44,6 +47,9 @@ fn editor_viewport_id() -> ViewportId {
 pub struct Overlay {
     /// The window exists: `show` ran in the last pass that drew it. A new window starts hidden.
     alive: bool,
+    /// What the pilot does at the next hop, while the pilot is in the departure system. `logic`
+    /// sets it, so it is current also when the main window is minimized and `show` does not run.
+    content: Option<Content>,
     /// The last command that `logic` sent was `Visible(true)`.
     shown: bool,
     last_poll: Option<Instant>,
@@ -97,6 +103,11 @@ impl Overlay {
         self.editor = None;
     }
 
+    /// The position of the dummy window, once a pass has drawn it. Save waits for it.
+    pub fn edit_position(&self) -> Option<Pos> {
+        self.editor.as_ref().and_then(|e| e.at)
+    }
+
     /// Close the dummy window. The result is the place and the position of the window, for the
     /// caller to save. A window that no pass has drawn gives `None`.
     pub fn finish_edit(&mut self) -> Option<(Place, Pos)> {
@@ -117,19 +128,16 @@ impl Overlay {
         let config = &s.cfg.routing_overlay;
         let route = s.pilots.active.as_ref().filter(|_| config.enabled && self.editor.is_none());
         let Some(route) = route else {
-            // The dummy window replaces the overlay window while the editor is open.
+            // `show` draws no window now, so the window closes. A later window starts hidden.
             self.alive = false;
+            self.content = None;
             self.last_poll = None;
             self.send(ctx, false, None);
             return;
         };
         ctx.request_repaint_after(POLL);
         let here = here(s, route);
-        let departing = content(route, here).is_some();
-        if !departing {
-            // `show` draws no window, so no window exists. The next one starts hidden.
-            self.alive = false;
-        }
+        self.content = content(route, here);
         if self.last_poll.is_some_and(|t| t.elapsed() < POLL) {
             return;
         }
@@ -145,12 +153,12 @@ impl Overlay {
         {
             self.modes.insert(name.clone(), geometry.mode());
         }
-        let want = departing && client.is_some_and(|(_, title, _)| content_for_title(&title, Some(route), here).is_some());
+        let want = self.content.is_some() && client.is_some_and(|(_, title, _)| content_for_title(&title, Some(route), here).is_some());
         self.send(ctx, want, resolve_position(config, route.character));
         if self.shown {
             // Winit writes the extended style again when the window shows, so the call repeats
             // while the window shows. It changes nothing when the style is right.
-            win::pass_input_through(TITLE);
+            win::pass_input_through(&TITLE);
         }
     }
 
@@ -158,7 +166,7 @@ impl Overlay {
         let Some(visible) = transition(want, self.alive, self.shown) else { return };
         if visible {
             // Square corners, as the other windows of the app have.
-            crate::chrome::square_window_titled(TITLE);
+            crate::chrome::square_window_titled(&TITLE);
             let Pos { x, y } = position.unwrap_or(DEFAULT_POS);
             ctx.send_viewport_cmd_to(viewport_id(), ViewportCommand::OuterPosition(Pos2::new(x as f32, y as f32)));
         }
@@ -166,8 +174,10 @@ impl Overlay {
         self.shown = visible;
     }
 
-    /// Draw the window, while the overlay is on and the pilot is in the system that the next
-    /// wormhole or filament leaves. The window starts hidden. `logic` shows it.
+    /// Draw the window, while the overlay is on and a route is active. The window starts hidden,
+    /// and it exists for the whole route, so `logic` can show it also while the main window is
+    /// minimized: eframe runs no pass for a minimized window, and `show` cannot create a window then.
+    /// The window shows the text that `logic` found. `logic` shows it in the departure system only.
     pub fn show(&mut self, ctx: &Context, s: &Session) {
         let config = &s.cfg.routing_overlay;
         if let Some(editor) = &mut self.editor {
@@ -175,16 +185,15 @@ impl Overlay {
             return;
         }
         let Some(route) = s.pilots.active.as_ref().filter(|_| config.enabled) else { return };
-        let Some(content) = content(route, here(s, route)) else { return };
         let at = resolve_position(config, route.character).unwrap_or(DEFAULT_POS);
-        let builder = window_builder(TITLE, at)
+        let builder = window_builder(&TITLE, at)
             // The client keeps the focus: the window does not activate when it shows.
             .with_active(false)
             // No click-through and no transparency in the builder: winit makes such a window a layered
             // window with no alpha value, and the window then draws nothing. `pass_input_through`
             // sets the style and the alpha value after the window shows.
             .with_visible(false);
-        let (title, detail) = content.lines(|id| system_name(s, id));
+        let (title, detail) = self.content.as_ref().map(|c| c.lines(|id| system_name(s, id))).unwrap_or_default();
         ctx.show_viewport_immediate(viewport_id(), builder, |ui, _class| paint(ui, &title, &detail));
         self.alive = true;
     }
@@ -212,13 +221,13 @@ fn show_editor(ctx: &Context, config: &router_core::config::RoutingOverlayConfig
     // for a moment, before the first pass of the app has drawn it. The window shows after the
     // third pass, as the Log window does. The window is not a click-through window, so the
     // transparency is safe: it draws, as the Log window does.
-    let builder = window_builder(EDITOR_TITLE, start.unwrap_or(DEFAULT_POS)).with_transparent(true).with_visible(false);
+    let builder = window_builder(&EDITOR_TITLE, start.unwrap_or(DEFAULT_POS)).with_transparent(true).with_visible(false);
     ctx.show_viewport_immediate(editor_viewport_id(), builder, |ui, _class| {
         editor.frames = editor.frames.saturating_add(1);
         match editor.frames {
             1 => ui.ctx().request_repaint(),
             2 => {
-                crate::chrome::square_window_titled(EDITOR_TITLE);
+                crate::chrome::square_window_titled(&EDITOR_TITLE);
                 ui.ctx().request_repaint();
             }
             3 => ui.ctx().send_viewport_cmd(ViewportCommand::Visible(true)),
@@ -277,6 +286,25 @@ mod tests {
         assert_eq!(transition(true, true, true), None);
         assert_eq!(transition(false, true, false), None);
         assert_eq!(transition(false, false, false), None);
+    }
+
+    #[test]
+    fn the_titles_are_not_client_titles_and_hold_the_process_id() {
+        let id = std::process::id().to_string();
+        for title in [&*TITLE, &*EDITOR_TITLE] {
+            assert_eq!(router_core::routing_overlay::parse_client_title(title), None, "{title}");
+            assert!(title.ends_with(&id), "{title}");
+        }
+        assert_ne!(*TITLE, *EDITOR_TITLE);
+    }
+
+    #[test]
+    fn save_waits_for_the_position_of_the_dummy_window() {
+        let mut o = Overlay::default();
+        o.begin_edit(Place::Global);
+        assert_eq!(o.edit_position(), None);
+        o.editor.as_mut().unwrap().at = Some(Pos { x: 3, y: 4 });
+        assert_eq!(o.edit_position(), Some(Pos { x: 3, y: 4 }));
     }
 
     #[test]

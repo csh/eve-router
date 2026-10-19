@@ -40,13 +40,14 @@ pub struct Content {
 }
 
 /// The next wormhole or filament of the route, but only while the pilot is in the system that the
-/// hop leaves (`here`). The overlay helps with a departure and with nothing else. With no known
-/// location, or in any other system, the result is `None`. A jump bridge has no text, because the
-/// autopilot or the pilot takes it with no help.
+/// hop leaves (`here`), and the route progress is at that system. The progress check matters for a
+/// route that visits a system twice: the first visit is not the departure. The overlay helps with a
+/// departure and with nothing else. With no known location, or in any other system, the result is
+/// `None`. A jump bridge has no text, because the autopilot or the pilot takes it with no help.
 pub fn content(route: &ActiveRoute, here: Option<u32>) -> Option<Content> {
     let step = route.next_manual_hop()?;
     let from = route.steps[step - 1].system;
-    if here != Some(from) {
+    if step != route.progress + 1 || here != Some(from) {
         return None;
     }
     let hop = &route.steps[step];
@@ -131,15 +132,23 @@ mod tests {
         format!("S{id}")
     }
 
-    /// The text of the overlay for a route, with the pilot in system `here`.
+    /// What the overlay shows for a pilot that is in system `here`, with the progress of the route at
+    /// that system. In the test route, system n is the step n - 1.
+    fn shown(r: &ActiveRoute, here: u32) -> Option<Content> {
+        let mut r = r.clone();
+        r.progress = (here as usize).saturating_sub(1);
+        content(&r, Some(here))
+    }
+
+    /// The text of the overlay for a pilot in system `here`.
     fn lines(r: &ActiveRoute, here: u32) -> Option<(String, String)> {
-        content(r, Some(here)).map(|c| c.lines(name))
+        shown(r, here).map(|c| c.lines(name))
     }
 
     #[test]
     fn a_known_signature_shows_in_the_departure_system() {
         let r = route(&[(4, Hop::Wormhole, Some("ABC"))]);
-        assert_eq!(content(&r, Some(3)), Some(Content { from: 3, to: 4, action: Action::Signature("ABC".into()) }));
+        assert_eq!(shown(&r, 3), Some(Content { from: 3, to: 4, action: Action::Signature("ABC".into()) }));
         assert_eq!(lines(&r, 3), Some(("Signature: ABC".into(), "S3 to S4".into())));
     }
 
@@ -147,23 +156,48 @@ mod tests {
     fn nothing_shows_outside_the_departure_system() {
         let r = route(&[(4, Hop::Wormhole, Some("ABC"))]);
         for here in [1, 2, 4, 5, 99] {
-            assert_eq!(content(&r, Some(here)), None, "system {here}");
+            assert_eq!(shown(&r, here), None, "system {here}");
         }
         assert_eq!(content(&r, None), None, "location not known");
     }
 
     #[test]
+    fn the_location_must_match_the_progress() {
+        let mut r = route(&[(4, Hop::Wormhole, Some("ABC"))]);
+        // The pilot is in the departure system, but the route progress is behind it.
+        r.progress = 0;
+        assert_eq!(content(&r, Some(3)), None);
+        r.progress = 2;
+        assert!(content(&r, Some(3)).is_some());
+        // The pilot went back one jump: the progress stays, and the location does not match.
+        assert_eq!(content(&r, Some(2)), None);
+    }
+
+    #[test]
+    fn the_first_visit_of_a_system_is_not_the_departure() {
+        // The route visits system 20 two times. The wormhole leaves it the second time.
+        let step = |system, hop| Step { system, hop, link: None, sig: None };
+        let mut steps = vec![step(10, Hop::Start), step(20, Hop::Gate), step(30, Hop::Gate), step(20, Hop::Gate), step(40, Hop::Wormhole)];
+        steps[4].sig = Some("ABC".into());
+        let mut r = ActiveRoute::from_steps(steps, vec![0, 4], 1, 7, "smrkn");
+        r.progress = 1;
+        assert_eq!(content(&r, Some(20)), None, "first visit");
+        r.progress = 3;
+        assert_eq!(content(&r, Some(20)), Some(Content { from: 20, to: 40, action: Action::Signature("ABC".into()) }));
+    }
+
+    #[test]
     fn an_unknown_signature_says_to_check_the_bookmarks() {
         let r = route(&[(4, Hop::Wormhole, None)]);
-        assert_eq!(content(&r, Some(3)), Some(Content { from: 3, to: 4, action: Action::CheckBookmarks }));
+        assert_eq!(shown(&r, 3), Some(Content { from: 3, to: 4, action: Action::CheckBookmarks }));
         assert_eq!(lines(&r, 3), Some(("Signature: Unknown.".into(), "Check bookmarks.".into())));
-        assert_eq!(content(&r, Some(2)), None);
+        assert_eq!(shown(&r, 2), None);
     }
 
     #[test]
     fn an_empty_signature_counts_as_unknown() {
         let r = route(&[(4, Hop::Wormhole, Some(""))]);
-        assert_eq!(content(&r, Some(3)).map(|c| c.action), Some(Action::CheckBookmarks));
+        assert_eq!(shown(&r, 3).map(|c| c.action), Some(Action::CheckBookmarks));
     }
 
     #[test]
@@ -178,7 +212,7 @@ mod tests {
     fn a_route_with_gates_only_shows_nothing() {
         let r = route(&[]);
         for here in 1..=5 {
-            assert_eq!(content(&r, Some(here)), None);
+            assert_eq!(shown(&r, here), None);
         }
     }
 
@@ -186,15 +220,15 @@ mod tests {
     fn a_jump_bridge_shows_nothing() {
         let r = route(&[(3, Hop::Bridge, None)]);
         for here in 1..=5 {
-            assert_eq!(content(&r, Some(here)), None);
+            assert_eq!(shown(&r, here), None);
         }
     }
 
     #[test]
     fn a_jump_bridge_does_not_hide_the_wormhole_behind_it() {
         let r = route(&[(2, Hop::Bridge, None), (5, Hop::Wormhole, Some("XYZ"))]);
-        assert_eq!(content(&r, Some(4)), Some(Content { from: 4, to: 5, action: Action::Signature("XYZ".into()) }));
-        assert_eq!(content(&r, Some(1)), None);
+        assert_eq!(shown(&r, 4), Some(Content { from: 4, to: 5, action: Action::Signature("XYZ".into()) }));
+        assert_eq!(shown(&r, 1), None);
     }
 
     /// A route with a filament that enters system 3.
@@ -207,8 +241,8 @@ mod tests {
     #[test]
     fn a_filament_shows_in_the_departure_system() {
         let r = filament_route(Some(Clade::Perun));
-        assert_eq!(content(&r, Some(1)), None);
-        assert_eq!(content(&r, Some(2)), Some(Content { from: 2, to: 3, action: Action::Filament(Some(Clade::Perun)) }));
+        assert_eq!(shown(&r, 1), None);
+        assert_eq!(shown(&r, 2), Some(Content { from: 2, to: 3, action: Action::Filament(Some(Clade::Perun)) }));
     }
 
     #[test]
@@ -224,23 +258,25 @@ mod tests {
     }
 
     #[test]
-    fn a_filament_ahead_hides_the_wormhole_behind_it() {
+    fn a_wormhole_behind_a_filament_shows_in_its_own_departure_system() {
         let r = route(&[(3, Hop::Filament, None), (5, Hop::Wormhole, Some("XYZ"))]);
-        assert_eq!(content(&r, Some(4)), None);
+        assert!(matches!(shown(&r, 2).map(|c| c.action), Some(Action::Filament(_))));
+        assert_eq!(shown(&r, 3), None);
+        assert_eq!(shown(&r, 4), Some(Content { from: 4, to: 5, action: Action::Signature("XYZ".into()) }));
     }
 
     #[test]
     fn the_next_wormhole_wins_over_a_later_one() {
-        let mut r = route(&[(3, Hop::Wormhole, Some("AAA")), (5, Hop::Wormhole, Some("BBB"))]);
-        assert_eq!(content(&r, Some(2)).map(|c| c.action), Some(Action::Signature("AAA".into())));
-        assert_eq!(content(&r, Some(4)), None);
-        r.progress = 2;
-        assert_eq!(content(&r, Some(4)), Some(Content { from: 4, to: 5, action: Action::Signature("BBB".into()) }));
+        let r = route(&[(3, Hop::Wormhole, Some("AAA")), (5, Hop::Wormhole, Some("BBB"))]);
+        assert_eq!(shown(&r, 2).map(|c| c.action), Some(Action::Signature("AAA".into())));
+        assert_eq!(shown(&r, 3), None);
+        assert_eq!(shown(&r, 4), Some(Content { from: 4, to: 5, action: Action::Signature("BBB".into()) }));
     }
 
     #[test]
     fn only_the_client_of_the_route_character_shows_the_overlay() {
-        let r = route(&[(4, Hop::Wormhole, Some("ABC"))]);
+        let mut r = route(&[(4, Hop::Wormhole, Some("ABC"))]);
+        r.progress = 2;
         assert!(content_for_title("EVE - smrkn", Some(&r), Some(3)).is_some());
         assert_eq!(content_for_title("EVE - smrkn", Some(&r), Some(2)), None);
         assert_eq!(content_for_title("EVE - Alice", Some(&r), Some(3)), None);
