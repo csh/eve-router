@@ -1017,17 +1017,19 @@ fn character_table(
                     };
                     // A long name ends with "…" a few points before the next column, not at its edge.
                     ui.set_max_width((ui.available_width() - NAME_GAP).max(0.0));
-                    let name = ui
-                        .horizontal(|ui| {
-                            if warn.is_some() {
-                                ui.label(RichText::new(icons::WARNING.as_str()).color(theme::WARN));
+                    // The tooltip goes on each label. The labels sense the pointer, so each one is hovered.
+                    // The response of the row around them is not hovered when a label is under the pointer.
+                    ui.horizontal(|ui| {
+                        let tip = |response: egui::Response| {
+                            if let Some(text) = warn {
+                                response.on_hover_text(text);
                             }
-                            ui.add(egui::Label::new(RichText::new(&pilot.name).color(color)).truncate());
-                        })
-                        .response;
-                    if let Some(text) = warn {
-                        name.on_hover_text(text);
-                    }
+                        };
+                        if warn.is_some() {
+                            tip(ui.add(egui::Label::new(RichText::new(icons::WARNING.as_str()).color(theme::WARN)).sense(Sense::hover())));
+                        }
+                        tip(ui.add(egui::Label::new(RichText::new(&pilot.name).color(color)).truncate().sense(Sense::hover())));
+                    });
                 });
                 for column in 0..extra.len() {
                     row.col(|ui| cell(ui, pilot, column));
@@ -1639,6 +1641,64 @@ mod tests {
         });
         output.textures_delta.clear();
         assert_eq!(cells, pilots.len());
+    }
+
+    /// The texts that a frame draws, with the position and the size of each.
+    fn drawn_texts(output: &egui::FullOutput) -> Vec<(String, egui::Pos2, egui::Vec2)> {
+        fn walk(shape: &egui::epaint::Shape, found: &mut Vec<(String, egui::Pos2, egui::Vec2)>) {
+            match shape {
+                egui::epaint::Shape::Text(text) => found.push((text.galley.text().to_string(), text.pos, text.galley.size())),
+                egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, found)),
+                _ => {}
+            }
+        }
+        let mut found = Vec::new();
+        output.shapes.iter().for_each(|clipped| walk(&clipped.shape, &mut found));
+        found
+    }
+
+    #[test]
+    fn the_warning_tooltip_shows_when_the_pointer_is_on_the_name() {
+        let (s, _tmp) = session_with_pilots();
+        let mut portraits = Portraits::without_download(&[1, 2]);
+        let ctx = egui::Context::default();
+        theme::apply_default(&ctx);
+        theme::set_font(&ctx);
+        ctx.all_styles_mut(|style| {
+            style.interaction.tooltip_delay = 0.0;
+            style.interaction.show_tooltips_only_when_still = false;
+        });
+        let pilots = s.pilots.characters();
+        let extra = [("Status", egui_extras::Column::exact(110.0))];
+        let mut frame = |pointer: Option<egui::Pos2>, time: f64| {
+            let mut input = egui::RawInput { time: Some(time), ..Default::default() };
+            input.screen_rect = Some(egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0)));
+            input.events.extend(pointer.map(egui::Event::PointerMoved));
+            let look = |pilot: &PilotView| RowLook { selected: false, warning: (pilot.id == 1).then_some("Tooltip of the warning.") };
+            let mut output = ctx.run_ui(input, |ui| {
+                character_table(ui, "tooltip-characters", &pilots, &mut portraits, &extra, look, |_, _, _| {});
+            });
+            output.textures_delta.clear();
+            drawn_texts(&output)
+        };
+        // The first frame lays the table out. No pointer, so no tooltip.
+        let texts = frame(None, 0.0);
+        assert!(!texts.iter().any(|(t, ..)| t.contains("Tooltip of the warning.")));
+        let (_, pos, size) = texts.iter().find(|(t, ..)| t == "Alice Ander").expect("the name is drawn").clone();
+        let on_name = pos + size / 2.0;
+        // The pointer rests on the name for some frames.
+        let mut shown = false;
+        for step in 1..=4 {
+            shown |= frame(Some(on_name), f64::from(step)).iter().any(|(t, ..)| t.contains("Tooltip of the warning."));
+        }
+        assert!(shown, "the tooltip did not show");
+        // A name with no warning shows no tooltip.
+        let (_, pos, size) = frame(None, 5.0).iter().find(|(t, ..)| t == "Bo Berg").expect("the second name is drawn").clone();
+        let mut shown = false;
+        for step in 6..=9 {
+            shown |= frame(Some(pos + size / 2.0), f64::from(step)).iter().any(|(t, ..)| t.contains("Tooltip of the warning."));
+        }
+        assert!(!shown, "a row with no warning showed the tooltip");
     }
 
     #[cfg(windows)]
