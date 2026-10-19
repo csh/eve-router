@@ -854,12 +854,6 @@ fn pilot_status(pilot: &PilotView) -> (&'static str, Color32) {
     }
 }
 
-/// The text of a position: "x, y".
-#[cfg(windows)]
-fn position_text(pos: config::Pos) -> String {
-    format!("{}, {}", pos.x, pos.y)
-}
-
 /// The buttons of one place. At rest: Position, and Reset when the place has a position. While the
 /// dummy window of this place is open: Save and Cancel. The two places never edit together.
 #[cfg(windows)]
@@ -933,9 +927,11 @@ fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay
     group(ui, "Global");
     ui.horizontal(|ui| {
         label(ui, "Position");
-        let shown = s.cfg.routing_overlay.position.unwrap_or(router_core::routing_overlay::DEFAULT_POS);
-        let color = if s.cfg.routing_overlay.position.is_some() { theme::TEXT } else { theme::TEXT_DIM };
-        ui.label(RichText::new(position_text(shown)).color(color));
+        // The page shows no coordinates: the dummy window shows the place.
+        match s.cfg.routing_overlay.position {
+            Some(_) => ui.label(RichText::new("Custom").color(theme::TEXT)),
+            None => ui.label(dim("Default")),
+        };
         position_buttons(ui, s, overlay, Place::Global);
     });
     ui.add_space(14.0);
@@ -959,7 +955,7 @@ fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay
         |pilot| editing == Some(Place::Character(pilot.id)),
         |ui, pilot, column| match column {
             0 => match s.cfg.routing_overlay.position_of(Place::Character(pilot.id)) {
-                Some(pos) => _ = ui.label(RichText::new(position_text(pos)).color(theme::TEXT)),
+                Some(_) => _ = ui.label(RichText::new("Personal").color(theme::TEXT)),
                 None => _ = ui.label(dim("Global")),
             },
             1 => {
