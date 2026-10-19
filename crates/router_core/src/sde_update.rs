@@ -3,7 +3,9 @@
 //! Source: https://developers.eveonline.com/docs/services/static-data/#automation
 //! `latest.jsonl` gives the latest build number. The router then reads the zip index
 //! from the end of the build zip, and fetches only the entries it needs with HTTP
-//! range requests. This downloads about 1.8 MB instead of the full 99 MB zip.
+//! range requests. This downloads about 27 MB (mostly `types.jsonl`) instead of the full 99 MB
+//! zip. The map files are cut down to the fields the router reads, so the SDE takes about
+//! 2.8 MB on disk: the map files (2.7 MB) and the derived `ships.json` and `wormholes.json`.
 
 use crate::error::{FileError, SdeError};
 use crate::ships;
@@ -47,17 +49,9 @@ pub enum Outcome {
 
 impl Outcome {
     /// The status line for the user, if the check did more than confirm the local build.
-    pub fn message(&self, dir: &Path) -> Option<String> {
+    pub fn message(&self) -> Option<String> {
         match self {
-            Outcome::Updated { from, to, bytes } => {
-                let mb = *bytes as f64 / 1e6;
-                Some(match from {
-                    // Same build: only a file was missing, for example wormholes.json from an older version.
-                    Some(b) if b == to => format!("Completed SDE build {to} ({mb:.1} MB) in {}", dir.display()),
-                    Some(b) => format!("Updated the SDE from build {b} to build {to} ({mb:.1} MB) in {}", dir.display()),
-                    None => format!("Downloaded SDE build {to} ({mb:.1} MB) to {}", dir.display()),
-                })
-            }
+            Outcome::Updated { to, bytes, .. } => Some(format!("SDE update complete (build {to}, {:.1} MB)", *bytes as f64 / 1e6)),
             Outcome::Offline { local, error } => Some(format!("Cannot check for a new SDE. Using local build {local}. Cause: {error}")),
             Outcome::Skipped | Outcome::UpToDate => None,
         }
@@ -463,14 +457,13 @@ mod tests {
 
     #[test]
     fn outcome_messages() {
-        let dir = Path::new("sde");
-        let text = |o: Outcome| o.message(dir);
+        let text = |o: Outcome| o.message();
         assert_eq!(text(Outcome::Skipped), None);
         assert_eq!(text(Outcome::UpToDate), None);
-        let updated = |from| Outcome::Updated { from, to: 7, bytes: 1_840_000 };
-        assert_eq!(text(updated(Some(7))).unwrap(), "Completed SDE build 7 (1.8 MB) in sde");
-        assert_eq!(text(updated(Some(6))).unwrap(), "Updated the SDE from build 6 to build 7 (1.8 MB) in sde");
-        assert_eq!(text(updated(None)).unwrap(), "Downloaded SDE build 7 (1.8 MB) to sde");
+        let updated = |from| Outcome::Updated { from, to: 7, bytes: 26_800_000 };
+        assert_eq!(text(updated(Some(7))).unwrap(), "SDE update complete (build 7, 26.8 MB)");
+        assert_eq!(text(updated(Some(6))).unwrap(), "SDE update complete (build 7, 26.8 MB)");
+        assert_eq!(text(updated(None)).unwrap(), "SDE update complete (build 7, 26.8 MB)");
         let offline = Outcome::Offline { local: 6, error: SdeError::Zip("timeout".into()) };
         assert_eq!(text(offline).unwrap(), "Cannot check for a new SDE. Using local build 6. Cause: timeout");
     }

@@ -151,7 +151,7 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     let startup_cfg = Config { eve_metro: cfg.eve_metro.gated(sso_ready), ..cfg.clone() };
     let startup::Loaded { sde, hulls, snapshot, base, report, types } =
         startup::load(&startup_cfg, &paths, env_flag(sde_update::SKIP_ENV), progress)?;
-    let startup_lines: Vec<String> = sde.message(&paths.sde).into_iter().collect();
+    let startup_lines: Vec<String> = sde.message().into_iter().collect();
     let Snapshot { uni, shortcuts, all, log } = snapshot;
     let settings = Settings::from_config(&cfg, &uni, hulls)?;
     // The worker gets the wormholes again each 5 minutes, and wakes the window after each refresh.
