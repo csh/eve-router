@@ -3401,6 +3401,7 @@ dependencies = [
  "rayon",
  "router_core",
  "tempfile",
+ "windows",
 ]
 
 [[package]]
