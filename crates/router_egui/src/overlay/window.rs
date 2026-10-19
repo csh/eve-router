@@ -189,9 +189,11 @@ impl Overlay {
         let builder = window_builder(&TITLE, at)
             // The client keeps the focus: the window does not activate when it shows.
             .with_active(false)
-            // No click-through and no transparency in the builder: winit makes such a window a layered
-            // window with no alpha value, and the window then draws nothing. `pass_input_through`
-            // sets the style and the alpha value after the window shows.
+            // No click-through in the builder: winit makes such a window a layered window with no
+            // alpha value, and the window then draws nothing. `pass_input_through` sets the style and
+            // the alpha value after the window shows. The window is transparent, so it shows no white
+            // flash before its first frame, as the dummy window does.
+            .with_transparent(true)
             .with_visible(false);
         let (title, detail) = self.content.as_ref().map(|c| c.lines(|id| system_name(s, id))).unwrap_or_default();
         ctx.show_viewport_immediate(viewport_id(), builder, |ui, _class| paint(ui, &title, &detail));
