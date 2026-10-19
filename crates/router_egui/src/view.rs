@@ -627,6 +627,9 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     };
     theme::panel_with(ui, &title, header, true, |ui| {
         let uni = &s.uni;
+        // A selectable label takes the right click for itself, so the row menu would not open
+        // over a text. The table has no text to select.
+        ui.style_mut().interaction.selectable_labels = false;
         let header = |ui: &mut Ui, text: &str| _ = ui.label(theme::header_text(text));
         // The table has no Pilots column: the active route shows where the pilots are.
         let table = TableBuilder::new(ui)
