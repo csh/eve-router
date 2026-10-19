@@ -270,17 +270,9 @@ impl Settings {
         if never && matches!(error, RouteError::NoRoute { .. }) { format!("{error}. {NO_ROUTE_HINT}") } else { error.to_string() }
     }
 
-    /// The waypoints in the order to route them, and a status text if the order changed.
-    pub fn order(&self, router: &Router, nodes: &[NodeIndex]) -> Result<(Vec<NodeIndex>, Option<String>), RouteError> {
-        if !self.optimize {
-            return Ok((nodes.to_vec(), None));
-        }
-        let order = router.optimize(nodes)?;
-        let text = (order != nodes).then(|| {
-            let names: Vec<&str> = order.iter().map(|&n| router.uni.name(n)).collect();
-            format!("Optimized order: {}", names.join(" > "))
-        });
-        Ok((order, text))
+    /// The waypoints in the order to route them.
+    pub fn order(&self, router: &Router, nodes: &[NodeIndex]) -> Result<Vec<NodeIndex>, RouteError> {
+        if self.optimize { router.optimize(nodes) } else { Ok(nodes.to_vec()) }
     }
 }
 

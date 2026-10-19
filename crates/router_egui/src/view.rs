@@ -1,7 +1,7 @@
 //! The layout of the window: the route planner, the route list, the route table, the sidebar and
 //! the status line.
 
-use crate::app::Session;
+use crate::app::{Session, Status};
 use crate::notice::{Level, Toaster};
 use crate::pilots_view::PilotsUi;
 use crate::search::{Pick, SearchBox};
@@ -68,23 +68,23 @@ fn route_list_height(routes: usize, spare: f32, compact: bool) -> f32 {
 /// How long the status bar shows a status text.
 const STATUS_TIME: Duration = Duration::from_secs(4);
 
-/// The age of the status text. The status bar clears a text after `STATUS_TIME`.
+/// The age of the status. The status bar clears a status after `STATUS_TIME`.
 #[derive(Default)]
 struct StatusTimer {
-    /// The text, and the time when it first showed.
-    shown: Option<(String, Instant)>,
+    /// The status, and the time when it first showed.
+    shown: Option<(Status, Instant)>,
 }
 
 impl StatusTimer {
-    /// Look at the current text at `now`. Return `None` if the text must clear now, else the
-    /// time until it must clear. An empty text, or a new text, gives a full `STATUS_TIME`.
-    fn update(&mut self, text: &str, now: Instant) -> Option<Duration> {
-        if text.is_empty() {
+    /// Look at the current status at `now`. Return `None` if the status must clear now, else the
+    /// time until it must clear. `Ready`, or a new status, gives a full `STATUS_TIME`.
+    fn update(&mut self, status: Status, now: Instant) -> Option<Duration> {
+        if status == Status::Ready {
             self.shown = None;
             return Some(STATUS_TIME);
         }
         match &self.shown {
-            Some((shown, at)) if shown == text => {
+            Some((shown, at)) if *shown == status => {
                 let left = STATUS_TIME.saturating_sub(now - *at);
                 if left.is_zero() {
                     self.shown = None;
@@ -93,7 +93,7 @@ impl StatusTimer {
                 Some(left)
             }
             _ => {
-                self.shown = Some((text.to_string(), now));
+                self.shown = Some((status, now));
                 Some(STATUS_TIME)
             }
         }
@@ -157,10 +157,10 @@ impl View {
         if let Some(left) = s.apply_due(Instant::now()) {
             ui.ctx().request_repaint_after(left);
         }
-        // The status text clears after `STATUS_TIME`. A notice shows as a toast.
-        match self.status_timer.update(&s.status, Instant::now()) {
-            None => s.status.clear(),
-            Some(_) if s.status.is_empty() => {}
+        // The status clears after `STATUS_TIME`. A notice shows as a toast.
+        match self.status_timer.update(s.status, Instant::now()) {
+            None => s.status = Status::Ready,
+            Some(_) if s.status == Status::Ready => {}
             Some(left) => ui.ctx().request_repaint_after(left),
         }
         if ui.input_mut(|i| i.consume_key(Modifiers::NONE, Key::F5)) {
@@ -896,8 +896,7 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool) {
         ui.add_space(6.0);
         sync_status(ui, s);
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-            let text = if s.status.is_empty() { "Ready" } else { s.status.as_str() };
-            ui.add(Label::new(RichText::new(text).color(theme::TEXT_DIM)).truncate());
+            ui.add(Label::new(RichText::new(s.status.text()).color(theme::TEXT_DIM)).truncate());
         });
     });
 }
@@ -1026,14 +1025,12 @@ mod tests {
     fn status_text_clears_after_status_time() {
         let mut timer = StatusTimer::default();
         let start = Instant::now();
-        assert_eq!(timer.update("Config saved!", start), Some(STATUS_TIME));
-        assert_eq!(timer.update("Config saved!", start + Duration::from_secs(1)), Some(Duration::from_secs(3)));
-        // A new text starts a new time.
-        assert_eq!(timer.update("Added 2 systems", start + Duration::from_secs(3)), Some(STATUS_TIME));
-        assert_eq!(timer.update("Added 2 systems", start + Duration::from_secs(6)), Some(Duration::from_secs(1)));
-        assert_eq!(timer.update("Added 2 systems", start + Duration::from_secs(7)), None);
-        // After the clear, the same text again shows for a full time.
-        assert_eq!(timer.update("", start + Duration::from_secs(7)), Some(STATUS_TIME));
-        assert_eq!(timer.update("Added 2 systems", start + Duration::from_secs(8)), Some(STATUS_TIME));
+        assert_eq!(timer.update(Status::Refreshing, start), Some(STATUS_TIME));
+        assert_eq!(timer.update(Status::Refreshing, start + Duration::from_secs(1)), Some(Duration::from_secs(3)));
+        assert_eq!(timer.update(Status::Refreshing, start + Duration::from_secs(3)), Some(Duration::from_secs(1)));
+        assert_eq!(timer.update(Status::Refreshing, start + Duration::from_secs(4)), None);
+        // After the clear, the same status again shows for a full time.
+        assert_eq!(timer.update(Status::Ready, start + Duration::from_secs(4)), Some(STATUS_TIME));
+        assert_eq!(timer.update(Status::Refreshing, start + Duration::from_secs(8)), Some(STATUS_TIME));
     }
 }

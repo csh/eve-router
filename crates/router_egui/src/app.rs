@@ -56,7 +56,24 @@ pub const APPLY_DELAY: Duration = Duration::from_millis(500);
 
 /// The least time between two manual refreshes. A Nexum map costs one request for each system.
 pub const REFRESH_GAP: Duration = Duration::from_secs(15);
-pub const REFRESHING: &str = "Refreshing the wormholes…";
+
+/// What the status bar says.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum Status {
+    #[default]
+    Ready,
+    Refreshing,
+}
+
+impl Status {
+    pub fn text(self) -> &'static str {
+        match self {
+            Status::Ready => "Ready",
+            Status::Refreshing => "Refreshing the wormholes…",
+        }
+    }
+}
+
 pub const REFRESH_STOPPED: &str = "The refresh worker stopped";
 
 /// The error when the load thread stops without a result. A panic in the load does this.
@@ -201,7 +218,7 @@ pub struct Session {
     pub now: u64,
     /// The clock of the route search. The tests set a fixed time.
     clock: fn() -> u64,
-    pub status: String,
+    pub status: Status,
     /// The time of the last change that waits for `APPLY_DELAY`, for example a drag in the settings.
     apply_at: Option<Instant>,
     /// The last Nexum map list, for the map name in the settings.
@@ -234,7 +251,7 @@ impl Session {
             route_time: None,
             now: router_core::wormhole::now(),
             clock: router_core::wormhole::now,
-            status: String::new(),
+            status: Status::Ready,
             apply_at: None,
             map_names: Vec::new(),
             pilots: Pilots::offline(active_path(&cfg_path)),
@@ -402,7 +419,7 @@ impl Session {
         self.routes.clear();
         self.selected = 0;
         self.selected_step = None;
-        self.status.clear();
+        self.status = Status::Ready;
         let reason = self.settings.rules.blocked_reason();
         let turned_off = if reason != self.bridges_reason { reason.clone() } else { None };
         self.bridges_reason = reason;
@@ -426,8 +443,8 @@ impl Session {
             || router.jumps_to(origin, &settings.favourites),
             || {
                 (nodes.len() >= 2).then(|| {
-                    let (order, changed) = settings.order(&router, nodes)?;
-                    router.routes(&order, settings.top).map(|routes| (routes, changed))
+                    let order = settings.order(&router, nodes)?;
+                    router.routes(&order, settings.top)
                 })
             },
         );
@@ -435,8 +452,7 @@ impl Session {
         self.hubs = hubs;
         match routes {
             None => {}
-            // The route table shows the optimized order, so the status line does not.
-            Some(Ok((routes, _))) => self.routes = routes,
+            Some(Ok(routes)) => self.routes = routes,
             Some(Err(e)) => self.notify(Level::Error, self.settings.explain(&e)),
         }
     }
@@ -504,7 +520,7 @@ impl Session {
         }
         self.refreshed_at = Some(now);
         refresher.refresh();
-        self.status = REFRESHING.into();
+        self.status = Status::Refreshing;
     }
 
     /// Add a waypoint at the end. The same system two times in a row is not a waypoint.
@@ -756,7 +772,7 @@ mod tests {
         let (mut s, _tmp) = session();
         s.uni = snapshot(Vec::new()).uni;
         s.add_list("Jita, Amarr");
-        assert!(s.routes.len() >= 2, "{}", s.status);
+        assert!(s.routes.len() >= 2, "{:?}", s.status);
         s.selected = 1;
         s.selected_step = Some(3);
         let nodes = s.routes[1].path.nodes.clone();
@@ -774,7 +790,7 @@ mod tests {
         let nodes = s.routes[0].path.nodes.clone();
         // The new wormhole route is first, so the kept path moves down.
         s.apply_snapshot(snapshot(vec![jita_amarr()]));
-        assert_eq!(s.routes[0].wormholes, 1, "{}", s.status);
+        assert_eq!(s.routes[0].wormholes, 1, "{:?}", s.status);
         assert_eq!(s.selected, 1);
         assert_eq!(s.selected_route().unwrap().path.nodes, nodes);
         assert_eq!(s.selected_step, Some(2));
@@ -787,7 +803,7 @@ mod tests {
         let (mut s, _tmp) = session();
         s.uni = snapshot(vec![perimeter()]).uni;
         s.add_list("Jita, Perimeter");
-        assert_eq!((s.routes[0].wormholes, s.routes[1].wormholes), (0, 1), "{}", s.status);
+        assert_eq!((s.routes[0].wormholes, s.routes[1].wormholes), (0, 1), "{:?}", s.status);
         s.selected = 1;
         s.apply_snapshot(snapshot(vec![perimeter()]));
         assert_eq!(s.selected, 1);
@@ -800,7 +816,7 @@ mod tests {
         s.settings.top = 1;
         s.uni = snapshot(vec![jita_amarr()]).uni;
         s.add_list("Jita, Amarr");
-        assert_eq!(s.routes[0].wormholes, 1, "{}", s.status);
+        assert_eq!(s.routes[0].wormholes, 1, "{:?}", s.status);
         s.selected_step = Some(1);
         s.apply_snapshot(snapshot(Vec::new()));
         assert_eq!(s.routes[0].wormholes, 0);
@@ -823,11 +839,11 @@ mod tests {
     #[test]
     fn a_refresh_with_no_waypoints_only_swaps_the_map() {
         let (mut s, _tmp) = session();
-        s.status = "keep".into();
+        s.status = Status::Refreshing;
         s.apply_snapshot(snapshot(vec![jita_amarr()]));
         assert_eq!((s.shortcuts.wormholes, s.wormhole_data.len()), (1, 1));
         assert!(s.routes.is_empty());
-        assert_eq!(s.status, "keep");
+        assert_eq!(s.status, Status::Refreshing);
     }
 
     #[test]
@@ -876,11 +892,11 @@ mod tests {
         let start = Instant::now();
         s.refresh_now(start);
         assert!(matches!(control.try_recv(), Ok(Control::Refresh)));
-        assert_eq!(s.status, REFRESHING);
+        assert_eq!(s.status, Status::Refreshing);
         // A second call soon after sends nothing.
         s.refresh_now(start + Duration::from_secs(5));
         assert!(control.try_recv().is_err());
-        assert_eq!(s.status, REFRESHING);
+        assert_eq!(s.status, Status::Refreshing);
         // After the gap, the call sends a message again.
         s.refresh_now(start + REFRESH_GAP);
         assert!(matches!(control.try_recv(), Ok(Control::Refresh)));
@@ -1124,7 +1140,7 @@ mod tests {
     fn replace_with_no_good_name_clears_the_routes() {
         let (mut s, _tmp) = session();
         s.add_list("Jita, Amarr");
-        assert!(!s.routes.is_empty(), "{}", s.status);
+        assert!(!s.routes.is_empty(), "{:?}", s.status);
         let problems = s.replace_list("Nowhere");
         assert_eq!(problems.len(), 1);
         assert!(s.waypoints.is_empty() && s.routes.is_empty());
@@ -1162,7 +1178,7 @@ mod tests {
         s.set_start(ualx);
         assert_eq!(names(&s), ["UALX-3", "Jita"]);
         let lines: Vec<String> = s.routes.iter().map(|r| format!("{}{}", jumps_label(r.jumps), route_extras(r))).collect();
-        assert_eq!(lines.len(), 3, "{}", s.status);
+        assert_eq!(lines.len(), 3, "{:?}", s.status);
         // The list shows three different routes. A route that only detours the first one is not in it.
         assert_eq!(lines, ["30 jumps", "31 jumps", "41 jumps"]);
     }
@@ -1222,16 +1238,16 @@ mod tests {
     #[test]
     fn jove_list_with_line_breaks_and_commas() {
         let (mut s, _tmp) = session();
-        assert_eq!(s.add_list(JOVE), Vec::<String>::new(), "{}", s.status);
+        assert_eq!(s.add_list(JOVE), Vec::<String>::new(), "{:?}", s.status);
         assert_eq!(s.waypoints.len(), 19);
-        assert!(!s.routes.is_empty(), "{}", s.status);
+        assert!(!s.routes.is_empty(), "{:?}", s.status);
         let (mut csv, _tmp_csv) = session();
         csv.add_list(&JOVE.trim().replace('\n', ", "));
         assert_eq!(csv.waypoints, s.waypoints);
         // 17 midpoints: "Optimize order" changes their order and keeps the start and the destination.
         s.settings.optimize = true;
         s.recompute();
-        assert!(!s.routes.is_empty(), "{}", s.status);
+        assert!(!s.routes.is_empty(), "{:?}", s.status);
         let route = &s.routes[0];
         assert_eq!(route.path.nodes[0], s.waypoints[0]);
         assert_eq!(*route.path.nodes.last().unwrap(), s.waypoints[18]);

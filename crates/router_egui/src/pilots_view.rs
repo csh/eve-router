@@ -1005,7 +1005,7 @@ mod tests {
         let path = tmp.path().join("eve-router.json");
         let mut s = Session::new(Arc::new(uni), settings, Config::default(), path, shortcuts);
         s.add_list("Jita, Amarr");
-        assert!(s.routes.len() >= 2, "{}", s.status);
+        assert!(s.routes.len() >= 2, "{:?}", s.status);
         (s, tmp)
     }
 
