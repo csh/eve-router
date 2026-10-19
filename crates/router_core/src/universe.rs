@@ -1,5 +1,6 @@
 //! The solar system graph and the name index.
 
+use crate::route::RouteError;
 use crate::sde::SdeData;
 use crate::wormhole::Wormhole;
 use petgraph::graph::{DiGraph, NodeIndex};
@@ -264,15 +265,19 @@ impl Universe {
     }
 
     /// Find a system by its exact name, else by a unique prefix.
-    /// On failure, return up to 5 candidate names for the error text.
-    pub fn resolve(&self, name: &str) -> Result<NodeIndex, Vec<String>> {
+    /// On failure, the error holds up to 5 candidate names for the error text.
+    pub fn resolve(&self, name: &str) -> Result<NodeIndex, RouteError> {
         if let Some(node) = self.exact(name) {
             return Ok(node);
         }
         let matches = self.complete(name);
         match matches.as_slice() {
             [one] => Ok(*one),
-            many => Err(many.iter().take(5).map(|&n| self.name(n).to_string()).collect()),
+            [] => Err(RouteError::UnknownSystem(name.to_string())),
+            many => Err(RouteError::AmbiguousSystem {
+                name: name.to_string(),
+                candidates: many.iter().take(5).map(|&n| self.name(n).to_string()).collect(),
+            }),
         }
     }
 
@@ -437,6 +442,10 @@ pub mod tests {
         assert_eq!(uni.system(uni.resolve("jita").unwrap()).id, 30000142);
         assert_eq!(uni.system(uni.resolve("New Caldari").unwrap()).id, uni.system(uni.exact("new caldari").unwrap()).id);
         assert!(uni.resolve("J").is_err());
+        assert_eq!(uni.resolve("Nowhere"), Err(RouteError::UnknownSystem("Nowhere".into())));
+        let Err(RouteError::AmbiguousSystem { name, candidates }) = uni.resolve("J") else { panic!("not ambiguous") };
+        assert_eq!(name, "J");
+        assert!(candidates.len() > 1 && candidates.len() <= 5);
     }
 
     #[test]

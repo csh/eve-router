@@ -304,15 +304,7 @@ pub fn parse_max_cap(text: &str, hulls: &HullTable) -> Result<Option<f32>, Confi
 }
 
 pub fn resolve_all(uni: &Universe, names: &[String]) -> Result<Vec<NodeIndex>, RouteError> {
-    names
-        .iter()
-        .map(|name| {
-            uni.resolve(name).map_err(|candidates| match candidates.as_slice() {
-                [] => RouteError::UnknownSystem(name.clone()),
-                _ => RouteError::AmbiguousSystem { name: name.clone(), candidates },
-            })
-        })
-        .collect()
+    names.iter().map(|name| uni.resolve(name)).collect()
 }
 
 /// The avoid list of the config. A name that the SDE does not know is dropped.

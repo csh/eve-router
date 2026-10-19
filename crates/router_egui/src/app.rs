@@ -530,8 +530,7 @@ impl Session {
                     self.waypoints.push(node);
                     added += 1;
                 }
-                Err(c) if c.is_empty() => problems.push(format!("Unknown system \"{name}\"")),
-                Err(c) => problems.push(format!("\"{name}\" matches more than one system: {}", c.join(", "))),
+                Err(e) => problems.push(e.to_string()),
             }
         }
         if added > 0 {
