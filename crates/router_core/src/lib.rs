@@ -10,6 +10,7 @@ pub mod log;
 pub mod overlay;
 pub mod refresh;
 pub mod route;
+pub mod routing_overlay;
 pub mod sde;
 pub mod sde_update;
 pub mod settings;

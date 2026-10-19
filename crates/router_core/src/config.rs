@@ -5,6 +5,7 @@ use crate::route::{Mode, RouteError};
 use crate::wormhole::Hubs;
 use crate::wormhole::SourceId;
 use serde::{Deserialize, Serialize};
+use std::collections::BTreeMap;
 use std::fmt;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -236,6 +237,34 @@ impl EveMetroConfig {
     }
 }
 
+/// A place on the desktop, in screen pixels.
+#[derive(Serialize, Deserialize, Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Pos {
+    pub x: i32,
+    pub y: i32,
+}
+
+/// The routing overlay: a small window above the game that shows the signature of the next
+/// wormhole while the client of the route character is in front. It is off until the user turns it on.
+#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, Eq)]
+#[serde(default)]
+pub struct RoutingOverlayConfig {
+    pub enabled: bool,
+    /// The place for each character that has no place of its own. `None`: the built-in place.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub position: Option<Pos>,
+    /// The own place of a character, by character ID.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub characters: BTreeMap<u64, Pos>,
+}
+
+impl RoutingOverlayConfig {
+    /// True for the settings of a new file. The file leaves them out.
+    pub fn is_default(&self) -> bool {
+        *self == Self::default()
+    }
+}
+
 #[derive(Serialize, Deserialize, Default, Clone, Debug)]
 #[serde(default)]
 pub struct Config {
@@ -280,6 +309,8 @@ pub struct Config {
     /// Compact UI layout with tighter row heights and padding.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub compact: bool,
+    #[serde(skip_serializing_if = "RoutingOverlayConfig::is_default")]
+    pub routing_overlay: RoutingOverlayConfig,
 }
 
 /// The Photon UI faction theme presets.
@@ -423,11 +454,27 @@ mod tests {
             clades: Clades { pochven: true },
             theme: None,
             compact: false,
+            routing_overlay: RoutingOverlayConfig::default(),
         };
         let text = serde_json::to_string_pretty(&cfg).unwrap();
         crate::assert_snapshot!("config_json", text);
         let back: Config = serde_json::from_str(&text).unwrap();
         assert_eq!(serde_json::to_string_pretty(&back).unwrap(), text);
+    }
+
+    /// A new file has no routing overlay entry. Set values survive a round trip, and the
+    /// character IDs become text keys in the file.
+    #[test]
+    fn the_routing_overlay_settings_round_trip() {
+        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("routing_overlay"));
+        let mut cfg = Config::default();
+        cfg.routing_overlay.enabled = true;
+        cfg.routing_overlay.position = Some(Pos { x: 40, y: -12 });
+        cfg.routing_overlay.characters.insert(2112345678, Pos { x: 1, y: 2 });
+        let text = serde_json::to_string(&cfg).unwrap();
+        assert!(text.contains(r#""2112345678":{"x":1,"y":2}"#), "{text}");
+        let back: Config = serde_json::from_str(&text).unwrap();
+        assert_eq!(back.routing_overlay, cfg.routing_overlay);
     }
 
     #[test]
