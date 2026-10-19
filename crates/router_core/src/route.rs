@@ -105,14 +105,6 @@ impl Mode {
             Mode::LessSecure => "Stay in lowsec and nullsec where a route exists",
         }
     }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Mode::Shortest => "shortest",
-            Mode::PreferHighsec => "prefer-highsec",
-            Mode::LessSecure => "less-secure",
-        }
-    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -149,12 +141,12 @@ pub enum Stop {
     Destination,
 }
 
-impl Stop {
-    pub fn label(self) -> String {
+impl std::fmt::Display for Stop {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Stop::Start => "Start".into(),
-            Stop::Midpoint(n) => format!("Midpoint {n}"),
-            Stop::Destination => "Destination".into(),
+            Stop::Start => f.write_str("Start"),
+            Stop::Midpoint(n) => write!(f, "Midpoint {n}"),
+            Stop::Destination => f.write_str("Destination"),
         }
     }
 }

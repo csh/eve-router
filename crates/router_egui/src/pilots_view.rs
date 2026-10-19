@@ -775,7 +775,7 @@ impl PilotsUi {
                         row.col(|ui| _ = ui.label(RichText::new(i.to_string()).color(theme::TEXT_DIM)));
                         row.col(|ui| {
                             if let Some(stop) = active.stop_at(i) {
-                                let text = RichText::new(stop.label().to_uppercase()).size(11.0).extra_letter_spacing(1.0);
+                                let text = RichText::new(stop.to_string().to_uppercase()).size(11.0).extra_letter_spacing(1.0);
                                 ui.label(text.color(dim(theme::accent(ui))));
                             }
                         });
@@ -909,7 +909,7 @@ fn ship_row(ui: &mut Ui, pilot: &PilotView, hulls: &router_core::ansiblex::HullT
     let text = ship_text(ship, &pilot.name, hulls);
     ui.horizontal(|ui| {
         ui.spacing_mut().item_spacing.x = 0.0;
-        ui.label(RichText::new(&text.kind).color(theme::TEXT).small());
+        ui.label(RichText::new(text.kind.name()).color(theme::TEXT).small());
         if let Some(name) = &text.name {
             ui.label(RichText::new(format!(" · \"{name}\"")).color(theme::TEXT_DIM).small());
         }

@@ -373,7 +373,7 @@ impl View {
                         let stop = s.stop(i);
                         let color = if matches!(stop, Stop::Midpoint(_)) { theme::TEXT_DIM } else { theme::accent(ui) };
                         ui.label(RichText::new(format!("{:>2}", i + 1)).color(theme::TEXT_DIM));
-                        ui.label(RichText::new(stop.label().to_uppercase()).color(color).size(11.0).extra_letter_spacing(1.0));
+                        ui.label(RichText::new(stop.to_string().to_uppercase()).color(color).size(11.0).extra_letter_spacing(1.0));
                         let name =
                             ui.add(Label::new(RichText::new(&sys.name).family(theme::bold()).color(Color32::WHITE)).sense(Sense::click()));
                         ui.label(RichText::new(format!("{:.1}", display_sec(sys.security))).color(theme::sec_color(sys.security)));
@@ -672,7 +672,10 @@ fn route_table(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
                     row.col(|ui| {
                         if let Some(stop) = stop {
                             ui.label(
-                                RichText::new(stop.label().to_uppercase()).color(theme::accent(ui)).size(11.0).extra_letter_spacing(1.0),
+                                RichText::new(stop.to_string().to_uppercase())
+                                    .color(theme::accent(ui))
+                                    .size(11.0)
+                                    .extra_letter_spacing(1.0),
                             );
                         } else if avoided {
                             ui.label(RichText::new("AVOID").color(theme::WARN).size(11.0).extra_letter_spacing(1.0));

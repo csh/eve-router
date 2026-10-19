@@ -109,23 +109,49 @@ pub fn hull_label(h: &Hull) -> String {
 /// "1 jump" or "N jumps".
 /// The ship of a pilot, for the pilot rows. For example `Apocalypse · "apoc"`.
 pub struct ShipText {
-    /// The ship type. The ship name, for a type that is not in `ships.json`.
-    pub kind: String,
+    pub kind: ShipKind,
     /// The name that the player gave the ship. `None` for a default name.
     pub name: Option<String>,
     /// True if the ship cannot use a jump bridge.
     pub no_bridges: bool,
 }
 
+/// The ship type of a pilot.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ShipKind {
+    /// The hull name of a type in `ships.json`.
+    Known(String),
+    /// The ship name, for a type that is not in `ships.json`.
+    Unknown(String),
+}
+
+impl ShipKind {
+    pub fn name(&self) -> &str {
+        match self {
+            ShipKind::Known(name) | ShipKind::Unknown(name) => name,
+        }
+    }
+}
+
+impl std::fmt::Display for ShipKind {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        f.write_str(self.name())
+    }
+}
+
 pub fn ship_text(ship: &Ship, character: &str, hulls: &HullTable) -> ShipText {
     let Some(hull) = hulls.by_type(ship.ship_type_id) else {
-        return ShipText { kind: ship.ship_name.clone(), name: None, no_bridges: false };
+        return ShipText { kind: ShipKind::Unknown(ship.ship_name.clone()), name: None, no_bridges: false };
     };
     let name = ship.ship_name.trim().to_lowercase();
     let kind = hull.name.to_lowercase();
     // EVE names a new ship after its type and its pilot, for example "Capsule - Cyrene Hawthorne".
     let default = name.is_empty() || name == kind || (name.contains(&kind) && name.contains(&character.to_lowercase()));
-    ShipText { kind: hull.name.clone(), name: (!default).then(|| ship.ship_name.trim().to_string()), no_bridges: hull.base_tj.is_none() }
+    ShipText {
+        kind: ShipKind::Known(hull.name.clone()),
+        name: (!default).then(|| ship.ship_name.trim().to_string()),
+        no_bridges: hull.base_tj.is_none(),
+    }
 }
 
 impl std::fmt::Display for ShipText {
@@ -450,6 +476,7 @@ mod tests {
         let unknown = ship_text(&ship("New hull", u32::MAX), "smrkn", &hulls());
         assert_eq!(unknown.to_string(), "New hull");
         assert!(!unknown.no_bridges);
+        assert_eq!(unknown.kind, ShipKind::Unknown("New hull".into()));
     }
 
     #[test]
