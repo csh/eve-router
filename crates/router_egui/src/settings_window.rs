@@ -929,7 +929,8 @@ fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay
         return;
     }
     let editing = overlay.editing();
-    let extra = [("Position", Column::exact(72.0)), ("", Column::exact(76.0)), ("", Column::exact(200.0))];
+    // The columns are narrow, so the name column has room for a long name.
+    let extra = [("Position", Column::exact(64.0)), ("", Column::exact(72.0)), ("", Column::exact(176.0))];
     character_table(
         ui,
         "overlay-characters",
