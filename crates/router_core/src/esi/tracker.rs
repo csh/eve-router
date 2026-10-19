@@ -197,8 +197,15 @@ struct Worker<A, W> {
     slow: bool,
 }
 
-/// The result of one poll: the event to send (if any), the expiry and the error budget.
-type Polled = (Option<Event>, Option<SystemTime>, Option<u32>);
+/// The result of one poll: the reading, the expiry and the error budget.
+type Polled = (Reading, Option<SystemTime>, Option<u32>);
+
+/// What one poll read from ESI.
+enum Reading {
+    Location(u32),
+    Ship(Ship),
+    Online(bool),
+}
 
 enum Kind {
     Location,
@@ -306,28 +313,13 @@ impl<A: Api, W: Fn()> Worker<A, W> {
         };
         let interval = self.interval(base);
         let result: Result<Polled, EsiError> = match kind {
-            Kind::Location => self.api.location(&token, id).map(|f| {
-                let pilot = self.pilots.get_mut(&id).expect("pilot");
-                let changed = pilot.system != Some(f.value.solar_system_id);
-                pilot.system = Some(f.value.solar_system_id);
-                (changed.then_some(Event::Location { id, system: f.value.solar_system_id }), f.expires, f.errors_left)
-            }),
-            Kind::Ship => self.api.ship(&token, id).map(|f| {
-                let pilot = self.pilots.get_mut(&id).expect("pilot");
-                let changed = pilot.ship.as_ref() != Some(&f.value);
-                pilot.ship = Some(f.value.clone());
-                (changed.then_some(Event::Ship { id, ship: f.value }), f.expires, f.errors_left)
-            }),
-            Kind::Online => self.api.online(&token, id).map(|f| {
-                let pilot = self.pilots.get_mut(&id).expect("pilot");
-                let changed = pilot.online != Some(f.value.online);
-                pilot.online = Some(f.value.online);
-                (changed.then_some(Event::Online { id, online: f.value.online }), f.expires, f.errors_left)
-            }),
+            Kind::Location => self.api.location(&token, id).map(|f| (Reading::Location(f.value.solar_system_id), f.expires, f.errors_left)),
+            Kind::Ship => self.api.ship(&token, id).map(|f| (Reading::Ship(f.value), f.expires, f.errors_left)),
+            Kind::Online => self.api.online(&token, id).map(|f| (Reading::Online(f.value.online), f.expires, f.errors_left)),
         };
         let next = match result {
-            Ok((event, expires, errors_left)) => {
-                if let Some(event) = event {
+            Ok((reading, expires, errors_left)) => {
+                if let Some(event) = self.record(id, reading) {
                     self.emit(event);
                 }
                 self.budget(errors_left);
@@ -342,6 +334,29 @@ impl<A: Api, W: Fn()> Worker<A, W> {
             Kind::Location => pilot.next_location = next,
             Kind::Ship => pilot.next_ship = next,
             Kind::Online => pilot.next_online = next,
+        }
+    }
+
+    /// Store a reading in the pilot. The result is the event for a change. A pilot that a command
+    /// removed during the poll gives `None`.
+    fn record(&mut self, id: u64, reading: Reading) -> Option<Event> {
+        let pilot = self.pilots.get_mut(&id)?;
+        match reading {
+            Reading::Location(system) => {
+                let changed = pilot.system != Some(system);
+                pilot.system = Some(system);
+                changed.then_some(Event::Location { id, system })
+            }
+            Reading::Ship(ship) => {
+                let changed = pilot.ship.as_ref() != Some(&ship);
+                pilot.ship = Some(ship.clone());
+                changed.then_some(Event::Ship { id, ship })
+            }
+            Reading::Online(online) => {
+                let changed = pilot.online != Some(online);
+                pilot.online = Some(online);
+                changed.then_some(Event::Online { id, online })
+            }
         }
     }
 

@@ -279,10 +279,18 @@ impl Pilots {
 
     /// The text for a disabled "Add character", if the router cannot log in.
     pub fn login_blocked(&self) -> Option<String> {
-        if self.client_id.is_none() {
-            return Some(format!("No EVE client ID in this build. Set {}.", super::CLIENT_ID_VAR));
+        self.login_ready().err()
+    }
+
+    /// The client ID, when a login can start. Otherwise the reason that it cannot.
+    fn login_ready(&self) -> Result<&str, String> {
+        let Some(client_id) = self.client_id.as_deref() else {
+            return Err(format!("No EVE client ID in this build. Set {}.", super::CLIENT_ID_VAR));
+        };
+        if self.accounts.is_none() {
+            return Err(self.keyring_error.as_ref().map_or_else(|| "No token store.".into(), ToString::to_string));
         }
-        self.accounts.is_none().then(|| self.keyring_error.as_ref().map_or_else(|| "No token store.".into(), ToString::to_string))
+        Ok(client_id)
     }
 
     /// True if the UI shows the characters. Without a client ID the router can neither log in nor
@@ -293,11 +301,8 @@ impl Pilots {
 
     /// Start a login, and open the URL in the browser. The UI also shows the URL for a copy.
     pub fn start_login(&mut self) -> Result<(), PilotError> {
-        if let Some(reason) = self.login_blocked() {
-            return Err(PilotError::LoginBlocked(reason));
-        }
-        let sso = Sso::new(self.client_id.as_deref().expect("client ID"));
-        let login = sso.start_login();
+        let client_id = self.login_ready().map_err(PilotError::LoginBlocked)?;
+        let login = Sso::new(client_id).start_login();
         // A failure to open the browser is not an error: the URL is on the screen.
         let _ = webbrowser::open(&login.url);
         self.login = Some(LoginFlow { login, exchange: None, error: None });
@@ -436,14 +441,12 @@ impl Pilots {
     }
 
     fn send_waypoints(&mut self, id: u64, systems: Vec<u32>) {
-        self.send = Some(SendState { character: id, systems: systems.clone(), done: 0, failed: None });
+        let mut send = SendState { character: id, systems: systems.clone(), done: 0, failed: None };
         match &self.tracker {
             Some(tracker) => tracker.send(Command::Send { id, systems }),
-            None => {
-                let total = self.send.as_ref().map_or(0, |s| s.systems.len());
-                self.send.as_mut().expect("send").failed = Some(SendFailure { done: 0, total, error: SendError::NoClientId });
-            }
+            None => send.failed = Some(SendFailure { done: 0, total: send.systems.len(), error: SendError::NoClientId }),
         }
+        self.send = Some(send);
     }
 
     /// Send all waypoints of the failed send again. The first one clears the in-game route.
