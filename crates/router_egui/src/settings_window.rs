@@ -134,6 +134,12 @@ pub fn title(ui: &mut Ui, text: &str) {
     ui.add_space(8.0);
 }
 
+/// True when a modal window must close because of a click outside it or the Escape key. A press on the
+/// title bar moves the app window, so it does not close the modal.
+fn closes<T>(ctx: &egui::Context, response: &egui::ModalResponse<T>) -> bool {
+    response.should_close() && (!crate::chrome::title_press(ctx) || ctx.input(|i| i.key_pressed(Key::Escape)))
+}
+
 /// Show the open modal windows.
 pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
     if let Some(form) = &mut view.settings {
@@ -155,7 +161,7 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
                 }
             }
             Some(Action::Close) => view.settings = None,
-            None if response.should_close() && view.popup.is_none() => view.settings = None,
+            None if closes(ui.ctx(), &response) && view.popup.is_none() => view.settings = None,
             None => {}
         }
         if view.settings.is_none() {
@@ -169,16 +175,16 @@ pub fn show(ui: &mut Ui, view: &mut View, s: &mut Session) {
         None => false,
         Some(Popup::Pilot { filter }) => {
             let response = Modal::new(Id::new("pilot")).frame(modal_frame()).show(ui.ctx(), |ui| pilot_picker(ui, filter, s));
-            response.inner || response.should_close()
+            response.inner || closes(ui.ctx(), &response)
         }
         Some(Popup::Avoid { confirm, search, region }) => {
             let response =
                 Modal::new(Id::new("avoid")).frame(modal_frame()).show(ui.ctx(), |ui| avoid_list(ui, confirm, search, region, s));
-            response.inner || response.should_close()
+            response.inner || closes(ui.ctx(), &response)
         }
         Some(Popup::List { text, problems }) => {
             let response = Modal::new(Id::new("list")).frame(modal_frame()).show(ui.ctx(), |ui| paste_list(ui, text, problems, s));
-            response.inner || response.should_close()
+            response.inner || closes(ui.ctx(), &response)
         }
     };
     if close {

@@ -87,6 +87,15 @@ pub fn drag_through_modal(ctx: &Context) {
     if pressed {
         ctx.send_viewport_cmd(ViewportCommand::StartDrag);
     }
+    // The flag stays set until the button is up, so the modal windows can tell this press from a click outside.
+    let held = pressed || (title_press(ctx) && ctx.input(|i| i.pointer.primary_down()));
+    ctx.data_mut(|d| d.insert_temp(Id::new("title-press"), held));
+}
+
+/// True while a press that started on the title bar is still down, or in the frame of its release.
+/// A modal window must not treat this press as a click outside the window.
+pub fn title_press(ctx: &Context) -> bool {
+    ctx.data(|d| d.get_temp(Id::new("title-press"))).unwrap_or(false)
 }
 
 /// The mark of the app: three stops joined by a route line.
