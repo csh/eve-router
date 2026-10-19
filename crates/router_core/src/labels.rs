@@ -225,7 +225,7 @@ pub fn route_tsv(uni: &Universe, rules: &BridgeRules, route: &Route, now: u64) -
     for (step, &node) in route.path.nodes.iter().enumerate() {
         let sys = uni.system(node);
         let via = match step.checked_sub(1).map(|s| route.path.edges[s]) {
-            Some(e) => link_label(uni, rules, e, now),
+            Some(e) => LinkView::of(uni, rules, e).label(now),
             None => String::new(),
         };
         lines.push(format!("{step}\t{}\t{:.1}\t{}\t{via}", sys.name, display_sec(sys.security), sys.region));
@@ -282,6 +282,16 @@ impl LinkView {
         LinkView::Wormhole { sig: w.sig_at(from), size: w.size, expiry: w.expiry, mass: w.mass }
     }
 
+    /// The hop that the view makes.
+    pub fn hop(&self) -> Hop {
+        match self {
+            LinkView::Gate => Hop::Gate,
+            LinkView::Wormhole { .. } => Hop::Wormhole,
+            LinkView::JumpBridge { .. } => Hop::Bridge,
+            LinkView::Filament { .. } => Hop::Filament,
+        }
+    }
+
     /// For example "Ansiblex · Zone 1 → 2 · 36 TJ". `now` (Unix seconds) sets the wormhole expiry text.
     pub fn label(&self, now: u64) -> String {
         match self {
@@ -308,11 +318,6 @@ impl LinkView {
             },
         }
     }
-}
-
-/// How a route enters a system: a gate, a wormhole or a bridge.
-pub fn link_label(uni: &Universe, rules: &BridgeRules, edge: EdgeIndex, now: u64) -> String {
-    LinkView::of(uni, rules, edge).label(now)
 }
 
 /// For example "Wormhole · Sig. ABC · Large · Expires in 3h 10m · Critical".
