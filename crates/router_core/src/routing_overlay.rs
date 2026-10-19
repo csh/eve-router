@@ -1,9 +1,11 @@
 //! The routing overlay: what it shows, when it shows and where it sits. The small window that
-//! shows the signature of the next wormhole is in the app crate. The code that reads the title of
-//! the foreground window is there too.
+//! shows the next manual hop is in the app crate. The code that reads the title of the foreground
+//! window is there too.
 
 use crate::config::{Pos, RoutingOverlayConfig};
 use crate::esi::active::{ActiveRoute, Hop};
+use crate::labels::LinkView;
+use crate::universe::Clade;
 
 /// The title of the window of a logged-in client. The name of the character follows. A client that
 /// still loads has the title "EVE", and the launcher has "EVE Launcher". Neither one matches.
@@ -16,44 +18,71 @@ pub fn parse_client_title(title: &str) -> Option<&str> {
     (!name.trim().is_empty()).then_some(name)
 }
 
-/// What the overlay tells the pilot about the signature.
+/// What the pilot does at the hop.
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub enum Signature {
-    /// The letters of the signature in the system that the pilot leaves.
-    Known(String),
+pub enum Action {
+    /// Warp to the signature. The letters are those of the signature in the system that the pilot leaves.
+    Signature(String),
     /// No source knows the signature. The pilot looks in the bookmarks of the game.
     CheckBookmarks,
+    /// Activate a filament. The clade is `None` for a route file of an older version.
+    Filament(Option<Clade>),
 }
 
-/// The next wormhole of a route.
+/// The next manual hop of a route.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Content {
-    /// The system that holds the signature.
+    /// The system that the hop leaves.
     pub from: u32,
-    /// The system on the far side of the wormhole.
+    /// The system that the hop enters.
     pub to: u32,
-    pub signature: Signature,
+    pub action: Action,
 }
 
-/// The next wormhole of the route, when the overlay has something to say about it. A wormhole
-/// with no known signature gives a result only when the pilot is in the system that it leaves.
-/// A filament, or a route with no wormhole ahead, gives `None`.
-pub fn content(route: &ActiveRoute) -> Option<Content> {
-    let step = route.next_manual_hop().filter(|&i| route.steps[i].hop == Hop::Wormhole)?;
-    let at_departure = step == route.progress + 1;
-    let signature = match route.steps[step].sig.as_deref().filter(|s| !s.is_empty()) {
-        Some(letters) => Signature::Known(letters.to_owned()),
-        None if at_departure => Signature::CheckBookmarks,
-        None => return None,
+/// The next wormhole or filament of the route, but only while the pilot is in the system that the
+/// hop leaves (`here`). The overlay helps with a departure and with nothing else. With no known
+/// location, or in any other system, the result is `None`. A jump bridge has no text, because the
+/// autopilot or the pilot takes it with no help.
+pub fn content(route: &ActiveRoute, here: Option<u32>) -> Option<Content> {
+    let step = route.next_manual_hop()?;
+    let from = route.steps[step - 1].system;
+    if here != Some(from) {
+        return None;
+    }
+    let hop = &route.steps[step];
+    let action = match hop.hop {
+        Hop::Wormhole => match hop.sig.as_deref().filter(|s| !s.is_empty()) {
+            Some(letters) => Action::Signature(letters.to_owned()),
+            None => Action::CheckBookmarks,
+        },
+        Hop::Filament => Action::Filament(match hop.link {
+            Some(LinkView::Filament { clade, .. }) => Some(clade),
+            _ => None,
+        }),
+        _ => return None,
     };
-    Some(Content { from: route.steps[step - 1].system, to: route.steps[step].system, signature })
+    Some(Content { from, to: hop.system, action })
+}
+
+impl Content {
+    /// The two lines of the overlay: the text, and a muted line under it. `name` gives the name of a system.
+    pub fn lines(&self, name: impl Fn(u32) -> String) -> (String, String) {
+        let hop = format!("{} to {}", name(self.from), name(self.to));
+        match &self.action {
+            Action::Signature(letters) => (format!("Signature: {letters}"), hop),
+            Action::CheckBookmarks => ("Signature: Unknown.".into(), "Check bookmarks.".into()),
+            Action::Filament(Some(clade)) => (format!("Activate {} filament", clade.label()), hop),
+            Action::Filament(None) => ("Activate a filament".into(), hop),
+        }
+    }
 }
 
 /// What to show for the title of the foreground window. The result is `Some` only when the title
-/// is the title of a logged-in client, and the character of that client is the character of the route.
-pub fn content_for_title(title: &str, route: Option<&ActiveRoute>) -> Option<Content> {
+/// is the title of a logged-in client, the character of that client is the character of the route,
+/// and the pilot is in the system that the next manual hop leaves (`here`).
+pub fn content_for_title(title: &str, route: Option<&ActiveRoute>, here: Option<u32>) -> Option<Content> {
     let route = route?;
-    (parse_client_title(title)? == route.character_name).then(|| content(route)).flatten()
+    (parse_client_title(title)? == route.character_name).then(|| content(route, here)).flatten()
 }
 
 /// Where the overlay sits for a character: the own position of the character, else the global
@@ -94,64 +123,127 @@ mod tests {
         }
     }
 
-    #[test]
-    fn a_known_signature_shows_before_the_pilot_arrives() {
-        let r = route(&[(4, Hop::Wormhole, Some("ABC"))]);
-        assert_eq!(r.progress, 0);
-        assert_eq!(content(&r), Some(Content { from: 3, to: 4, signature: Signature::Known("ABC".into()) }));
+    /// The names that the label tests use.
+    fn name(id: u32) -> String {
+        format!("S{id}")
+    }
+
+    /// The text of the overlay for a route, with the pilot in system `here`.
+    fn lines(r: &ActiveRoute, here: u32) -> Option<(String, String)> {
+        content(r, Some(here)).map(|c| c.lines(name))
     }
 
     #[test]
-    fn an_unknown_signature_shows_only_at_the_departure_system() {
-        let mut r = route(&[(4, Hop::Wormhole, None)]);
-        assert_eq!(content(&r), None);
-        r.progress = 1;
-        assert_eq!(content(&r), None);
-        r.progress = 2;
-        assert_eq!(content(&r), Some(Content { from: 3, to: 4, signature: Signature::CheckBookmarks }));
+    fn a_known_signature_shows_in_the_departure_system() {
+        let r = route(&[(4, Hop::Wormhole, Some("ABC"))]);
+        assert_eq!(content(&r, Some(3)), Some(Content { from: 3, to: 4, action: Action::Signature("ABC".into()) }));
+        assert_eq!(lines(&r, 3), Some(("Signature: ABC".into(), "S3 to S4".into())));
+    }
+
+    #[test]
+    fn nothing_shows_outside_the_departure_system() {
+        let r = route(&[(4, Hop::Wormhole, Some("ABC"))]);
+        for here in [1, 2, 4, 5, 99] {
+            assert_eq!(content(&r, Some(here)), None, "system {here}");
+        }
+        assert_eq!(content(&r, None), None, "location not known");
+    }
+
+    #[test]
+    fn an_unknown_signature_says_to_check_the_bookmarks() {
+        let r = route(&[(4, Hop::Wormhole, None)]);
+        assert_eq!(content(&r, Some(3)), Some(Content { from: 3, to: 4, action: Action::CheckBookmarks }));
+        assert_eq!(lines(&r, 3), Some(("Signature: Unknown.".into(), "Check bookmarks.".into())));
+        assert_eq!(content(&r, Some(2)), None);
     }
 
     #[test]
     fn an_empty_signature_counts_as_unknown() {
-        let mut r = route(&[(4, Hop::Wormhole, Some(""))]);
-        r.progress = 2;
-        assert_eq!(content(&r).map(|c| c.signature), Some(Signature::CheckBookmarks));
+        let r = route(&[(4, Hop::Wormhole, Some(""))]);
+        assert_eq!(content(&r, Some(3)).map(|c| c.action), Some(Action::CheckBookmarks));
     }
 
     #[test]
     fn the_pilot_who_took_the_wormhole_sees_nothing() {
         let mut r = route(&[(4, Hop::Wormhole, Some("ABC"))]);
         r.progress = 3;
-        assert_eq!(content(&r), None);
+        assert_eq!(content(&r, Some(3)), None);
+        assert_eq!(content(&r, Some(4)), None);
     }
 
     #[test]
     fn a_route_with_gates_only_shows_nothing() {
-        assert_eq!(content(&route(&[])), None);
+        let r = route(&[]);
+        for here in 1..=5 {
+            assert_eq!(content(&r, Some(here)), None);
+        }
     }
 
     #[test]
-    fn a_filament_ahead_shows_nothing_even_with_a_wormhole_behind_it() {
+    fn a_jump_bridge_shows_nothing() {
+        let r = route(&[(3, Hop::Bridge, None)]);
+        for here in 1..=5 {
+            assert_eq!(content(&r, Some(here)), None);
+        }
+    }
+
+    #[test]
+    fn a_jump_bridge_does_not_hide_the_wormhole_behind_it() {
+        let r = route(&[(2, Hop::Bridge, None), (5, Hop::Wormhole, Some("XYZ"))]);
+        assert_eq!(content(&r, Some(4)), Some(Content { from: 4, to: 5, action: Action::Signature("XYZ".into()) }));
+        assert_eq!(content(&r, Some(1)), None);
+    }
+
+    /// A route with a filament that enters system 3.
+    fn filament_route(clade: Option<Clade>) -> ActiveRoute {
+        let mut r = route(&[(3, Hop::Filament, None)]);
+        r.steps[2].link = clade.map(|clade| LinkView::Filament { clade, expected_jumps: Some(4.0) });
+        r
+    }
+
+    #[test]
+    fn a_filament_shows_in_the_departure_system() {
+        let r = filament_route(Some(Clade::Perun));
+        assert_eq!(content(&r, Some(1)), None);
+        assert_eq!(content(&r, Some(2)), Some(Content { from: 2, to: 3, action: Action::Filament(Some(Clade::Perun)) }));
+    }
+
+    #[test]
+    fn a_filament_names_its_clade() {
+        let r = filament_route(Some(Clade::Svarog));
+        assert_eq!(lines(&r, 2), Some(("Activate Krai Svarog filament".into(), "S2 to S3".into())));
+    }
+
+    #[test]
+    fn a_filament_from_an_old_route_file_has_no_clade() {
+        let r = filament_route(None);
+        assert_eq!(lines(&r, 2), Some(("Activate a filament".into(), "S2 to S3".into())));
+    }
+
+    #[test]
+    fn a_filament_ahead_hides_the_wormhole_behind_it() {
         let r = route(&[(3, Hop::Filament, None), (5, Hop::Wormhole, Some("XYZ"))]);
-        assert_eq!(content(&r), None);
+        assert_eq!(content(&r, Some(4)), None);
     }
 
     #[test]
     fn the_next_wormhole_wins_over_a_later_one() {
         let mut r = route(&[(3, Hop::Wormhole, Some("AAA")), (5, Hop::Wormhole, Some("BBB"))]);
-        assert_eq!(content(&r).map(|c| c.signature), Some(Signature::Known("AAA".into())));
+        assert_eq!(content(&r, Some(2)).map(|c| c.action), Some(Action::Signature("AAA".into())));
+        assert_eq!(content(&r, Some(4)), None);
         r.progress = 2;
-        assert_eq!(content(&r), Some(Content { from: 4, to: 5, signature: Signature::Known("BBB".into()) }));
+        assert_eq!(content(&r, Some(4)), Some(Content { from: 4, to: 5, action: Action::Signature("BBB".into()) }));
     }
 
     #[test]
     fn only_the_client_of_the_route_character_shows_the_overlay() {
         let r = route(&[(4, Hop::Wormhole, Some("ABC"))]);
-        assert!(content_for_title("EVE - smrkn", Some(&r)).is_some());
-        assert_eq!(content_for_title("EVE - Alice", Some(&r)), None);
-        assert_eq!(content_for_title("EVE", Some(&r)), None);
-        assert_eq!(content_for_title("EVE Launcher", Some(&r)), None);
-        assert_eq!(content_for_title("EVE - smrkn", None), None);
+        assert!(content_for_title("EVE - smrkn", Some(&r), Some(3)).is_some());
+        assert_eq!(content_for_title("EVE - smrkn", Some(&r), Some(2)), None);
+        assert_eq!(content_for_title("EVE - Alice", Some(&r), Some(3)), None);
+        assert_eq!(content_for_title("EVE", Some(&r), Some(3)), None);
+        assert_eq!(content_for_title("EVE Launcher", Some(&r), Some(3)), None);
+        assert_eq!(content_for_title("EVE - smrkn", None, Some(3)), None);
     }
 
     #[test]

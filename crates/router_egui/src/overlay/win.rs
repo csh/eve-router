@@ -8,9 +8,10 @@ use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::Graphics::Gdi::{GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow};
 use windows::Win32::System::Threading::{OpenProcess, PROCESS_NAME_WIN32, PROCESS_QUERY_LIMITED_INFORMATION, QueryFullProcessImageNameW};
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_STYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW, GetWindowThreadProcessId,
+    FindWindowW, GWL_EXSTYLE, GWL_STYLE, GetForegroundWindow, GetWindowLongPtrW, GetWindowRect, GetWindowTextLengthW, GetWindowTextW,
+    GetWindowThreadProcessId, SetWindowLongPtrW, WS_EX_NOACTIVATE,
 };
-use windows::core::{Owned, PWSTR};
+use windows::core::{HSTRING, Owned, PCWSTR, PWSTR};
 
 /// The file name of the program of a game client. The folder differs between installs.
 const CLIENT_EXE: &str = "exefile.exe";
@@ -79,6 +80,24 @@ impl Foreground {
         unsafe { GetWindowThreadProcessId(self.0, Some(&raw mut id)) };
         (id != 0).then_some(id)
     }
+}
+
+/// Make the window with this title a window that never becomes the foreground window: a click on
+/// it does not move the focus from the game client. The window is one of this app. Returns `false`
+/// when no window has the title, or when Windows does not keep the new style.
+pub fn keep_focus_off(title: &str) -> bool {
+    // SAFETY: The call reads the title through a pointer that `HSTRING` keeps alive for the whole
+    // call. It gives an error when no window has the title.
+    let Ok(hwnd) = (unsafe { FindWindowW(PCWSTR::null(), &HSTRING::from(title)) }) else { return false };
+    // SAFETY: A window that is gone gives 0, and the call changes nothing.
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    let wanted = style | WS_EX_NOACTIVATE.0 as isize;
+    // SAFETY: The value is the old extended style with one more bit. A failed call gives 0, and
+    // the check below reads the style again, because 0 is also the old value of a window that had no style.
+    unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, wanted) };
+    // SAFETY: Same as the first read.
+    let kept = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) };
+    kept == wanted
 }
 
 /// The file name of the program of a process, for example `exefile.exe`.

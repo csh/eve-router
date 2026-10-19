@@ -148,12 +148,19 @@ pub fn paint_border(ctx: &Context, accent: Color32) {
     let rect = ctx.content_rect();
     painter.rect_stroke(rect, 0.0, Stroke::new(1.0, theme::WINDOW_BORDER), StrokeKind::Inside);
     if ctx.input(|i| i.viewport().focused).unwrap_or(true) {
-        let top = |y: f32| [Pos2::new(rect.left(), rect.top() + y), Pos2::new(rect.right(), rect.top() + y)];
-        painter.line_segment(top(0.5), Stroke::new(1.0, accent));
-        // egui has no blur, so two fading lines stand in for the glow.
-        painter.line_segment(top(2.0), Stroke::new(2.0, accent.gamma_multiply(0.25)));
-        painter.line_segment(top(4.0), Stroke::new(2.0, accent.gamma_multiply(0.10)));
+        paint_top_line(ctx, accent);
     }
+}
+
+/// Draw the lit line on the top edge of the window, with no other border. Call it last in the frame.
+pub fn paint_top_line(ctx: &Context, accent: Color32) {
+    let painter = ctx.layer_painter(LayerId::new(Order::Foreground, Id::new("window-top-line")));
+    let rect = ctx.content_rect();
+    let top = |y: f32| [Pos2::new(rect.left(), rect.top() + y), Pos2::new(rect.right(), rect.top() + y)];
+    painter.line_segment(top(0.5), Stroke::new(1.0, accent));
+    // egui has no blur, so two fading lines stand in for the glow.
+    painter.line_segment(top(2.0), Stroke::new(2.0, accent.gamma_multiply(0.25)));
+    painter.line_segment(top(4.0), Stroke::new(2.0, accent.gamma_multiply(0.10)));
 }
 
 /// Make the window of Windows 11 square, with no border of its own. The app draws its own

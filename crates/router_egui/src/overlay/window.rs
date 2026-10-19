@@ -1,9 +1,10 @@
-//! The overlay window: a small window above the game that shows the signature of the next
-//! wormhole of the active route.
+//! The overlay window: a small window above the game that helps with a departure. It shows what to
+//! do at the next wormhole or filament of the active route.
 //!
-//! The window exists while the overlay is on and the route has a wormhole ahead. It shows only
+//! The window exists while the overlay is on and the pilot is in the system that the next hop leaves.
+//! It shows only
 //! while the client of the route character has the focus. The window never takes the focus, and
-//! mouse clicks go through it, so the client keeps the focus and the title that the probe reads.
+//! a click on it does not take the focus, so the client keeps the focus and the title that the probe reads.
 //!
 //! The probe runs in `logic`. eframe calls `logic` also while the main window is minimized, and
 //! a command to show the overlay window then starts the pass that draws it. The window is drawn in `show`.
@@ -12,9 +13,9 @@ use super::win;
 use crate::app::Session;
 use crate::pilots_view::system_name;
 use crate::theme;
-use egui::{Context, Frame, Margin, Pos2, RichText, Stroke, ViewportBuilder, ViewportCommand, ViewportId, vec2};
+use egui::{Context, Frame, Margin, Pos2, RichText, TextStyle, ViewportBuilder, ViewportCommand, ViewportId, vec2};
 use router_core::config::Pos;
-use router_core::routing_overlay::{Content, Signature, content, content_for_title, resolve_position};
+use router_core::routing_overlay::{Content, content, content_for_title, resolve_position};
 use std::time::{Duration, Instant};
 
 /// The title of the window. It cannot match the title of a client, which starts with "EVE - ".
@@ -48,12 +49,17 @@ fn transition(want: bool, alive: bool, shown: bool) -> Option<bool> {
     }
 }
 
+/// The system of the route character, from the location that the tracker polls.
+fn here(s: &Session, route: &router_core::esi::active::ActiveRoute) -> Option<u32> {
+    s.pilots.live.get(&route.character).and_then(|live| live.system)
+}
+
 impl Overlay {
     /// Read the focused window, and show or hide the overlay window. With the overlay off, or with
-    /// no wormhole ahead, no call to Windows happens.
+    /// the pilot outside the departure system of the next manual hop, no call to Windows happens.
     pub fn logic(&mut self, ctx: &Context, s: &Session) {
         let config = &s.cfg.routing_overlay;
-        let route = s.pilots.active.as_ref().filter(|r| config.enabled && content(r).is_some());
+        let route = s.pilots.active.as_ref().filter(|r| config.enabled && content(r, here(s, r)).is_some());
         let Some(route) = route else {
             self.alive = false;
             self.last_poll = None;
@@ -66,14 +72,19 @@ impl Overlay {
         }
         self.last_poll = Some(Instant::now());
         // Read the title first. Ask for the program only when the title is the title of the route character.
+        let here = here(s, route);
         let want = win::foreground()
-            .is_some_and(|fg| fg.title().is_some_and(|title| content_for_title(&title, Some(route)).is_some()) && fg.is_eve_client());
+            .is_some_and(|fg| fg.title().is_some_and(|title| content_for_title(&title, Some(route), here).is_some()) && fg.is_eve_client());
         self.send(ctx, want, resolve_position(config, route.character));
     }
 
     fn send(&mut self, ctx: &Context, want: bool, position: Option<Pos>) {
         let Some(visible) = transition(want, self.alive, self.shown) else { return };
         if visible {
+            // Square corners, as the other windows of the app have. A click on the window must not
+            // take the focus from the client.
+            crate::chrome::square_window_titled(TITLE);
+            win::keep_focus_off(TITLE);
             let Pos { x, y } = position.unwrap_or(DEFAULT_POS);
             ctx.send_viewport_cmd_to(viewport_id(), ViewportCommand::OuterPosition(Pos2::new(x as f32, y as f32)));
         }
@@ -81,24 +92,25 @@ impl Overlay {
         self.shown = visible;
     }
 
-    /// Draw the window, while the overlay is on and the route has a wormhole ahead. The window
-    /// starts hidden. `logic` shows it.
+    /// Draw the window, while the overlay is on and the pilot is in the system that the next
+    /// wormhole or filament leaves. The window starts hidden. `logic` shows it.
     pub fn show(&mut self, ctx: &Context, s: &Session) {
         let config = &s.cfg.routing_overlay;
         let Some(route) = s.pilots.active.as_ref().filter(|_| config.enabled) else { return };
-        let Some(content) = content(route) else { return };
+        let Some(content) = content(route, here(s, route)) else { return };
         let Pos { x, y } = resolve_position(config, route.character).unwrap_or(DEFAULT_POS);
         let builder = ViewportBuilder::default()
             .with_title(TITLE)
-            .with_inner_size([260.0, 64.0])
+            .with_inner_size([260.0, 58.0])
             .with_position(Pos2::new(x as f32, y as f32))
             .with_decorations(false)
             .with_resizable(false)
             .with_always_on_top()
             .with_taskbar(false)
-            // The client keeps the focus: the window does not activate, and clicks go through it.
+            // The client keeps the focus: the window does not activate when it shows.
             .with_active(false)
-            .with_mouse_passthrough(true)
+            // No click-through and no transparency: both make Windows treat the window as a layered
+            // window, and the window then draws nothing. `keep_focus_off` keeps the focus on the client.
             .with_visible(false);
         ctx.show_viewport_immediate(viewport_id(), builder, |ui, _class| draw(ui, s, &content));
         self.alive = true;
@@ -106,19 +118,16 @@ impl Overlay {
 }
 
 fn draw(ui: &mut egui::Ui, s: &Session, content: &Content) {
-    let frame = Frame::new().fill(theme::BG).stroke(Stroke::new(1.0, theme::accent(ui))).inner_margin(Margin::symmetric(12, 8));
-    egui::CentralPanel::default().frame(frame).show(ui, |ui| {
-        ui.vertical_centered(|ui| {
-            let line = match &content.signature {
-                Signature::Known(letters) => RichText::new(letters).monospace().size(22.0).strong().color(theme::accent(ui)),
-                Signature::CheckBookmarks => RichText::new("Check bookmarks").size(20.0).strong().color(theme::WARN),
-            };
-            ui.label(line);
-            ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
-            let route = format!("{} to {}", system_name(s, content.from), system_name(s, content.to));
-            ui.label(RichText::new(route).size(12.0).color(theme::TEXT_DIM));
-        });
+    // The window is the box: the dark fill of the app, the lit line of the main window on its top
+    // edge, and the text styles of the app. The window never has the focus, so the line is always lit.
+    let (title, detail) = content.lines(|id| system_name(s, id));
+    let panel = Frame::new().fill(theme::BG).inner_margin(Margin { left: 12, right: 12, top: 10, bottom: 8 });
+    egui::CentralPanel::default().frame(panel).show(ui, |ui| {
+        ui.spacing_mut().item_spacing = vec2(0.0, 2.0);
+        ui.label(RichText::new(title).text_style(TextStyle::Heading).color(theme::accent(ui)));
+        ui.label(RichText::new(detail).color(theme::TEXT_DIM));
     });
+    crate::chrome::paint_top_line(ui.ctx(), theme::accent(ui));
 }
 
 #[cfg(test)]
