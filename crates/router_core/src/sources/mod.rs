@@ -213,15 +213,36 @@ pub struct Chosen {
     pub error: Option<FetchError>,
 }
 
+/// Run a fetch of `source` on a new thread. The span `fetch` covers the work, so its close line
+/// gives the time of the network calls. The thread logs to the subscriber of the caller, as the
+/// caller would, and the span has the caller's span as its parent.
+pub(crate) fn spawn_fetch<T: Send + 'static>(source: SourceId, work: impl FnOnce() -> T + Send + 'static) -> std::thread::JoinHandle<T> {
+    let span = tracing::info_span!("fetch", source = %source.label());
+    let dispatch = tracing::dispatcher::get_default(tracing::Dispatch::clone);
+    std::thread::spawn(move || tracing::dispatcher::with_default(&dispatch, || span.in_scope(work)))
+}
+
+/// Log that a fresh cache replaces the request.
+pub(crate) fn log_cache_fresh(data: &SourceData) {
+    tracing::info!(
+        source = %data.source.label(),
+        holes = data.holes.len(),
+        fetched_at = data.fetched_at,
+        "cache is fresh, so no request goes out"
+    );
+}
+
 /// Choose between a fetch result and the cache. A success writes the cache.
 /// A failure uses the cache. A failed fetch never stops the router.
 pub fn choose(source: SourceId, fetched: Result<SourceData, FetchError>, cache: Option<SourceData>, cache_path: &Path) -> Chosen {
     match fetched {
         Ok(data) => {
+            tracing::info!(source = %source.label(), holes = data.holes.len(), "wormhole data fetched");
             let warning = write_cache(cache_path, &data).err().map(|e| OverlayWarning::CacheWrite(e.to_string()));
             Chosen { data: Some(data), warning, error: None }
         }
         Err(e) => {
+            tracing::warn!(source = %source.label(), cause = %e.message(source), cache_in_use = cache.is_some(), "wormhole fetch failed");
             let warning = Some(OverlayWarning::Fetch { source, error: e.clone(), cached_at: cache.as_ref().map(|c| c.fetched_at) });
             Chosen { data: cache, warning, error: Some(e) }
         }

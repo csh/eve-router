@@ -388,12 +388,18 @@ impl<A: Api, W: Fn()> Worker<A, W> {
                 let until = now + retry_after.unwrap_or(RETRY);
                 self.blocked_until = Some(until);
                 if !self.slow {
+                    tracing::warn!(
+                        retry_after_secs = retry_after.map(|wait| wait.as_secs()),
+                        "ESI limits the router, so the polls slow down"
+                    );
                     self.slow = true;
                     self.emit(Event::Limited(true));
                 }
                 until
             }
             EsiError::Offline(_) | EsiError::Status(_) => {
+                // A lost connection repeats at each poll, so only the debug log shows it.
+                tracing::debug!(character = id, error = %error, "ESI call failed");
                 self.emit(Event::Error { id, text: error.to_string() });
                 now + RETRY
             }
@@ -404,6 +410,9 @@ impl<A: Api, W: Fn()> Worker<A, W> {
     fn budget(&mut self, errors_left: Option<u32>) {
         let Some(left) = errors_left else { return };
         let slow = left < SLOW_BELOW;
+        if slow && !self.slow {
+            tracing::warn!(errors_left = left, "the ESI error budget is low, so the polls slow down");
+        }
         if slow != self.slow {
             self.slow = slow;
             self.emit(Event::Limited(slow));
@@ -428,7 +437,8 @@ impl<A: Api, W: Fn()> Worker<A, W> {
                 self.emit(Event::Refreshed(tokens));
                 Some(token)
             }
-            Err(LoginError::Rejected(_) | LoginError::BadToken(_)) => {
+            Err(e @ (LoginError::Rejected(_) | LoginError::BadToken(_))) => {
+                tracing::warn!(character = id, error = %e, "login refused, tracking paused");
                 if let Some(pilot) = self.pilots.get_mut(&id) {
                     pilot.paused = true;
                     pilot.access = None;
@@ -437,7 +447,8 @@ impl<A: Api, W: Fn()> Worker<A, W> {
                 None
             }
             Err(e) => {
-                // SSO is offline. Try again after `RETRY`.
+                // SSO is offline. Try again after `RETRY`. This repeats, so only the debug log shows it.
+                tracing::debug!(character = id, error = %e, "cannot refresh the access token");
                 let retry = Instant::now() + RETRY;
                 if let Some(pilot) = self.pilots.get_mut(&id) {
                     pilot.next_location = pilot.next_location.max(retry);

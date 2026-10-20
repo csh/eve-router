@@ -111,8 +111,12 @@ impl Status {
 
 pub const REFRESH_STOPPED: &str = "The refresh worker stopped";
 
-/// The error when the load thread stops without a result. A panic in the load does this.
-const LOAD_STOPPED: &str = "The startup load stopped with an internal error. Start the router from a terminal to see the cause.";
+/// The error when the load thread stops without a result. A panic in the load does this. The panic
+/// hook writes the cause to the log file.
+fn load_stopped() -> String {
+    let folder = crate::logging::log_dir(&AppPaths::detect());
+    format!("The startup load stopped with an internal error. The log in {} has the cause.", folder.display())
+}
 
 impl RouterApp {
     /// Set the theme and start the load. `ctx` gets a repaint request when the load ends.
@@ -137,7 +141,7 @@ impl RouterApp {
                 Ok(LoadMsg::UpdatePrompt(prompt)) => loading.prompt = Some(prompt),
                 Ok(LoadMsg::Done(result)) => break *result,
                 Err(TryRecvError::Empty) => return,
-                Err(TryRecvError::Disconnected) => break Err(LOAD_STOPPED.into()),
+                Err(TryRecvError::Disconnected) => break Err(load_stopped()),
             }
         };
         self.state = match result {
@@ -298,6 +302,8 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
         session.notify(Level::Info, line);
     }
     for line in warnings {
+        // The log keeps what the notice shows for a few seconds: a damaged config, a failed update, a dropped name.
+        tracing::warn!("{line}");
         session.notify(Level::Warning, line);
     }
     // A tracker event or a login result repaints the window.
@@ -551,6 +557,7 @@ impl Session {
         pairs.sort_by_cached_key(|&(a, b)| (self.uni.name(a).to_lowercase(), self.uni.name(b).to_lowercase()));
         let path = self.cfg_path.with_file_name(router_core::config::BRIDGES_FILE);
         if let Err(e) = overlay::save_bridges(&path, &self.uni, &pairs) {
+            tracing::error!(error = %e, "cannot save the jump bridges");
             self.notify(Level::Error, e.to_string());
             return;
         }
@@ -585,11 +592,15 @@ impl Session {
     }
 
     /// Find the favourite distances and the routes for the waypoints.
+    #[tracing::instrument(level = "info", skip_all, fields(waypoints = self.waypoints.len()))]
     fn search(&mut self) {
         let Some(&origin) = self.waypoints.first() else {
             self.hubs.clear();
             return;
         };
+        // The pool runs the two searches on other threads. Each thread enters the span of this
+        // search first, so the spans of the engine nest in it.
+        let search = tracing::Span::current();
         let started = Instant::now();
         self.now = (self.clock)();
         let router = self.settings.router(&self.uni, self.now);
@@ -597,11 +608,13 @@ impl Session {
         let settings = &self.settings;
         // The favourite search and the route search are independent, so they run at the same time.
         let (hubs, routes) = rayon::join(
-            || router.jumps_to(origin, &settings.favourites),
+            || search.in_scope(|| router.jumps_to(origin, &settings.favourites)),
             || {
-                (nodes.len() >= 2).then(|| {
-                    let order = settings.order(&router, nodes)?;
-                    router.routes(&order, settings.top)
+                search.in_scope(|| {
+                    (nodes.len() >= 2).then(|| {
+                        let order = settings.order(&router, nodes)?;
+                        router.routes(&order, settings.top)
+                    })
                 })
             },
         );
@@ -612,6 +625,7 @@ impl Session {
             Some(Ok(routes)) => self.routes = routes,
             Some(Err(e)) => self.notify(Level::Error, self.settings.explain(&e)),
         }
+        tracing::info!(routes = self.routes.len(), "route search done");
     }
 
     /// Swap in a new map from the refresh worker. Search again with the waypoints. Keep the
@@ -879,7 +893,11 @@ impl Session {
     /// Copy the settings to the config, and write the config file.
     fn write_config(&mut self) -> Result<(), FileError> {
         self.settings.store(&self.uni, &mut self.cfg);
-        self.cfg.save(&self.cfg_path)
+        let result = self.cfg.save(&self.cfg_path);
+        if let Err(e) = &result {
+            tracing::error!(error = %e, "cannot save the config");
+        }
+        result
     }
 }
 
@@ -1425,7 +1443,7 @@ mod tests {
         let mut app = RouterApp { state: State::Loading(Loading { rx, step: None, prompt: None }) };
         app.poll(&egui::Context::default());
         let State::Failed(text) = &app.state else { panic!("the state is not Failed") };
-        assert_eq!(text, LOAD_STOPPED);
+        assert_eq!(text, &load_stopped());
     }
 
     #[test]

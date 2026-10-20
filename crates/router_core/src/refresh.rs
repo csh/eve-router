@@ -55,6 +55,7 @@ pub fn build(
 }
 
 /// As `build`, but the map leaves out the holes in `closed`. See `wormhole::apply_closed`.
+#[tracing::instrument(level = "info", skip_all)]
 pub fn build_closed(
     base: &Universe,
     report: &OverlayReport,
@@ -68,6 +69,13 @@ pub fn build_closed(
     let all: Vec<SourceData> = wh.data.iter().chain(&scout.data).chain(&metro.data).cloned().collect();
     let holes = wormhole::apply_closed(wormhole::merge(&all, now), &mut closed);
     let count = uni.add_wormholes(&holes);
+    tracing::info!(
+        sources = all.len(),
+        holes_in = all.iter().map(|data| data.holes.len()).sum::<usize>(),
+        wormholes = count,
+        closed = closed.len(),
+        "map rebuilt"
+    );
     let shortcuts = Shortcuts::new(&uni, report, wh, scout, metro);
     let log = wh.log.iter().chain(&scout.log).chain(&metro.log).cloned().collect();
     (Snapshot { uni: Arc::new(uni), shortcuts, all, log, closed }, count)
@@ -357,6 +365,7 @@ impl Worker {
     }
 
     /// One refresh at `now`. `force` skips the fresh-cache check of both sources.
+    #[tracing::instrument(level = "info", skip_all, fields(force = force))]
     fn tick(&mut self, now: u64, force: bool) -> Snapshot {
         let s = &self.setup;
         let pending = if force {

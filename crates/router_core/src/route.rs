@@ -261,6 +261,7 @@ impl Bans {
 impl<'a> Router<'a> {
     /// Calculate the node costs and the edge permissions one time, in parallel.
     /// Each search then reads them instead of calculating them again.
+    #[tracing::instrument(level = "info", skip_all, fields(mode = ?options.mode, wormholes = options.wormholes, bridges = options.bridges, pochven = options.pochven))]
     pub fn new(uni: &'a Universe, options: RouterOptions) -> Self {
         let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, unknown_sig_penalty, pochven, now } = options;
         let graph = &uni.graph;
@@ -400,6 +401,7 @@ impl<'a> Router<'a> {
     }
 
     /// The `k` cheapest loopless paths, with Yen's algorithm.
+    #[tracing::instrument(level = "debug", skip_all, fields(from = %self.uni.name(from), to = %self.uni.name(to), k = k))]
     pub fn k_shortest(&self, from: NodeIndex, to: NodeIndex, k: usize) -> Vec<Path> {
         let node_count = self.uni.graph.node_count();
         let Some(first) = self.shortest(from, to, &Bans::new(node_count)) else {
@@ -470,6 +472,7 @@ impl<'a> Router<'a> {
     /// shows choices and not detours. A search that finds a choice makes the links of the paths
     /// found before it dearer. If fewer than `n` choices exist, the cheapest other paths fill the
     /// list, so it is never shorter than the `n` cheapest paths.
+    #[tracing::instrument(level = "debug", skip_all, fields(from = %self.uni.name(from), to = %self.uni.name(to), n = n))]
     pub fn alternatives(&self, from: NodeIndex, to: NodeIndex, n: usize) -> Vec<Path> {
         let cheapest = self.k_shortest(from, to, n);
         // Yen's algorithm finds every loopless path, so a short list has no other path to offer.
@@ -510,14 +513,20 @@ impl<'a> Router<'a> {
     }
 
     /// The `n` cheapest routes through all waypoints, in order.
+    #[tracing::instrument(level = "info", skip_all, fields(waypoints = waypoints.len(), n = n))]
     pub fn routes(&self, waypoints: &[NodeIndex], n: usize) -> Result<Vec<Route>, RouteError> {
         if waypoints.len() < 2 {
             return Err(RouteError::TooFewSystems);
         }
-        let legs: Vec<Vec<Path>> = waypoints.par_windows(2).map(|w| self.alternatives(w[0], w[1], n)).collect();
+        // The legs run on the threads of the pool. A span made there has no parent unless the
+        // thread enters the span of this search first.
+        let search = tracing::Span::current();
+        let legs: Vec<Vec<Path>> = waypoints.par_windows(2).map(|w| search.in_scope(|| self.alternatives(w[0], w[1], n))).collect();
         for (w, leg) in waypoints.windows(2).zip(&legs) {
             if leg.is_empty() {
-                return Err(RouteError::NoRoute { from: self.uni.name(w[0]).to_string(), to: self.uni.name(w[1]).to_string() });
+                let (from, to) = (self.uni.name(w[0]), self.uni.name(w[1]));
+                tracing::debug!(from, to, "no route between two waypoints");
+                return Err(RouteError::NoRoute { from: from.to_string(), to: to.to_string() });
             }
         }
 
@@ -554,12 +563,14 @@ impl<'a> Router<'a> {
                 }
             }
         }
+        tracing::info!(found = routes.len(), best_jumps = routes.first().map(|best| best.jumps), "routes found");
         Ok(routes)
     }
 
     /// The waypoints in the cheapest order, as a classic TSP. Each system gets one visit: a repeated
     /// midpoint merges, and a midpoint equal to the start or the destination drops out. The start and
     /// the destination stay in place. A tie keeps the given order.
+    #[tracing::instrument(level = "info", skip_all, fields(waypoints = waypoints.len()))]
     pub fn optimize(&self, waypoints: &[NodeIndex]) -> Result<Vec<NodeIndex>, RouteError> {
         let [from, inner @ .., to] = waypoints else {
             return Ok(waypoints.to_vec());
@@ -580,6 +591,7 @@ impl<'a> Router<'a> {
     }
 
     /// The cheapest order of `free` on a route from `from` to `to`, with Held-Karp.
+    #[tracing::instrument(level = "debug", skip_all, fields(midpoints = free.len()))]
     fn best_order(&self, from: NodeIndex, free: &[NodeIndex], to: NodeIndex) -> Vec<NodeIndex> {
         // Node 0 is `from`, nodes 1..=m are the midpoints, and node m + 1 is `to`.
         let m = free.len();
@@ -697,6 +709,7 @@ impl<'a> Router<'a> {
 
     /// The jump count from `origin` to each target, on the cheapest route in the current mode.
     /// One search covers all targets.
+    #[tracing::instrument(level = "debug", skip_all, fields(origin = %self.uni.name(origin), targets = targets.len()))]
     pub fn jumps_to(&self, origin: NodeIndex, targets: &[NodeIndex]) -> Vec<(NodeIndex, Option<u64>)> {
         let graph = &self.uni.graph;
         // The best (cost, jumps) for each node. A tie in cost keeps the lower jump count.

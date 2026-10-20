@@ -70,7 +70,10 @@ pub fn ensure(dir: &Path, skip: bool, on_bytes: OnBytes) -> Result<Outcome, SdeE
         Ok(build) => build,
         Err(error) => {
             return match local {
-                Some(local) => Ok(Outcome::Offline { local, error }),
+                Some(local) => {
+                    tracing::warn!(local_build = local, error = %error, "cannot check for a new SDE, so the local copy stays");
+                    Ok(Outcome::Offline { local, error })
+                }
                 None => Err(SdeError::Download { dir: dir.to_path_buf(), source: Box::new(error) }),
             };
         }

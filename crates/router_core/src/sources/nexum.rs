@@ -466,7 +466,15 @@ fn fetch_all(cfg: &NexumConfig) -> Result<Fetched, FetchError> {
     ids.dedup();
     for id in &ids {
         let map = parse_map(&fetch_map(cfg, id, sources::TIMEOUT)?).map_err(|e| FetchError::Offline(format!("Nexum map: {e}")))?;
-        let (sigs, failed) = fetch_sigs(cfg, id, &sig_systems(&map), sources::TIMEOUT);
+        let wanted = sig_systems(&map);
+        let (sigs, failed) = fetch_sigs(cfg, id, &wanted, sources::TIMEOUT);
+        tracing::info!(
+            systems = map.systems.len(),
+            connections = map.connections.len(),
+            signature_systems = wanted.len(),
+            signature_failures = failed,
+            "Nexum map fetched"
+        );
         sig_failures += failed;
         maps.push((map, sigs));
     }
@@ -523,7 +531,7 @@ fn start_with(cfg: &NexumConfig, cache_path: PathBuf, now: u64, use_fresh: bool)
     }
     let skip_unsigned = !cfg.keep_unsigned;
     let cfg = cfg.clone();
-    let thread = std::thread::spawn(move || fetch_all(&cfg));
+    let thread = sources::spawn_fetch(SourceId::Nexum, move || fetch_all(&cfg));
     Pending::Fetch { thread, started: now, origin, cache, cache_path, skip_unsigned }
 }
 
@@ -532,6 +540,7 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
     match pending {
         Pending::None => Load::default(),
         Pending::Cache(data) => {
+            sources::log_cache_fresh(&data);
             let log = vec![LogEntry {
                 time: crate::wormhole::now(),
                 op: LogOp::NexumFetch,
@@ -546,12 +555,22 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
             let mut sig_failures = 0;
             let converted = fetched.map(|f| {
                 let (mut data, r) = convert_all(&f, &known, types, started, skip_unsigned);
+                tracing::info!(
+                    maps = f.maps.len(),
+                    holes = data.holes.len(),
+                    skipped = r.skipped(),
+                    unknown_systems = r.unknown.len(),
+                    "Nexum maps converted"
+                );
                 data.origin = origin;
                 report = r;
                 sig_failures = f.sig_failures;
                 data
             });
             let chosen = sources::choose(SourceId::Nexum, converted, cache, &cache_path);
+            if sig_failures > 0 {
+                tracing::warn!(systems = sig_failures, "Nexum did not give the signatures of some systems");
+            }
             let sig_warning = (sig_failures > 0).then_some(OverlayWarning::NexumSignatures { failed: sig_failures });
             let warnings: Vec<OverlayWarning> = chosen.warning.into_iter().chain(sig_warning).collect();
             let row = |op, kind, message: String| LogEntry { time: started, op, kind, message };

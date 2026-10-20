@@ -153,7 +153,7 @@ fn start_with(url: &str, cache_path: PathBuf, now: u64, use_fresh: bool) -> Pend
         return Pending::Cache(data.clone());
     }
     let thread_url = origin.clone();
-    let thread = std::thread::spawn(move || sources::get(&thread_url, None, sources::TIMEOUT));
+    let thread = sources::spawn_fetch(SourceId::EveScout, move || sources::get(&thread_url, None, sources::TIMEOUT));
     Pending::Fetch { thread, started: now, origin, cache, cache_path }
 }
 
@@ -161,6 +161,7 @@ fn start_with(url: &str, cache_path: PathBuf, now: u64, use_fresh: bool) -> Pend
 pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTypes) -> Load {
     match pending {
         Pending::Cache(data) => {
+            sources::log_cache_fresh(&data);
             let log = vec![LogEntry {
                 time: crate::wormhole::now(),
                 op: LogOp::EveScoutFetch,

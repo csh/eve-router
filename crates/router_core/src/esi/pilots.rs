@@ -348,12 +348,17 @@ impl Pilots {
         self.live.remove(&id);
         let Some(accounts) = &mut self.accounts else { return };
         if let (Ok(Some(refresh)), Some(client_id)) = (accounts.refresh_token(id), self.client_id.clone()) {
-            std::thread::spawn(move || {
-                let _ = Sso::new(&client_id).revoke(&refresh);
+            std::thread::spawn(move || match Sso::new(&client_id).revoke(&refresh) {
+                Ok(()) => tracing::info!(character = id, "refresh token revoked at SSO"),
+                Err(e) => tracing::warn!(character = id, error = %e, "cannot revoke the refresh token at SSO"),
             });
         }
-        if let Err(e) = accounts.remove(id) {
-            self.notices.push(e.to_string());
+        match accounts.remove(id) {
+            Ok(()) => tracing::info!(character = id, "character removed"),
+            Err(e) => {
+                tracing::warn!(character = id, error = %e, "cannot remove the character from the store");
+                self.notices.push(e.to_string());
+            }
         }
     }
 
@@ -526,6 +531,7 @@ impl Pilots {
         }
         if !self.tracker_stopped && self.tracker.as_ref().is_some_and(Tracker::stopped) {
             self.tracker_stopped = true;
+            tracing::error!("pilot tracking stopped, probably after a panic of the tracker thread");
             self.notices.push(Self::TRACKER_STOPPED.into());
             changed = true;
         }
@@ -539,13 +545,19 @@ impl Pilots {
             flow.exchange = None;
             match result {
                 Ok(tokens) => self.logged_in(tokens),
-                Err(e) => flow.error = Some(e),
+                Err(e) => {
+                    tracing::warn!(error = %e, "the login failed at the code exchange");
+                    flow.error = Some(e);
+                }
             }
             return true;
         }
         match flow.login.poll() {
             Some(Ok(code)) => self.exchange(code),
-            Some(Err(e)) => flow.error = Some(e),
+            Some(Err(e)) => {
+                tracing::warn!(error = %e, "the login failed at the callback");
+                flow.error = Some(e);
+            }
             None => return false,
         }
         true
@@ -559,6 +571,8 @@ impl Pilots {
             self.notices.push(e.to_string());
             return;
         }
+        // The log holds the character ID and no name, so a log file in a bug report names nobody.
+        tracing::info!(character = id, scopes = tokens.character.scopes.len(), "character logged in");
         let live = self.live.entry(id).or_default();
         live.expired = false;
         if let Some(tracker) = &self.tracker {
@@ -735,6 +749,21 @@ mod tests {
         let mut accounts = Accounts::with_store(None, Box::new(MemoryStore::default())).unwrap();
         accounts.store(&tokens(1, "Alice")).unwrap();
         (pilots_with(accounts, fake.clone(), tmp.path().join("active-route.json")), tmp)
+    }
+
+    #[test]
+    fn a_login_adds_the_character_and_a_removal_drops_it() {
+        let tmp = tempfile::tempdir().unwrap();
+        let accounts = Accounts::with_store(None, Box::new(MemoryStore::default())).unwrap();
+        // No client ID, so `remove` starts no revoke call to the network.
+        let mut p = Pilots::with_parts(Some(accounts), None, None, tmp.path().join("active-route.json"), Arc::new(|| {}));
+        let mut login = tokens(7, "Secret Name");
+        login.refresh = RefreshToken::new("refresh-secret".into());
+        login.access = AccessToken::new("access-secret".into());
+        p.logged_in(login);
+        assert_eq!(p.accounts.as_ref().unwrap().characters.len(), 1);
+        p.remove(7);
+        assert!(p.accounts.as_ref().unwrap().characters.is_empty());
     }
 
     #[test]

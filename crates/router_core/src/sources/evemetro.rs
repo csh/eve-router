@@ -247,7 +247,7 @@ fn start_with(cfg: &EveMetroConfig, base: &str, esi: &str, cache_path: PathBuf, 
         return Pending::Cache(data.clone());
     }
     let (base, esi, key) = (base.to_string(), Esi::new(esi), key.to_string());
-    let thread = std::thread::spawn(move || fetch(&base, &esi, &key, character, sources::TIMEOUT));
+    let thread = sources::spawn_fetch(SourceId::EveMetro, move || fetch(&base, &esi, &key, character, sources::TIMEOUT));
     Pending::Fetch { thread, started: now, origin, cache, cache_path }
 }
 
@@ -256,6 +256,7 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
     match pending {
         Pending::None => Load::default(),
         Pending::Cache(data) => {
+            sources::log_cache_fresh(&data);
             let log = vec![LogEntry {
                 time: crate::wormhole::now(),
                 op: LogOp::EveMetroFetch,
@@ -278,6 +279,7 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
             // replace a good cache with nothing, so it is treated like a fetch failure for the
             // cache: the cache stays as it was, with its own warning and log row.
             if report.no_access {
+                tracing::warn!(cache_in_use = cache.is_some(), "EVE Metro reports no access for the linked character");
                 let warnings = vec![OverlayWarning::MetroNoAccess];
                 let log =
                     vec![LogEntry { time: started, op: LogOp::EveMetroFetch, kind: LogEntryKind::NoAccess, message: "no access".into() }];

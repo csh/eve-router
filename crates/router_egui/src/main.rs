@@ -7,6 +7,7 @@ mod app;
 mod app_update;
 mod chrome;
 mod log_window;
+mod logging;
 mod notice;
 mod overlay;
 mod pilots_view;
@@ -26,6 +27,8 @@ use app::RouterApp;
 static GLOBAL: mimalloc::MiMalloc = mimalloc::MiMalloc;
 
 fn main() -> eframe::Result {
+    // Keep the value until the program ends. Its drop flushes the log file.
+    let _log = logging::init(&router_core::config::AppPaths::detect());
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
             .with_title("EVE Router")

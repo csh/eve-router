@@ -187,6 +187,7 @@ pub struct Universe {
 }
 
 impl Universe {
+    #[tracing::instrument(level = "info", skip_all, fields(systems = data.systems.len(), stargates = data.stargates.len()))]
     pub fn from_sde(data: SdeData) -> Self {
         let regions: HashMap<u32, String> = data.regions.into_iter().map(|r| (r.id, r.name.en)).collect();
         let mut graph = DiGraph::with_capacity(data.systems.len(), data.stargates.len());
@@ -308,6 +309,7 @@ impl Universe {
 
     /// Add wormhole edges in both directions. This is the only place that adds them.
     /// Call it after the stargates and the bridge list. Return the count of wormholes added.
+    #[tracing::instrument(level = "debug", skip_all, fields(holes = holes.len()))]
     pub fn add_wormholes(&mut self, holes: &[Wormhole]) -> usize {
         let mut added = 0;
         for w in holes {
@@ -318,6 +320,7 @@ impl Universe {
             self.graph.add_edge(b, a, Link::Wormhole(w.clone()));
             added += 1;
         }
+        tracing::debug!(added, "wormholes added");
         added
     }
 
