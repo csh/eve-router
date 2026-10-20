@@ -1,7 +1,7 @@
 //! Jump bridges from an SMT list. A bridge works in both directions, so the router keeps one
 //! pair of systems for each bridge and adds the two edges itself.
 
-use crate::error::FileError;
+use crate::error::{FileError, write_atomic};
 use crate::universe::{Link, Universe};
 use petgraph::graph::NodeIndex;
 use std::collections::HashSet;
@@ -103,15 +103,38 @@ pub fn bridge_text(uni: &Universe, pairs: &[Pair]) -> String {
     text
 }
 
-/// Write `pairs` to the bridge file.
+/// Write `pairs` to the bridge file, through a temporary file and a rename. A crash during the
+/// write leaves the old list whole.
 pub fn save_bridges(path: &Path, uni: &Universe, pairs: &[Pair]) -> Result<(), FileError> {
-    fs::write(path, bridge_text(uni, pairs)).map_err(FileError::io(path))
+    write_atomic(path, &path.with_extension("txt.part"), &bridge_text(uni, pairs))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::test_support::{fixture, sde_dir, universe};
+
+    #[test]
+    fn save_bridges_failure_keeps_the_old_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ansiblex.txt");
+        fs::write(&path, "old\n").unwrap();
+        // A directory blocks the temporary file.
+        fs::create_dir(path.with_extension("txt.part")).unwrap();
+        assert!(save_bridges(&path, universe(), &[]).is_err());
+        assert_eq!(fs::read_to_string(&path).unwrap(), "old\n");
+    }
+
+    #[test]
+    fn save_bridges_writes_the_list_and_leaves_no_part_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("ansiblex.txt");
+        let uni = universe();
+        let pair = ordered(uni, uni.exact("Jita").unwrap(), uni.exact("Amarr").unwrap());
+        save_bridges(&path, uni, &[pair]).unwrap();
+        assert_eq!(fs::read_to_string(&path).unwrap(), bridge_text(uni, &[pair]));
+        assert!(!path.with_extension("txt.part").exists());
+    }
 
     #[test]
     fn smt_list_parses() {

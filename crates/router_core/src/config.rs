@@ -1,6 +1,6 @@
 //! The `eve-router.json` file.
 
-use crate::error::FileError;
+use crate::error::{FileError, write_atomic_with};
 use crate::route::{Mode, RouteError};
 use crate::wormhole::Hubs;
 use crate::wormhole::SourceId;
@@ -410,25 +410,29 @@ impl Config {
         }
     }
 
-    /// Write the file. Create its directory first if necessary.
+    /// As `load`, and a file that is not valid JSON moves to `eve-router.json.bad`. The result is
+    /// the default config and the new path of the file. An I/O error is not a damaged file, because
+    /// a lock or a permission can cause it. Such an error passes through, and the file stays.
+    pub fn load_recovering(path: &Path) -> Result<(Config, Option<PathBuf>), FileError> {
+        match Config::load(path) {
+            Err(error @ FileError::Json { .. }) => {
+                let bad = path.with_extension("json.bad");
+                match fs::rename(path, &bad) {
+                    Ok(()) => Ok((Config::default(), Some(bad))),
+                    Err(_) => Err(error),
+                }
+            }
+            other => other.map(|cfg| (cfg, None)),
+        }
+    }
+
+    /// Write the file through a temporary file and a rename, so a crash never leaves half a file.
+    /// Create its directory first if necessary. The file holds the Nexum and EVE Metro keys, so only
+    /// the owner can read it on Unix. The temporary file gets that mode before it holds a key.
     pub fn save(&self, path: &Path) -> Result<(), FileError> {
-        if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
-            fs::create_dir_all(dir).map_err(FileError::io(dir))?;
-        }
         let text = serde_json::to_string_pretty(self).map_err(FileError::json(path))?;
-        // The file holds the Nexum and EVE Metro keys, so only the owner can read it. The file gets its
-        // mode before the router writes a key. No other user can read a key at any time.
-        #[cfg(unix)]
-        if self.nexum.key.is_some() || self.eve_metro.key.is_some() {
-            use std::io::Write;
-            use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
-            let mut file =
-                fs::OpenOptions::new().write(true).create(true).truncate(true).mode(0o600).open(path).map_err(FileError::io(path))?;
-            // The mode above applies only to a new file. This call fixes an old file.
-            file.set_permissions(fs::Permissions::from_mode(0o600)).map_err(FileError::io(path))?;
-            return file.write_all((text + "\n").as_bytes()).map_err(FileError::io(path));
-        }
-        fs::write(path, text + "\n").map_err(FileError::io(path))
+        let private = self.nexum.key.is_some() || self.eve_metro.key.is_some();
+        write_atomic_with(path, &path.with_extension("json.part"), &(text + "\n"), private)
     }
 }
 
@@ -664,6 +668,61 @@ mod tests {
         let error = Config::load(&path).unwrap_err();
         assert!(matches!(error, FileError::Json { .. }), "{error:?}");
         assert!(error.to_string().starts_with(&path.display().to_string()), "{error}");
+    }
+
+    #[test]
+    fn save_creates_the_folder_and_leaves_no_part_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("new").join(FILE_NAME);
+        Config::default().save(&path).unwrap();
+        assert!(path.is_file());
+        assert!(!path.with_extension("json.part").exists());
+    }
+
+    #[test]
+    fn a_failed_save_keeps_the_old_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        Config { top: Some(3), ..Config::default() }.save(&path).unwrap();
+        // A directory blocks the temporary file.
+        fs::create_dir(path.with_extension("json.part")).unwrap();
+        assert!(Config { top: Some(9), ..Config::default() }.save(&path).is_err());
+        assert_eq!(Config::load(&path).unwrap().top, Some(3));
+    }
+
+    #[test]
+    fn a_damaged_config_is_moved_aside() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        fs::write(&path, r#"{"top": "#).unwrap();
+        let (cfg, moved) = Config::load_recovering(&path).unwrap();
+        let bad = moved.unwrap();
+        assert_eq!(bad, path.with_extension("json.bad"));
+        assert_eq!(fs::read_to_string(&bad).unwrap(), r#"{"top": "#);
+        assert!(!path.exists());
+        assert_eq!(cfg.top, None);
+    }
+
+    #[test]
+    fn a_good_or_missing_config_is_not_moved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        let (_, moved) = Config::load_recovering(&path).unwrap();
+        assert_eq!(moved, None);
+        Config { top: Some(4), ..Config::default() }.save(&path).unwrap();
+        let (cfg, moved) = Config::load_recovering(&path).unwrap();
+        assert_eq!((cfg.top, moved), (Some(4), None));
+        assert!(path.is_file());
+    }
+
+    #[test]
+    fn an_unreadable_config_is_not_moved() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        // Reading a directory is an I/O error, not a JSON error. A locked file acts the same way.
+        fs::create_dir(&path).unwrap();
+        assert!(matches!(Config::load_recovering(&path), Err(FileError::Io { .. })));
+        assert!(path.is_dir());
     }
 
     #[test]

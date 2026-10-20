@@ -65,11 +65,45 @@ pub enum SdeError {
 /// Write `text` to `path` through a temporary file and a rename, so a reader never sees half a
 /// file. The directory of `path` is made first.
 pub fn write_atomic(path: &Path, tmp: &Path, text: &str) -> Result<(), FileError> {
-    if let Some(dir) = path.parent() {
+    write_atomic_with(path, tmp, text, false)
+}
+
+/// As `write_atomic`, and the data reaches the disk before the rename. With `private`, a Unix file
+/// gets the mode 0600 before it holds any data. Other platforms ignore `private`. A failed write
+/// removes the temporary file and leaves the old file as it was.
+pub fn write_atomic_with(path: &Path, tmp: &Path, text: &str, private: bool) -> Result<(), FileError> {
+    if let Some(dir) = path.parent().filter(|d| !d.as_os_str().is_empty()) {
         std::fs::create_dir_all(dir).map_err(FileError::io(dir))?;
     }
-    std::fs::write(tmp, text).map_err(FileError::io(tmp))?;
-    std::fs::rename(tmp, path).map_err(FileError::io(path))
+    let result =
+        write_synced(tmp, text, private).map_err(FileError::io(tmp)).and_then(|()| std::fs::rename(tmp, path).map_err(FileError::io(path)));
+    if result.is_err() {
+        let _ = std::fs::remove_file(tmp);
+    }
+    result
+}
+
+/// Write `text` to a new file and flush it to the disk.
+fn write_synced(path: &Path, text: &str, private: bool) -> std::io::Result<()> {
+    use std::io::Write;
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create(true).truncate(true);
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(path)?;
+    // The mode above applies only to a new file. This call fixes a file that an earlier crash left.
+    #[cfg(unix)]
+    if private {
+        use std::os::unix::fs::PermissionsExt;
+        file.set_permissions(std::fs::Permissions::from_mode(0o600))?;
+    }
+    #[cfg(not(unix))]
+    let _ = private;
+    file.write_all(text.as_bytes())?;
+    file.sync_all()
 }
 
 #[cfg(test)]
@@ -92,5 +126,27 @@ mod tests {
         write_atomic(&path, &path.with_extension("part"), "{}").unwrap();
         assert_eq!(std::fs::read_to_string(&path).unwrap(), "{}");
         assert!(!path.with_extension("part").exists());
+    }
+
+    #[test]
+    fn a_failed_write_keeps_the_old_file() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("f.json");
+        std::fs::write(&path, "old").unwrap();
+        let part = path.with_extension("part");
+        // A directory blocks the temporary file.
+        std::fs::create_dir(&part).unwrap();
+        assert!(write_atomic_with(&path, &part, "new", false).is_err());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), "old");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn a_private_write_has_mode_0600() {
+        use std::os::unix::fs::PermissionsExt;
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("f.json");
+        write_atomic_with(&path, &path.with_extension("part"), "{}", true).unwrap();
+        assert_eq!(std::fs::metadata(&path).unwrap().permissions().mode() & 0o777, 0o600);
     }
 }

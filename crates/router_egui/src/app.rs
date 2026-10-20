@@ -229,7 +229,12 @@ fn waypoint_args(args: impl Iterator<Item = String>) -> Vec<String> {
 /// of the command line are the first waypoints, for example `eve-router Jita "New Caldari"`.
 fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, StartupError> {
     let paths = AppPaths::detect();
-    let cfg = Config::load(&paths.config)?;
+    // A damaged config file moves aside, and the start goes on with the defaults.
+    let (cfg, damaged) = Config::load_recovering(&paths.config)?;
+    let mut warnings = Vec::new();
+    if let Some(bad) = damaged {
+        warnings.push(format!("The config file was damaged. It is now {}, and the defaults are in use.", bad.display()));
+    }
     // Each step wakes the window, so the splash screen shows it.
     let progress = |step| {
         let _ = tx.send(LoadMsg::Progress(step));
@@ -260,7 +265,6 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
             },
         )
     };
-    let mut warnings = Vec::new();
     match report {
         UpdateStep::Installed => {
             // On success this call ends the process.
