@@ -92,7 +92,7 @@ impl SettingsForm {
             page,
             maps_tried: false,
             maps_error: None,
-            capital: SearchBox::new("capital-search"),
+            capital: SearchBox::new("capital-search").sovnull_only(),
             favourite: SearchBox::new("favourite-search"),
             max_cap: s.settings.rules.max_cap.map(|m| m.to_string()).unwrap_or_default(),
             bridge_text: String::new(),
@@ -1289,11 +1289,11 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
     });
     ui.add_space(14.0);
     group(ui, "Import");
-    ui.label(RichText::new("Paste a list in SMT format: one line for each bridge, like \"0 A --> B\".").color(theme::TEXT_DIM));
-    ui.add_space(4.0);
     ui.add_enabled_ui(!locked, |ui| {
-        let edit =
-            TextEdit::multiline(&mut form.bridge_text).hint_text("0 Jita --> Perimeter").desired_rows(3).desired_width(f32::INFINITY);
+        let edit = TextEdit::multiline(&mut form.bridge_text)
+            .hint_text("Paste a list of bridges in SMT format.")
+            .desired_rows(3)
+            .desired_width(f32::INFINITY);
         ui.add(edit);
         for p in &form.bridge_problems {
             ui.label(RichText::new(p).color(theme::ERROR));

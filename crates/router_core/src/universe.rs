@@ -18,6 +18,11 @@ pub struct System {
     pub region_id: u32,
     pub constellation_id: u32,
     pub security: f64,
+    /// True if an alliance can hold the system: nullsec outside NPC space. The SDE gives a faction
+    /// to an NPC system, constellation or region. Wormhole space, Pochven and Zarzakh are not
+    /// capable. Only such a system can hold a sovereignty hub, so only there can an Ansiblex or
+    /// a Pharolux work.
+    pub sov_null: bool,
     /// Position in meters.
     pub pos: [f64; 3],
 }
@@ -139,6 +144,7 @@ fn add_filaments(graph: &mut DiGraph<System, Link>, by_id: &mut HashMap<u32, Nod
             region_id: POCHVEN_REGION,
             constellation_id: clade.constellation_id(),
             security: -1.0,
+            sov_null: false,
             pos,
         });
         by_id.insert(id, hub);
@@ -189,12 +195,16 @@ pub struct Universe {
 impl Universe {
     #[tracing::instrument(level = "info", skip_all, fields(systems = data.systems.len(), stargates = data.stargates.len()))]
     pub fn from_sde(data: SdeData) -> Self {
+        let npc_regions: HashSet<u32> = data.regions.iter().filter(|r| r.faction_id.is_some()).map(|r| r.id).collect();
+        let npc_constellations: HashSet<u32> = data.constellations.iter().filter(|c| c.faction_id.is_some()).map(|c| c.id).collect();
         let regions: HashMap<u32, String> = data.regions.into_iter().map(|r| (r.id, r.name.en)).collect();
         let mut graph = DiGraph::with_capacity(data.systems.len(), data.stargates.len());
         let mut by_id = HashMap::with_capacity(data.systems.len());
         let mut source_ok = Vec::new();
         for s in data.systems {
             let region = regions.get(&s.region_id).cloned().unwrap_or_default();
+            let npc = s.faction_id.is_some() || npc_regions.contains(&s.region_id) || npc_constellations.contains(&s.constellation_id);
+            let sov_null = band(s.security) == Band::Null && !WORMHOLE_REGIONS.contains(&s.region_id) && !npc;
             let node = graph.add_node(System {
                 id: s.id,
                 name: s.name.en,
@@ -202,6 +212,7 @@ impl Universe {
                 region_id: s.region_id,
                 constellation_id: s.constellation_id,
                 security: s.security,
+                sov_null,
                 pos: [s.position.x, s.position.y, s.position.z],
             });
             by_id.insert(s.id, node);
@@ -234,6 +245,11 @@ impl Universe {
         self.by_id.get(&hub_id(clade)).copied()
     }
 
+    /// True if an alliance can hold the system. See `System::sov_null`.
+    pub fn sov_null(&self, node: NodeIndex) -> bool {
+        self.graph[node].sov_null
+    }
+
     pub fn name(&self, node: NodeIndex) -> &str {
         &self.graph[node].name
     }
@@ -253,14 +269,19 @@ impl Universe {
     /// Up to `limit` systems for a search box: the names that start with `query` first,
     /// then the names that contain it. Case-insensitive.
     pub fn search(&self, query: &str, limit: usize) -> Vec<NodeIndex> {
+        self.search_where(query, limit, |_| true)
+    }
+
+    /// Like `search`, but the result holds only the systems that `keep` accepts.
+    pub fn search_where(&self, query: &str, limit: usize, keep: impl Fn(NodeIndex) -> bool) -> Vec<NodeIndex> {
         let query = query.trim().to_lowercase();
         if query.is_empty() {
             return Vec::new();
         }
-        let mut found: Vec<NodeIndex> = self.complete(&query).into_iter().take(limit).collect();
+        let mut found: Vec<NodeIndex> = self.complete(&query).into_iter().filter(|&n| keep(n)).take(limit).collect();
         if found.len() < limit {
             let contains = self.sorted.iter().filter(|(n, _)| !n.starts_with(&query) && n.contains(&query));
-            found.extend(contains.map(|&(_, node)| node).take(limit - found.len()));
+            found.extend(contains.map(|&(_, node)| node).filter(|&n| keep(n)).take(limit - found.len()));
         }
         found
     }
@@ -338,6 +359,26 @@ pub mod tests {
     use crate::test_support::{sde_dir, universe};
 
     #[test]
+    fn only_player_nullsec_can_hold_sovereignty() {
+        let uni = universe();
+        let capable = |name: &str| uni.sov_null(uni.exact(name).unwrap_or_else(|| panic!("{name} is not on the map")));
+        // Player nullsec: Tenerifis, and a Delve constellation without a faction.
+        for name in ["UALX-3", "JK-Q77", "HM-XR2"] {
+            assert!(capable(name), "{name}");
+        }
+        // Highsec, lowsec, wormhole space, Pochven and Zarzakh.
+        for name in ["Jita", "Perimeter", "Amarr", "Thera", "Kuharah", "Zarzakh"] {
+            assert!(!capable(name), "{name}");
+        }
+        // NPC regions, and NPC constellations in a region that players hold (Delve, Fountain).
+        for name in ["PO4F-3", "I-YGGI", "D-SKWC", "MB4D-4", "KFIE-Z", "MN5N-X"] {
+            assert!(!capable(name), "{name}");
+        }
+        // A virtual hub is never a system.
+        assert!(uni.filament_hub(Clade::Perun).is_none_or(|hub| !uni.sov_null(hub)));
+    }
+
+    #[test]
     fn search_puts_prefix_matches_first() {
         let uni = universe();
         let names: Vec<&str> = uni.search("ama", 50).iter().map(|&n| uni.name(n)).collect();
@@ -347,6 +388,10 @@ pub mod tests {
         assert!(names[prefix..].iter().all(|n| n.to_lowercase().contains("ama")), "{names:?}");
         assert_eq!(uni.search("ama", 3).len(), 3);
         assert!(uni.search("  ", 10).is_empty());
+        // A filter applies before the limit, so a rare match still shows.
+        let held = uni.search_where("ual", 3, |n| uni.sov_null(n));
+        assert!(held.iter().all(|&n| uni.sov_null(n)) && held.iter().any(|&n| uni.name(n) == "UALX-3"), "{held:?}");
+        assert!(uni.search_where("jita", 5, |n| uni.sov_null(n)).iter().all(|&n| uni.name(n) != "Jita"));
     }
 
     #[test]
@@ -385,7 +430,16 @@ pub mod tests {
 
     /// A placeholder system, for a test graph where only the connectivity matters.
     fn placeholder(name: &str) -> System {
-        System { id: 0, name: name.into(), region: String::new(), region_id: 0, constellation_id: 0, security: 0.0, pos: [0.0; 3] }
+        System {
+            id: 0,
+            name: name.into(),
+            region: String::new(),
+            region_id: 0,
+            constellation_id: 0,
+            security: 0.0,
+            sov_null: false,
+            pos: [0.0; 3],
+        }
     }
 
     /// A chain of 9 systems, each linked to the next by a stargate in both directions.

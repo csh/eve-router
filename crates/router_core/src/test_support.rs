@@ -62,7 +62,7 @@ pub const FIXTURE_TIME: u64 = 1_791_201_600;
 /// The SDE with the bridges and the Nexum wormholes of the fixtures, at `FIXTURE_TIME`.
 pub fn overlay_universe() -> Universe {
     let mut uni = Universe::from_sde(sde::load(&sde_dir()).unwrap());
-    overlay::load_bridges(&mut uni, &fixture("ansiblex.txt")).unwrap();
+    overlay::load_bridges(&mut uni, &fixture("ansiblex.txt"), hulls().range_ly).unwrap();
     let text = std::fs::read_to_string(fixture("nexum-api.json")).unwrap();
     let map = nexum::parse_map(&text).unwrap();
     let types = wormhole_types::load(&sde_dir()).unwrap();

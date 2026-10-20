@@ -21,7 +21,7 @@ use std::time::Duration;
 
 /// The SDE files that the router needs. `_sde.jsonl` comes last, so an interrupted
 /// update leaves the old build number, and the next start tries again.
-pub const FILES: [&str; 4] = ["mapSolarSystems.jsonl", "mapStargates.jsonl", "mapRegions.jsonl", "_sde.jsonl"];
+pub const FILES: [&str; 5] = ["mapSolarSystems.jsonl", "mapStargates.jsonl", "mapRegions.jsonl", "mapConstellations.jsonl", "_sde.jsonl"];
 
 /// Set this variable to `1` to skip the check and use the local SDE as it is.
 pub const SKIP_ENV: &str = "EVE_ROUTER_SKIP_SDE_CHECK";
@@ -331,11 +331,12 @@ pub(crate) fn download(src: &dyn RangeSource, dir: &Path, on_bytes: OnBytes) -> 
 
 /// Cut a map file down to the fields that the router reads. Other files stay as they are.
 fn slimmed(name: &str, data: Vec<u8>) -> Result<Vec<u8>, SdeError> {
-    use crate::sde::{SdeRegion, SdeStargate, SdeSystem, slim};
+    use crate::sde::{SdeConstellation, SdeRegion, SdeStargate, SdeSystem, slim};
     let result = match name {
         "mapSolarSystems.jsonl" => slim::<SdeSystem>(&data),
         "mapStargates.jsonl" => slim::<SdeStargate>(&data),
         "mapRegions.jsonl" => slim::<SdeRegion>(&data),
+        "mapConstellations.jsonl" => slim::<SdeConstellation>(&data),
         _ => return Ok(data),
     };
     result.map_err(|e| SdeError::Entry { name: name.to_string(), message: e.to_string() })
@@ -363,7 +364,7 @@ mod tests {
         }
     }
 
-    /// A small zip with the 7 files, an extra file, and both stored and deflated entries.
+    /// A small zip with the 9 files, an extra file, and both stored and deflated entries.
     const FIXTURE: &[u8] = include_bytes!("../tests/fixtures/sde-small.zip");
 
     #[test]
@@ -375,13 +376,22 @@ mod tests {
         names.sort();
         assert_eq!(
             names,
-            ["_sde.jsonl", "mapRegions.jsonl", "mapSolarSystems.jsonl", "mapStargates.jsonl", "ships.json", "wormholes.json"]
+            [
+                "_sde.jsonl",
+                "mapConstellations.jsonl",
+                "mapRegions.jsonl",
+                "mapSolarSystems.jsonl",
+                "mapStargates.jsonl",
+                "ships.json",
+                "wormholes.json"
+            ]
         );
         // The fixture has no wormhole types, so the table is empty.
         assert!(crate::wormhole_types::load(&dir).unwrap().types.is_empty());
         let ships = ships::load(&dir).unwrap();
         assert_eq!(ships.build, Some(123));
         assert_eq!(ships.ansiblex.capacitor_gj, 1_250_000.0);
+        assert_eq!(ships.ansiblex.range_ly, 5.0);
         let cost = |name: &str| ships.ships.iter().find(|s| s.name == name).unwrap().bridge_cost_gj;
         assert_eq!(cost("Sin"), Some(18000.0));
         assert_eq!(cost("Avatar"), None);
@@ -405,12 +415,15 @@ mod tests {
         assert_eq!(keys("mapSolarSystems.jsonl"), ["_key", "constellationID", "name", "position", "regionID", "securityStatus"]);
         assert_eq!(keys("mapStargates.jsonl"), ["destination", "solarSystemID"]);
         assert_eq!(keys("mapRegions.jsonl"), ["_key", "name"]);
+        assert_eq!(keys("mapConstellations.jsonl"), ["_key", "factionID"]);
         // The languages other than English are gone too.
         assert_eq!(line("mapRegions.jsonl"), r#"{"_key":10000001,"name":{"en":"Derelik"}}"#);
         // The slim files still load.
         let data = crate::sde::load(tmp.path()).unwrap();
         assert_eq!(data.systems[0].position.x, 1.5e16);
         assert_eq!(data.systems[0].security, 0.5);
+        assert_eq!(data.constellations[0].faction_id, Some(500007));
+        assert_eq!(data.regions[0].faction_id, None);
     }
 
     #[test]

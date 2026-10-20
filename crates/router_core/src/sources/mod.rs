@@ -165,6 +165,10 @@ pub enum OverlayWarning {
     BridgeUnknownSystems(Vec<String>),
     /// The Ansiblex file has a bridge with the same system at both ends.
     BridgeSameSystem(Vec<String>),
+    /// The Ansiblex file names systems that an alliance cannot hold (not sovnull).
+    BridgeNotSovnull(Vec<String>),
+    /// The Ansiblex file has bridges longer than the Ansiblex range, as "A and B".
+    BridgeTooFar(Vec<String>),
     /// A source names EVE system IDs that the SDE does not know.
     UnknownIds { source: SourceId, ids: Vec<u32> },
     /// A failed fetch. `cached_at` is the fetch time of the cache that the router uses instead.
@@ -182,6 +186,11 @@ impl fmt::Display for OverlayWarning {
         match self {
             OverlayWarning::BridgeUnknownSystems(names) => write!(f, "Bridges: unknown systems: {}", names.join(", ")),
             OverlayWarning::BridgeSameSystem(names) => write!(f, "Bridges: same system at both ends: {}", names.join(", ")),
+            OverlayWarning::BridgeNotSovnull(names) => write!(f, "Bridges: an entered system is not sovnull: {}", names.join(", ")),
+            OverlayWarning::BridgeTooFar(pairs) => {
+                let pairs: Vec<String> = pairs.iter().map(|p| format!("invalid connection between {p}")).collect();
+                write!(f, "Bridges: {}", pairs.join(", "))
+            }
             OverlayWarning::UnknownIds { source, ids } => {
                 let ids: Vec<String> = ids.iter().map(u32::to_string).collect();
                 write!(f, "{}: unknown system IDs: {}", source.label(), ids.join(", "))

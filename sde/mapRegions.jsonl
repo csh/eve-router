@@ -1,5 +1,5 @@
-{"_key":10000001,"name":{"en":"Derelik"}}
-{"_key":10000002,"name":{"en":"The Forge"}}
+{"_key":10000001,"name":{"en":"Derelik"},"factionID":500007}
+{"_key":10000002,"name":{"en":"The Forge"},"factionID":500001}
 {"_key":10000003,"name":{"en":"Vale of the Silent"}}
 {"_key":10000004,"name":{"en":"UUA-F4"}}
 {"_key":10000005,"name":{"en":"Detorid"}}
@@ -8,66 +8,66 @@
 {"_key":10000008,"name":{"en":"Scalding Pass"}}
 {"_key":10000009,"name":{"en":"Insmother"}}
 {"_key":10000010,"name":{"en":"Tribute"}}
-{"_key":10000011,"name":{"en":"Great Wildlands"}}
-{"_key":10000012,"name":{"en":"Curse"}}
+{"_key":10000011,"name":{"en":"Great Wildlands"},"factionID":500015}
+{"_key":10000012,"name":{"en":"Curse"},"factionID":500011}
 {"_key":10000013,"name":{"en":"Malpais"}}
 {"_key":10000014,"name":{"en":"Catch"}}
-{"_key":10000015,"name":{"en":"Venal"}}
-{"_key":10000016,"name":{"en":"Lonetrek"}}
-{"_key":10000017,"name":{"en":"J7HZ-F"}}
+{"_key":10000015,"name":{"en":"Venal"},"factionID":500010}
+{"_key":10000016,"name":{"en":"Lonetrek"},"factionID":500001}
+{"_key":10000017,"name":{"en":"J7HZ-F"},"factionID":500005}
 {"_key":10000018,"name":{"en":"The Spire"}}
-{"_key":10000019,"name":{"en":"A821-A"}}
-{"_key":10000020,"name":{"en":"Tash-Murkon"}}
+{"_key":10000019,"name":{"en":"A821-A"},"factionID":500005}
+{"_key":10000020,"name":{"en":"Tash-Murkon"},"factionID":500003}
 {"_key":10000021,"name":{"en":"Outer Passage"}}
-{"_key":10000022,"name":{"en":"Stain"}}
+{"_key":10000022,"name":{"en":"Stain"},"factionID":500019}
 {"_key":10000023,"name":{"en":"Pure Blind"}}
 {"_key":10000025,"name":{"en":"Immensea"}}
 {"_key":10000027,"name":{"en":"Etherium Reach"}}
-{"_key":10000028,"name":{"en":"Molden Heath"}}
+{"_key":10000028,"name":{"en":"Molden Heath"},"factionID":500002}
 {"_key":10000029,"name":{"en":"Geminate"}}
-{"_key":10000030,"name":{"en":"Heimatar"}}
+{"_key":10000030,"name":{"en":"Heimatar"},"factionID":500002}
 {"_key":10000031,"name":{"en":"Impass"}}
-{"_key":10000032,"name":{"en":"Sinq Laison"}}
-{"_key":10000033,"name":{"en":"The Citadel"}}
+{"_key":10000032,"name":{"en":"Sinq Laison"},"factionID":500004}
+{"_key":10000033,"name":{"en":"The Citadel"},"factionID":500001}
 {"_key":10000034,"name":{"en":"The Kalevala Expanse"}}
 {"_key":10000035,"name":{"en":"Deklein"}}
-{"_key":10000036,"name":{"en":"Devoid"}}
-{"_key":10000037,"name":{"en":"Everyshore"}}
-{"_key":10000038,"name":{"en":"The Bleak Lands"}}
+{"_key":10000036,"name":{"en":"Devoid"},"factionID":500003}
+{"_key":10000037,"name":{"en":"Everyshore"},"factionID":500004}
+{"_key":10000038,"name":{"en":"The Bleak Lands"},"factionID":500003}
 {"_key":10000039,"name":{"en":"Esoteria"}}
 {"_key":10000040,"name":{"en":"Oasa"}}
-{"_key":10000041,"name":{"en":"Syndicate"}}
-{"_key":10000042,"name":{"en":"Metropolis"}}
-{"_key":10000043,"name":{"en":"Domain"}}
-{"_key":10000044,"name":{"en":"Solitude"}}
+{"_key":10000041,"name":{"en":"Syndicate"},"factionID":500001}
+{"_key":10000042,"name":{"en":"Metropolis"},"factionID":500002}
+{"_key":10000043,"name":{"en":"Domain"},"factionID":500003}
+{"_key":10000044,"name":{"en":"Solitude"},"factionID":500004}
 {"_key":10000045,"name":{"en":"Tenal"}}
 {"_key":10000046,"name":{"en":"Fade"}}
 {"_key":10000047,"name":{"en":"Providence"}}
-{"_key":10000048,"name":{"en":"Placid"}}
-{"_key":10000049,"name":{"en":"Khanid"}}
+{"_key":10000048,"name":{"en":"Placid"},"factionID":500004}
+{"_key":10000049,"name":{"en":"Khanid"},"factionID":500008}
 {"_key":10000050,"name":{"en":"Querious"}}
 {"_key":10000051,"name":{"en":"Cloud Ring"}}
-{"_key":10000052,"name":{"en":"Kador"}}
+{"_key":10000052,"name":{"en":"Kador"},"factionID":500003}
 {"_key":10000053,"name":{"en":"Cobalt Edge"}}
-{"_key":10000054,"name":{"en":"Aridia"}}
+{"_key":10000054,"name":{"en":"Aridia"},"factionID":500003}
 {"_key":10000055,"name":{"en":"Branch"}}
 {"_key":10000056,"name":{"en":"Feythabolis"}}
-{"_key":10000057,"name":{"en":"Outer Ring"}}
+{"_key":10000057,"name":{"en":"Outer Ring"},"factionID":500014}
 {"_key":10000058,"name":{"en":"Fountain"}}
 {"_key":10000059,"name":{"en":"Paragon Soul"}}
 {"_key":10000060,"name":{"en":"Delve"}}
 {"_key":10000061,"name":{"en":"Tenerifis"}}
 {"_key":10000062,"name":{"en":"Omist"}}
 {"_key":10000063,"name":{"en":"Period Basis"}}
-{"_key":10000064,"name":{"en":"Essence"}}
-{"_key":10000065,"name":{"en":"Kor-Azor"}}
+{"_key":10000064,"name":{"en":"Essence"},"factionID":500004}
+{"_key":10000065,"name":{"en":"Kor-Azor"},"factionID":500003}
 {"_key":10000066,"name":{"en":"Perrigen Falls"}}
-{"_key":10000067,"name":{"en":"Genesis"}}
-{"_key":10000068,"name":{"en":"Verge Vendor"}}
-{"_key":10000069,"name":{"en":"Black Rise"}}
-{"_key":10000070,"name":{"en":"Pochven"}}
+{"_key":10000067,"name":{"en":"Genesis"},"factionID":500003}
+{"_key":10000068,"name":{"en":"Verge Vendor"},"factionID":500004}
+{"_key":10000069,"name":{"en":"Black Rise"},"factionID":500001}
+{"_key":10000070,"name":{"en":"Pochven"},"factionID":500026}
 {"_key":10001000,"name":{"en":"Yasna Zakh"}}
-{"_key":10001004,"name":{"en":"Exordium"}}
+{"_key":10001004,"name":{"en":"Exordium"},"factionID":500006}
 {"_key":11000001,"name":{"en":"A-R00001"}}
 {"_key":11000002,"name":{"en":"A-R00002"}}
 {"_key":11000003,"name":{"en":"A-R00003"}}

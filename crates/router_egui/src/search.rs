@@ -43,6 +43,8 @@ pub struct SearchBox {
     list: Option<String>,
     /// True if the box takes a list of systems. See `with_lists`.
     lists: bool,
+    /// True if the results hold only systems that an alliance can hold. See `sovnull_only`.
+    sovnull_only: bool,
 }
 
 /// True if `text` holds more than one system name.
@@ -64,13 +66,28 @@ pub fn is_list(text: &str) -> bool {
 
 impl SearchBox {
     pub fn new(id: &str) -> Self {
-        SearchBox { id: Id::new(id), query: String::new(), results: Vec::new(), highlighted: 0, open: false, list: None, lists: false }
+        SearchBox {
+            id: Id::new(id),
+            query: String::new(),
+            results: Vec::new(),
+            highlighted: 0,
+            open: false,
+            list: None,
+            lists: false,
+            sovnull_only: false,
+        }
     }
 
     /// A box that also takes a list of systems: a paste with line breaks or commas, or a
     /// typed list with commas and then Enter.
     pub fn with_lists(mut self) -> Self {
         self.lists = true;
+        self
+    }
+
+    /// A box whose results hold only sovnull systems: nullsec that an alliance can hold.
+    pub fn sovnull_only(mut self) -> Self {
+        self.sovnull_only = true;
         self
     }
 
@@ -134,7 +151,7 @@ impl SearchBox {
         // The list goes on top of the other windows when it opens, for example a modal window.
         let raise = response.changed() || response.gained_focus();
         if response.changed() {
-            self.results = uni.search(&self.query, LIMIT);
+            self.results = uni.search_where(&self.query, LIMIT, |n| !self.sovnull_only || uni.sov_null(n));
             self.highlighted = 0;
             self.open = true;
         }

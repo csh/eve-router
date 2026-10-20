@@ -34,6 +34,8 @@ const ATTR_RECHARGE: u32 = 55;
 const ATTR_DISALLOW_HIGHSEC: u32 = 1970;
 /// `gateMaxJumpMass`, in kg.
 const ATTR_MAX_JUMP_MASS: u32 = 2798;
+/// `jumpDriveRange`, in light years. For the Ansiblex it is the longest bridge.
+const ATTR_JUMP_RANGE: u32 = 867;
 /// The `typeLists.jsonl` entry of the ship groups that cannot activate a Triglavian filament.
 const FILAMENT_BAN_LIST: &str = "InvalidShipGroupsForRandomJump";
 /// The `typeLists.jsonl` entry of the ship groups that cannot pass a wormhole (Titan, Supercarrier).
@@ -54,6 +56,8 @@ pub struct AnsiblexData {
     pub capacitor_gj: f64,
     pub recharge_ms: f64,
     pub max_jump_mass_kg: f64,
+    /// The longest bridge in light years.
+    pub range_ly: f64,
 }
 
 #[derive(Serialize, Deserialize, Debug)]
@@ -191,6 +195,7 @@ pub fn derive(build: Option<u32>, src: &Sources) -> Result<ShipData, SdeError> {
         capacitor_gj: need(ATTR_CAPACITOR, "capacitorCapacity")?,
         recharge_ms: need(ATTR_RECHARGE, "rechargeRate")?,
         max_jump_mass_kg: need(ATTR_MAX_JUMP_MASS, "gateMaxJumpMass")?,
+        range_ly: need(ATTR_JUMP_RANGE, "jumpDriveRange")?,
     };
     let filament_banned_groups: HashSet<u32> =
         src.type_list(FILAMENT_BAN_LIST).ok_or(SdeError::NoTypeList(FILAMENT_BAN_LIST))?.iter().copied().collect();

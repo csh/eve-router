@@ -22,6 +22,10 @@ pub struct OverlayReport {
     pub unknown: Vec<String>,
     /// The lines that name the same system at both ends.
     pub same: Vec<String>,
+    /// The systems that an alliance cannot hold (not sovnull). A bridge with such an end is not added.
+    pub not_sovnull: Vec<String>,
+    /// The bridges that are longer than the Ansiblex range, as "A and B". They are not added.
+    pub too_far: Vec<String>,
 }
 
 impl OverlayReport {
@@ -33,13 +37,20 @@ impl OverlayReport {
         if !self.same.is_empty() {
             s += &format!(", same system at both ends: {}", self.same.join(" "));
         }
+        if !self.not_sovnull.is_empty() {
+            s += &format!(", not sovnull: {}", self.not_sovnull.join(" "));
+        }
+        for pair in &self.too_far {
+            s += &format!(", invalid connection between {pair}");
+        }
         s
     }
 }
 
 /// Read the bridges of an SMT list. Each line `<id> <FROM> --> <TO>` is one direction. The line
-/// of the other direction, and a line that repeats, add nothing new.
-pub fn parse_bridges(uni: &Universe, text: &str) -> OverlayReport {
+/// of the other direction, and a line that repeats, add nothing new. A bridge is not longer than
+/// `range_ly`, the range of the Ansiblex in light years.
+pub fn parse_bridges(uni: &Universe, text: &str, range_ly: f64) -> OverlayReport {
     let mut report = OverlayReport::default();
     let mut seen = HashSet::new();
     for line in text.lines().map(str::trim) {
@@ -55,6 +66,20 @@ pub fn parse_bridges(uni: &Universe, text: &str) -> OverlayReport {
         let (from, to) = (from.trim(), to.trim());
         match (uni.exact(from), uni.exact(to)) {
             (Some(a), Some(b)) if a == b => report.same.push(from.to_string()),
+            (Some(a), Some(b)) if !uni.sov_null(a) || !uni.sov_null(b) => {
+                for name in [a, b].into_iter().filter(|&n| !uni.sov_null(n)).map(|n| uni.name(n).to_string()) {
+                    if !report.not_sovnull.contains(&name) {
+                        report.not_sovnull.push(name);
+                    }
+                }
+            }
+            (Some(a), Some(b)) if uni.distance_ly(a, b) > range_ly => {
+                let (a, b) = ordered(uni, a, b);
+                let pair = format!("{} and {}", uni.name(a), uni.name(b));
+                if !report.too_far.contains(&pair) {
+                    report.too_far.push(pair);
+                }
+            }
             (Some(a), Some(b)) => {
                 let pair = ordered(uni, a, b);
                 if seen.insert(pair) {
@@ -83,15 +108,15 @@ pub fn set_bridges(uni: &mut Universe, pairs: &[Pair]) {
 }
 
 /// Add the bridges of an SMT list to a map with no bridges.
-pub fn add_bridges(uni: &mut Universe, text: &str) -> OverlayReport {
-    let report = parse_bridges(uni, text);
+pub fn add_bridges(uni: &mut Universe, text: &str, range_ly: f64) -> OverlayReport {
+    let report = parse_bridges(uni, text, range_ly);
     set_bridges(uni, &report.pairs);
     report
 }
 
-pub fn load_bridges(uni: &mut Universe, path: &Path) -> Result<OverlayReport, FileError> {
+pub fn load_bridges(uni: &mut Universe, path: &Path, range_ly: f64) -> Result<OverlayReport, FileError> {
     let text = fs::read_to_string(path).map_err(FileError::io(path))?;
-    Ok(add_bridges(uni, &text))
+    Ok(add_bridges(uni, &text, range_ly))
 }
 
 /// The SMT text of `pairs`: one line for each direction.
@@ -112,7 +137,12 @@ pub fn save_bridges(path: &Path, uni: &Universe, pairs: &[Pair]) -> Result<(), F
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::{fixture, sde_dir, universe};
+    use crate::test_support::{fixture, hulls, sde_dir, universe};
+
+    /// The range of the Ansiblex, from the SDE.
+    fn range() -> f64 {
+        hulls().range_ly
+    }
 
     #[test]
     fn save_bridges_failure_keeps_the_old_file() {
@@ -142,7 +172,7 @@ mod tests {
         let base = universe();
         // Work on a copy of the graph, because the shared test universe must stay unchanged.
         let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
-        let report = add_bridges(&mut uni, &text);
+        let report = add_bridges(&mut uni, &text, range());
         assert!(report.unknown.is_empty() && report.same.is_empty(), "{:?}", report);
         let lines = text.lines().filter(|l| l.contains("-->") && !l.trim_start().starts_with('#')).count();
         assert_eq!(report.bridges, lines);
@@ -154,16 +184,60 @@ mod tests {
     fn one_line_makes_both_directions_and_a_repeat_adds_nothing() {
         let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
         let before = uni.graph.edge_count();
-        let report = add_bridges(&mut uni, "0 Jita --> Perimeter\n0 Perimeter --> Jita\n0 jita --> perimeter\n");
+        let report = add_bridges(&mut uni, "0 UALX-3 --> IL-YTR\n0 IL-YTR --> UALX-3\n0 ualx-3 --> il-ytr\n", range());
         assert_eq!(report.pairs.len(), 1);
         assert_eq!(uni.graph.edge_count(), before + 2);
+    }
+
+    #[test]
+    fn a_bridge_needs_two_sovnull_systems() {
+        let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
+        let before = uni.graph.edge_count();
+        // Highsec, lowsec, an NPC region, an NPC constellation in a player region, and Pochven.
+        let text = "0 UALX-3 --> Jita\n0 IL-YTR --> Perimeter\n0 UALX-3 --> PO4F-3\n0 UALX-3 --> KFIE-Z\n0 UALX-3 --> Kuharah\n0 Jita --> Perimeter\n";
+        let report = add_bridges(&mut uni, text, range());
+        assert!(report.pairs.is_empty());
+        assert_eq!(report.not_sovnull, ["Jita", "Perimeter", "PO4F-3", "KFIE-Z", "Kuharah"]);
+        assert_eq!(uni.graph.edge_count(), before);
+        assert!(report.summary().contains("not sovnull: Jita Perimeter"));
+        // A valid line in the same list still loads.
+        let report = add_bridges(&mut uni, "0 UALX-3 --> Jita\n0 UALX-3 --> IL-YTR\n", range());
+        assert_eq!((report.pairs.len(), report.not_sovnull.len()), (1, 1));
+    }
+
+    #[test]
+    fn the_range_comes_from_the_sde() {
+        assert_eq!(range(), 5.0);
+    }
+
+    #[test]
+    fn a_bridge_cannot_be_longer_than_the_range() {
+        let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
+        let before = uni.graph.edge_count();
+        // HM-XR2 (Delve) and UALX-3 (Tenerifis) are both sovnull, but 42.9 ly apart.
+        let report = add_bridges(&mut uni, "0 UALX-3 --> HM-XR2\n0 HM-XR2 --> UALX-3\n0 KW-OAM --> TY2X-C\n", range());
+        assert_eq!(report.too_far, ["HM-XR2 and UALX-3"]);
+        assert_eq!(report.pairs.len(), 1, "a bridge of 4.6 ly is valid");
+        assert_eq!(uni.graph.edge_count(), before + 2);
+        assert!(report.summary().contains("invalid connection between HM-XR2 and UALX-3"));
+    }
+
+    /// Every bridge in the game is at most 5 ly long, so a list from a real alliance checks the
+    /// distance math. The longest bridge of the fixture is 4.6 ly.
+    #[test]
+    fn the_fixture_bridges_are_within_range() {
+        let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
+        let report = add_bridges(&mut uni, &fs::read_to_string(fixture("ansiblex.txt")).unwrap(), range());
+        assert!(report.too_far.is_empty() && report.not_sovnull.is_empty(), "{report:?}");
+        let longest = report.pairs.iter().map(|&(a, b)| uni.distance_ly(a, b)).fold(0.0, f64::max);
+        assert!((4.5..range()).contains(&longest), "{longest}");
     }
 
     #[test]
     fn a_bridge_needs_two_different_systems() {
         let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
         let before = uni.graph.edge_count();
-        let report = add_bridges(&mut uni, "0 Jita --> Jita\n0 jita --> Jita\n");
+        let report = add_bridges(&mut uni, "0 UALX-3 --> UALX-3\n0 ualx-3 --> UALX-3\n", range());
         assert!(report.pairs.is_empty());
         assert_eq!(report.same.len(), 2);
         assert_eq!(uni.graph.edge_count(), before);
@@ -173,12 +247,12 @@ mod tests {
     fn set_bridges_replaces_the_old_bridges() {
         let mut uni = Universe::from_sde(crate::sde::load(&sde_dir()).unwrap());
         let before = uni.graph.edge_count();
-        let first = add_bridges(&mut uni, "0 Jita --> Perimeter\n");
-        let other = parse_bridges(&uni, "0 Amarr --> Dodixie\n");
+        let first = add_bridges(&mut uni, "0 UALX-3 --> IL-YTR\n", range());
+        let other = parse_bridges(&uni, "0 KW-OAM --> TY2X-C\n", range());
         set_bridges(&mut uni, &other.pairs);
         assert_eq!(uni.graph.edge_count(), before + 2);
         assert_ne!(first.pairs, other.pairs);
         let text = bridge_text(&uni, &other.pairs);
-        assert_eq!(parse_bridges(&uni, &text).pairs, other.pairs);
+        assert_eq!(parse_bridges(&uni, &text, range()).pairs, other.pairs);
     }
 }

@@ -16,7 +16,7 @@ fn load() -> Universe {
 
 fn with_overlays() -> Universe {
     let mut uni = load();
-    overlay::load_bridges(&mut uni, &fixture("ansiblex.txt")).unwrap();
+    overlay::load_bridges(&mut uni, &fixture("ansiblex.txt"), ansiblex::HullTable::load(&sde_dir()).unwrap().range_ly).unwrap();
     // Wormholes between far systems, so a route can use them.
     let id = |n: &str| uni.system(uni.exact(n).unwrap()).id;
     let holes: Vec<_> = [("Jita", "Amarr"), ("Dodixie", "Hek"), ("Rens", "Perimeter")].iter().map(|&(a, b)| hole(id(a), id(b))).collect();

@@ -58,6 +58,8 @@ pub struct HullTable {
     pub groups: Vec<HullClass>,
     /// The capacitor of one Ansiblex gate.
     pub gate_capacitor_tj: f32,
+    /// The longest bridge in light years.
+    pub range_ly: f64,
 }
 
 /// GJ in one TJ. The SDE gives capacitor values in GJ.
@@ -85,6 +87,7 @@ impl HullTable {
     fn new(data: ShipData) -> Self {
         let max_mass = data.ansiblex.max_jump_mass_kg;
         let gate_capacitor_tj = (data.ansiblex.capacitor_gj / GJ_PER_TJ) as f32;
+        let range_ly = data.ansiblex.range_ly;
         let hull = |type_id: Option<u32>, name: String, group: String, result: Result<f32, Ban>, mass_kg: Option<f64>, access: Access| {
             let base_tj = result.as_ref().ok().copied();
             Arc::new(Hull {
@@ -129,7 +132,7 @@ impl HullTable {
             .into_iter()
             .map(|(name, (cost, mass, access))| hull(None, name.clone(), name, check(cost, mass), mass, access))
             .collect();
-        HullTable { ships, groups, gate_capacitor_tj }
+        HullTable { ships, groups, gate_capacitor_tj, range_ly }
     }
 }
 

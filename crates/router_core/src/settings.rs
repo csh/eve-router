@@ -189,9 +189,9 @@ impl Settings {
     pub fn from_config(cfg: &Config, uni: &Universe, hulls: Arc<HullTable>) -> (Settings, Vec<String>) {
         let mut warnings = Vec::new();
         let capital = cfg.capital.as_ref().and_then(|name| match uni.resolve(name) {
-            Ok(node) => Some(node),
-            Err(e) => {
-                warnings.push(format!("The capital in the config is not usable. {e}. Jump bridges stay off until you pick a capital."));
+            Ok(node) if uni.sov_null(node) => Some(node),
+            Ok(_) | Err(_) => {
+                warnings.push("The capital in the config was invalid, jump bridge calculations are disabled.".into());
                 None
             }
         });
@@ -361,13 +361,15 @@ mod tests {
     }
 
     #[test]
-    fn an_unknown_capital_is_dropped_with_a_warning() {
+    fn an_unknown_or_non_sovnull_capital_is_dropped_with_a_warning() {
         let uni = overlay_universe();
-        let cfg = Config { capital: Some("Nowhere".into()), ..Config::default() };
-        let (s, warnings) = Settings::from_config(&cfg, &uni, hulls());
-        assert_eq!(s.rules.capital, None);
-        assert_eq!(warnings.len(), 1, "{warnings:?}");
-        assert!(warnings[0].contains("Nowhere"), "{warnings:?}");
+        for name in ["Jita", "PO4F-3", "Thera", "Nowhere"] {
+            let cfg = Config { capital: Some(name.into()), ..Config::default() };
+            let (s, warnings) = Settings::from_config(&cfg, &uni, hulls());
+            assert_eq!(s.rules.capital, None, "{name}");
+            assert_eq!(warnings.len(), 1, "{warnings:?}");
+            assert_eq!(warnings[0], "The capital in the config was invalid, jump bridge calculations are disabled.");
+        }
     }
 
     #[test]

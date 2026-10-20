@@ -521,9 +521,11 @@ impl Session {
     /// Add the bridges of a pasted SMT list to the list, or replace the list with them. Save the
     /// list, and give the map to the refresh worker. Return the lines that did not give a bridge.
     pub fn import_bridges(&mut self, text: &str, replace: bool) -> Vec<String> {
-        let report = overlay::parse_bridges(&self.uni, text);
+        let report = overlay::parse_bridges(&self.uni, text, self.settings.hulls.range_ly);
         let mut problems: Vec<String> = report.unknown.iter().map(|name| format!("Unknown system \"{name}\"")).collect();
         problems.extend(report.same.iter().map(|name| format!("{name} cannot bridge to itself")));
+        problems.extend(report.not_sovnull.iter().map(|name| format!("An entered system is not sovnull: {name}")));
+        problems.extend(report.too_far.iter().map(|pair| format!("Invalid connection between {pair}.")));
         let before = if replace { Vec::new() } else { self.bridges.clone() };
         let mut pairs = before.clone();
         pairs.extend(report.pairs.iter().filter(|p| !before.contains(p)));
@@ -1197,8 +1199,9 @@ mod tests {
         let (mut s, tmp) = session();
         let (refresher, _snapshots, control) = fake_refresher();
         s.refresher = Some(refresher);
-        let problems = s.import_bridges("0 Jita --> Perimeter\n0 Perimeter --> Jita\n0 Jita --> Jita\n0 Jita --> Nowhere\n", true);
-        assert_eq!(problems, ["Unknown system \"Nowhere\"", "Jita cannot bridge to itself"]);
+        let text = "0 UALX-3 --> IL-YTR\n0 IL-YTR --> UALX-3\n0 UALX-3 --> UALX-3\n0 UALX-3 --> Nowhere\n0 UALX-3 --> Jita\n";
+        let problems = s.import_bridges(text, true);
+        assert_eq!(problems, ["Unknown system \"Nowhere\"", "UALX-3 cannot bridge to itself", "An entered system is not sovnull: Jita"]);
         assert_eq!(s.bridges.len(), 1);
         let Ok(Control::Bridges(report)) = control.try_recv() else { panic!("no bridge message") };
         assert_eq!((report.pairs, report.bridges), (s.bridges.clone(), 2));
@@ -1206,13 +1209,26 @@ mod tests {
         let text = std::fs::read_to_string(tmp.path().join("ansiblex.txt")).unwrap();
         assert_eq!(text.lines().filter(|l| l.contains("-->")).count(), 2);
         // A second import of the same bridge adds nothing. Replace drops the old list.
-        assert!(s.import_bridges("0 Perimeter --> Jita", false).is_empty());
+        assert!(s.import_bridges("0 IL-YTR --> UALX-3", false).is_empty());
         assert_eq!(s.bridges.len(), 1);
-        s.import_bridges("0 Jita --> Amarr", true);
+        s.import_bridges("0 KW-OAM --> TY2X-C", true);
         assert_eq!(s.bridges.len(), 1);
-        assert_eq!((s.uni.name(s.bridges[0].0), s.uni.name(s.bridges[0].1)), ("Amarr", "Jita"));
+        assert_eq!((s.uni.name(s.bridges[0].0), s.uni.name(s.bridges[0].1)), ("KW-OAM", "TY2X-C"));
         s.remove_bridge(0);
         assert!(s.bridges.is_empty());
+    }
+
+    #[test]
+    fn an_import_names_a_bridge_that_is_longer_than_the_range() {
+        let (mut s, _tmp) = session();
+        let problems = s.import_bridges(
+            "0 UALX-3 --> HM-XR2
+0 KW-OAM --> TY2X-C
+",
+            true,
+        );
+        assert_eq!(problems, ["Invalid connection between HM-XR2 and UALX-3."]);
+        assert_eq!(s.bridges.len(), 1);
     }
 
     #[test]

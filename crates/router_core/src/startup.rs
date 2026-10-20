@@ -99,7 +99,7 @@ pub fn load(cfg: &Config, paths: &AppPaths, skip_sde_check: bool, progress: impl
     let mut uni = Universe::from_sde(sde::load(sde_dir)?);
     let mut report = OverlayReport::default();
     if let Some(path) = config::overlay_path(&paths.config, config::BRIDGES_FILE) {
-        report = overlay::load_bridges(&mut uni, &path)?;
+        report = overlay::load_bridges(&mut uni, &path, hulls.range_ly)?;
     }
     let types = wormhole_types::load(sde_dir)?;
 

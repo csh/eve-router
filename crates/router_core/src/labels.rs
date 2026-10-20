@@ -42,6 +42,12 @@ impl Shortcuts {
         if !report.same.is_empty() {
             warnings.push(OverlayWarning::BridgeSameSystem(report.same.clone()));
         }
+        if !report.not_sovnull.is_empty() {
+            warnings.push(OverlayWarning::BridgeNotSovnull(report.not_sovnull.clone()));
+        }
+        if !report.too_far.is_empty() {
+            warnings.push(OverlayWarning::BridgeTooFar(report.too_far.clone()));
+        }
         let unknown_ids = [
             (SourceId::Nexum, &wh.report.unknown),
             (SourceId::EveScout, &scout.report.unknown),

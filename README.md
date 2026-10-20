@@ -138,12 +138,15 @@ At startup, the app compares its local build with [the latest SDE build](https:/
 
 | File                    | Use                                                                                                                                      |
 |-------------------------|------------------------------------------------------------------------------------------------------------------------------------------|
-| `mapSolarSystems.jsonl` | Systems, security and positions                                                                                                          |
+| `mapSolarSystems.jsonl` | Systems, security, positions and the NPC faction of a system                                                                             |
 | `mapStargates.jsonl`    | Stargate connections                                                                                                                     |
-| `mapRegions.jsonl`      | Region names                                                                                                                             |
+| `mapRegions.jsonl`      | Region names and the NPC faction of a region                                                                                             |
+| `mapConstellations.jsonl` | The NPC faction of a constellation                                                                                                     |
 | `_sde.jsonl`            | Last known build number                                                                                                                  |
 | `ships.json`            | Distilled from `types.jsonl`, `typeDogma.jsonl` and `groups.jsonl` to maintain a list of Ansiblex jump cost & provide searchable ship UI |
 | `wormholes.json`        | Distilled from `types.jsonl` and `typeDogma.jsonl`: the per-jump mass and the maximum life of each wormhole type                         |
+
+An Ansiblex or a capital must be in nullsec that an alliance can hold, because a sovereignty hub cannot exist elsewhere. The SDE has no flag for this. The router treats a system as NPC space when its system, constellation or region has a `factionID`. This rule agreed with the ESI sovereignty map for all 3538 nullsec systems on 2026-10-20.
 
 Zones are not in the SDE, so they come from the [capacitor update](https://www.eveonline.com/news/view/force-projection-ansiblex-capacitor-update) page.
 

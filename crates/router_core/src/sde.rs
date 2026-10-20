@@ -31,6 +31,9 @@ pub struct SdeSystem {
     #[serde(rename = "securityStatus")]
     pub security: f64,
     pub position: Position,
+    /// Set on a few systems that an NPC faction holds. See `SdeRegion::faction_id`.
+    #[serde(rename = "factionID", default, skip_serializing_if = "Option::is_none")]
+    pub faction_id: Option<u32>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -51,6 +54,21 @@ pub struct SdeRegion {
     #[serde(rename = "_key")]
     pub id: u32,
     pub name: Names,
+    /// Set for a region that an NPC faction holds. The SDE has no flag for NPC nullsec. A
+    /// region, a constellation or a system with a faction is NPC space. The ESI sovereignty map
+    /// agreed with this rule for every nullsec system (3538 on 2026-10-20).
+    #[serde(rename = "factionID", default, skip_serializing_if = "Option::is_none")]
+    pub faction_id: Option<u32>,
+}
+
+/// A constellation. A sovereignty region can hold an NPC constellation (Delve, Fountain).
+#[derive(Deserialize, Serialize)]
+pub struct SdeConstellation {
+    #[serde(rename = "_key")]
+    pub id: u32,
+    /// See `SdeRegion::faction_id`.
+    #[serde(rename = "factionID", default, skip_serializing_if = "Option::is_none")]
+    pub faction_id: Option<u32>,
 }
 
 #[derive(Deserialize)]
@@ -63,6 +81,7 @@ pub struct SdeData {
     pub systems: Vec<SdeSystem>,
     pub stargates: Vec<SdeStargate>,
     pub regions: Vec<SdeRegion>,
+    pub constellations: Vec<SdeConstellation>,
     pub build: Option<u32>,
 }
 
@@ -94,18 +113,23 @@ pub fn slim<T: DeserializeOwned + Serialize + Send>(data: &[u8]) -> Result<Vec<u
         .into_bytes())
 }
 
-/// Load the map files from an SDE directory. The three files load at the same time.
+/// Load the map files from an SDE directory. The four files load at the same time.
 pub fn load(dir: &Path) -> Result<SdeData, FileError> {
-    let (systems, (stargates, regions)) = rayon::join(
-        || read_jsonl::<SdeSystem>(&dir.join("mapSolarSystems.jsonl")),
+    let ((systems, stargates), (regions, constellations)) = rayon::join(
         || {
             rayon::join(
+                || read_jsonl::<SdeSystem>(&dir.join("mapSolarSystems.jsonl")),
                 || read_jsonl::<SdeStargate>(&dir.join("mapStargates.jsonl")),
+            )
+        },
+        || {
+            rayon::join(
                 || read_jsonl::<SdeRegion>(&dir.join("mapRegions.jsonl")),
+                || read_jsonl::<SdeConstellation>(&dir.join("mapConstellations.jsonl")),
             )
         },
     );
-    Ok(SdeData { systems: systems?, stargates: stargates?, regions: regions?, build: build_number(dir) })
+    Ok(SdeData { systems: systems?, stargates: stargates?, regions: regions?, constellations: constellations?, build: build_number(dir) })
 }
 
 /// The build number from `_sde.jsonl`. A missing file gives `None`.
