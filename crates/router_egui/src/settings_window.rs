@@ -1397,7 +1397,7 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
     ui.add_space(4.0);
     // The icon is part of the text, so the line wraps like the line above it.
     let note =
-        "If you use bookmarks to save wormholes you may wish to leave the unknown signature cost at 1 to prevent suboptimal reroutes.";
+        "If you do not record wormhole signatures in Nexum and instead rely on bookmarks, set the signature cost to 1 to prevent detours.";
     ui.label(RichText::new(format!("{} {note}", icons::WARNING.as_str())).color(theme::WARN));
     ui.add_space(14.0);
     egui::Grid::new("settings-engine").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
