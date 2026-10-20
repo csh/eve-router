@@ -30,6 +30,10 @@ $env:EGUI_INSPECTION = "1"; cargo run --features eframe/inspection -p router_egu
 - A started instance shares the real config and the refresh tokens. Do not log in a pilot unless asked. Do not remove a pilot unless asked.
 - A running `eve-router.exe` locks its file on Windows. If the link step fails, build with another `--target-dir`.
 
+## Rules for changes to the interface
+
+- When you change the user interface, ask the user if they want to see the app running before you commit the change.
+
 ## Build and test
 
 - `cargo test` runs the tests of `router_egui` and `router_core`.
