@@ -576,6 +576,12 @@ const FIELD: f32 = 300.0;
 fn favourites_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session) {
     let field = FIELD;
     // The favourites, in the order of the sidebar. Drag a name to move it, or use the buttons.
+    group(ui, "Favourites");
+    ui.label(
+        RichText::new("Add systems you frequently travel between, know how many jumps away they are from anywhere at a glance.")
+            .color(theme::TEXT_DIM),
+    );
+    ui.add_space(4.0);
     ui.vertical(|ui| {
         let mut edit: Option<(usize, i32)> = None;
         let count = s.settings.favourites.len();
@@ -623,6 +629,7 @@ fn favourites_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session) {
 }
 
 fn theme_page(ui: &mut Ui, s: &mut Session) {
+    group(ui, "Theme");
     egui::Grid::new("settings-theme").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         // Photon UI theme and layout settings.
         label(ui, "Theme");
