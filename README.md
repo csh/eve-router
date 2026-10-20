@@ -99,6 +99,8 @@ The router can send a route to the in-game autopilot of your character, and then
 
 The repository holds no client ID. Without one, the window hides the Characters button, and the router makes no ESI call.
 
+EVE Metro, the Pochven wormhole map, also needs an API key. Set `EVE_ROUTER_METRO_KEY`. The build reads it, and the same variable at run time overrides it. The config file never holds the key. Without a key, the window hides the EVE Metro settings.
+
 The login uses OAuth 2.0 with PKCE. The router listens on `127.0.0.1:21404` for the browser redirect. If that fails, for example over SSH, paste the redirected URL into the login window.
 
 ### Tokens

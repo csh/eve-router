@@ -51,8 +51,6 @@ pub struct SettingsForm {
     url_warning: Option<&'static str>,
     /// The key field starts empty, so the key never shows on the screen.
     key: String,
-    /// The EVE Metro key field. It starts empty too.
-    metro_key: String,
     error: Option<String>,
     /// The manual check on the Updates page, and the install after it.
     update: Manual,
@@ -65,7 +63,6 @@ pub struct SettingsForm {
 enum Saved {
     Url,
     Key,
-    MetroKey,
     MaxCap,
 }
 
@@ -102,7 +99,6 @@ impl SettingsForm {
             url: s.cfg.nexum.url.clone().unwrap_or_default(),
             url_warning: s.cfg.nexum.url.as_deref().and_then(config::url_warning),
             key: String::new(),
-            metro_key: String::new(),
             error: None,
             update: Manual::default(),
             saved: None,
@@ -543,7 +539,7 @@ fn settings(
             // The Ansiblex and Pochven pages have their own scrolling table, so the page itself stays still.
             match form.page {
                 Page::Ansiblex => return ansiblex_page(ui, form, s, locked),
-                Page::Pochven => return pochven_page(ui, form, s, locked, portraits),
+                Page::Pochven => return pochven_page(ui, s, locked, portraits),
                 #[cfg(windows)]
                 Page::Overlay => return overlay_page(ui, s, portraits, overlay),
                 _ => {}
@@ -1148,20 +1144,20 @@ fn character_table(
 }
 
 /// The Pochven page: filament travel and the EVE Metro wormhole map, the two features almost all
-/// about travel via Pochven. Filament travel needs no client ID. The EVE Metro switch, the key,
+/// about travel via Pochven. Filament travel needs no client ID. The EVE Metro switch
 /// and a table of the linked characters with their portraits follow it. The service checks the
 /// picked character, its corporation and its alliance. Like the Ansiblex page, the page itself
 /// stays still and the table scrolls.
-fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool, portraits: &mut Portraits) {
+fn pochven_page(ui: &mut Ui, s: &mut Session, locked: bool, portraits: &mut Portraits) {
     let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
     pochven_group(ui, s, locked);
     ui.add_space(14.0);
     // The source needs a logged-in character, so it needs the EVE client ID, like each SSO
-    // feature. Without one, EVE Metro gives nothing, so the whole group stays off the page.
-    if !s.pilots.shows_characters() {
+    // feature. The build or the env var gives the API key. Without one of them, EVE Metro gives
+    // nothing, so the whole group stays off the page.
+    if !s.pilots.shows_characters() || s.cfg.eve_metro.key.is_none() {
         return;
     }
-    let field = FIELD;
     // A route cannot use EVE Metro while the Access switch above is off. The switch gives the
     // reason, so the controls here only dim, with no second line of text to repeat it.
     let pochven_off = !s.settings.pochven;
@@ -1187,34 +1183,6 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
             s.cfg.eve_metro.enabled = row.inner.1;
             s.eve_metro_saved();
         }
-        ui.end_row();
-
-        label(ui, "API Key");
-        ui.add_enabled_ui(!disabled, |ui| {
-            // The masked key and Clear while a key is set, else the input and Save.
-            ui.horizontal_wrapped(|ui| {
-                if let Some(key) = &s.cfg.eve_metro.key {
-                    ui.label(RichText::new(key.masked()).color(theme::TEXT));
-                    if ui.app_button("Clear").clicked() {
-                        s.cfg.eve_metro.key = None;
-                        s.eve_metro_saved();
-                    }
-                } else {
-                    ui.add(
-                        TextEdit::singleline(&mut form.metro_key).password(true).hint_text("paste your EVE Metro key").desired_width(field),
-                    );
-                    if ui.add_enabled(!form.metro_key.trim().is_empty(), AppButton::new("Save").primary()).clicked() {
-                        s.cfg.eve_metro.key = Some(ApiKey(form.metro_key.trim().to_string()));
-                        form.metro_key.clear();
-                        s.eve_metro_saved();
-                        form.saved = Some((Saved::MetroKey, Instant::now()));
-                    }
-                }
-                form.saved_label(ui, Saved::MetroKey);
-            })
-        })
-        .response
-        .on_disabled_hover_text(disabled_hover);
         ui.end_row();
     });
     ui.add_space(14.0);
@@ -1671,7 +1639,6 @@ mod tests {
     #[test]
     fn the_pochven_page_draws_every_state() {
         let (mut s, tmp) = session_with_pilots();
-        let mut form = SettingsForm::new(&s, Page::Pochven);
         let mut portraits = Portraits::without_download(&[1, 2]);
         // The app registers its fonts and theme first: the page uses the bold font.
         let ctx = egui::Context::default();
@@ -1679,10 +1646,10 @@ mod tests {
         theme::set_font(&ctx);
         let mut draw = |s: &mut Session, locked: bool| {
             // The frame output holds texture changes. A test with no renderer drops them.
-            let mut output = ctx.run_ui(Default::default(), |ui| pochven_page(ui, &mut form, s, locked, &mut portraits));
+            let mut output = ctx.run_ui(Default::default(), |ui| pochven_page(ui, s, locked, &mut portraits));
             output.textures_delta.clear();
         };
-        // A character is picked, so its row is selected. The key is set, so the masked key shows.
+        // A character is picked, so its row is selected. The key is set, so the group shows.
         s.cfg.eve_metro.character = Some(2);
         s.cfg.eve_metro.key = Some(ApiKey("metro_test_key".into()));
         draw(&mut s, false);

@@ -22,6 +22,21 @@ use std::time::Duration;
 /// The fixed address of the service.
 pub const URL: &str = "https://api.evemetro.com";
 
+/// The env var for the API key. The build reads it, and the same variable at run time overrides it.
+pub const KEY_VAR: &str = "EVE_ROUTER_METRO_KEY";
+
+/// The key of the run time, else the key of the build. An empty value counts as no value.
+fn pick_key(runtime: Option<String>, built: Option<&str>) -> Option<String> {
+    let clean = |key: &str| Some(key.trim().to_owned()).filter(|key| !key.is_empty());
+    runtime.as_deref().and_then(clean).or_else(|| built.and_then(clean))
+}
+
+/// The API key of the service. The repository and the config file hold no key. Without one, the
+/// source stays off and the settings page hides it.
+pub fn api_key() -> Option<String> {
+    pick_key(std::env::var(KEY_VAR).ok(), option_env!("EVE_ROUTER_METRO_KEY"))
+}
+
 /// The text for the pilot when the app has no EVE client ID. The source needs a logged-in
 /// character, like the other SSO features.
 pub const NEEDS_CLIENT_ID: &str = "EVE Metro needs the EVE client ID. Set EVE_ROUTER_CLIENT_ID.";
@@ -403,6 +418,16 @@ mod tests {
         assert!(data.holes.is_empty());
         assert_eq!((report.incomplete, report.no_access), (1, true));
         assert!(parse("not json").is_err());
+    }
+
+    #[test]
+    fn the_run_time_key_wins_over_the_build_key() {
+        assert_eq!(pick_key(Some(" run ".into()), Some("built")).as_deref(), Some("run"));
+        assert_eq!(pick_key(None, Some("built")).as_deref(), Some("built"));
+        assert_eq!(pick_key(Some("  ".into()), Some("built")).as_deref(), Some("built"));
+        assert_eq!(pick_key(Some("  ".into()), None), None);
+        assert_eq!(pick_key(None, None), None);
+        assert_eq!(KEY_VAR, "EVE_ROUTER_METRO_KEY");
     }
 
     #[test]

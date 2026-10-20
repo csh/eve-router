@@ -36,7 +36,6 @@
   },
   "eve_metro": {
     "enabled": true,
-    "key": "metro_key",
     "character": 2112345678
   },
   "eve_scout": {

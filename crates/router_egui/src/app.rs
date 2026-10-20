@@ -234,7 +234,9 @@ fn waypoint_args(args: impl Iterator<Item = String>) -> Vec<String> {
 fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, StartupError> {
     let paths = AppPaths::detect();
     // A damaged config file moves aside, and the start goes on with the defaults.
-    let (cfg, damaged) = Config::load_recovering(&paths.config)?;
+    let (mut cfg, damaged) = Config::load_recovering(&paths.config)?;
+    // The EVE Metro key comes from the build or the env var, never from the file.
+    cfg.eve_metro.key = evemetro::api_key().map(router_core::config::ApiKey);
     let mut warnings = Vec::new();
     if let Some(bad) = damaged {
         warnings.push(format!("The config file was damaged. It is now {}, and the defaults are in use.", bad.display()));
@@ -953,7 +955,7 @@ impl eframe::App for RouterApp {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use router_core::config::ApiKey;
+    use router_core::config::{ApiKey, EveMetroConfig};
     use router_core::labels::{jumps_label, route_extras};
     use router_core::log::LogEntry;
     use router_core::refresh::{Control, EVE_METRO_LOADING, NEXUM_LOADING};
@@ -1319,8 +1321,8 @@ mod tests {
         assert_eq!(sent.url.as_deref(), Some("https://nexum.example"));
     }
 
-    fn metro_settings() -> router_core::config::EveMetroConfig {
-        router_core::config::EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(42) }
+    fn metro_settings() -> EveMetroConfig {
+        EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(42) }
     }
 
     #[test]
@@ -1334,8 +1336,8 @@ mod tests {
         assert_eq!(last(&s), Some((Level::Info, EVE_METRO_LOADING)));
         let Ok(Control::EveMetro(sent)) = control.try_recv() else { panic!("no EVE Metro message") };
         assert_eq!(sent, metro_settings());
-        // The settings are in the file.
-        assert_eq!(Config::load(&s.cfg_path).unwrap().eve_metro, metro_settings());
+        // The settings are in the file, but the key is not.
+        assert_eq!(Config::load(&s.cfg_path).unwrap().eve_metro, EveMetroConfig { key: None, ..metro_settings() });
     }
 
     #[test]
@@ -1349,7 +1351,7 @@ mod tests {
         // The worker gets the settings off. The file keeps the settings of the user.
         let Ok(Control::EveMetro(sent)) = control.try_recv() else { panic!("no EVE Metro message") };
         assert_eq!(sent.complete(), None);
-        assert_eq!(Config::load(&s.cfg_path).unwrap().eve_metro, metro_settings());
+        assert_eq!(Config::load(&s.cfg_path).unwrap().eve_metro, EveMetroConfig { key: None, ..metro_settings() });
     }
 
     #[test]

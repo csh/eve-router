@@ -3,7 +3,8 @@
 #
 # The binaries get the client ID of the EVE developer app at build time from the repository
 # secret EVE_ROUTER_CLIENT_ID. Without the secret, the binaries build, but cannot log in until
-# the user sets EVE_ROUTER_CLIENT_ID at run time.
+# the user sets EVE_ROUTER_CLIENT_ID at run time. The EVE Metro API key works the same way, with the
+# secret and the variable EVE_ROUTER_METRO_KEY.
 name: Release
 
 on:
@@ -35,6 +36,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     env:
       EVE_ROUTER_CLIENT_ID: ${{ secrets.EVE_ROUTER_CLIENT_ID }}
+      EVE_ROUTER_METRO_KEY: ${{ secrets.EVE_ROUTER_METRO_KEY }}
     steps:
       - uses: actions/checkout@v4
       - run: rustup toolchain install && rustup target add ${{ matrix.target }}

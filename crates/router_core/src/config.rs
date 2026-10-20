@@ -198,6 +198,9 @@ impl NexumConfig {
 #[serde(default)]
 pub struct EveMetroConfig {
     pub enabled: bool,
+    /// The API key. The file never holds it. The app sets it at start from the build or from the
+    /// env var (`sources::evemetro::api_key`).
+    #[serde(skip)]
     pub key: Option<ApiKey>,
     /// The character that identifies the user to the API. It must be a linked character.
     pub character: Option<u64>,
@@ -446,11 +449,11 @@ impl Config {
     }
 
     /// Write the file through a temporary file and a rename, so a crash never leaves half a file.
-    /// Create its directory first if necessary. The file holds the Nexum and EVE Metro keys, so only
-    /// the owner can read it on Unix. The temporary file gets that mode before it holds a key.
+    /// Create its directory first if necessary. The file holds the Nexum key, so only the owner can
+    /// read it on Unix. The temporary file gets that mode before it holds a key.
     pub fn save(&self, path: &Path) -> Result<(), FileError> {
         let text = serde_json::to_string_pretty(self).map_err(FileError::json(path))?;
-        let private = self.nexum.key.is_some() || self.eve_metro.key.is_some();
+        let private = self.nexum.key.is_some();
         write_atomic_with(path, &path.with_extension("json.part"), &(text + "\n"), private)
     }
 }
@@ -642,6 +645,19 @@ mod tests {
         let debug = format!("{cfg:?}");
         assert!(!debug.contains("SECRET"), "{debug}");
         assert!(debug.contains("metr…abc"), "{debug}");
+    }
+
+    #[test]
+    fn the_eve_metro_key_never_reaches_the_file() {
+        let cfg = Config {
+            eve_metro: EveMetroConfig { enabled: true, key: Some(ApiKey("metro_SECRET".into())), character: Some(7) },
+            ..Config::default()
+        };
+        let text = serde_json::to_string(&cfg).unwrap();
+        assert!(!text.contains("SECRET"), "{text}");
+        // A key from an older file is ignored.
+        let old: EveMetroConfig = serde_json::from_str(r#"{"enabled":true,"key":"metro_OLD","character":7}"#).unwrap();
+        assert_eq!(old, EveMetroConfig { enabled: true, key: None, character: Some(7) });
     }
 
     #[test]
