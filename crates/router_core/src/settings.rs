@@ -219,7 +219,7 @@ impl Settings {
             bridges: cfg.bridges.unwrap_or(true),
             rules: BridgeRules { capital, hull, max_cap: cfg.max_cap_tj },
             costs: RouteCosts::from_config(cfg),
-            pochven: cfg.pochven,
+            pochven: cfg.pochven.unwrap_or(true),
             hull_source: cfg.pilot.map_or(HullSource::Manual, HullSource::Pilot),
             min_life: cfg.min_life_min.unwrap_or(config::DEFAULT_MIN_LIFE_MIN),
             favourites,
@@ -278,7 +278,7 @@ impl Settings {
         cfg.cap_weight = Some(self.costs.cap_weight);
         cfg.unknown_sig_penalty = Some(self.costs.unknown_sig_penalty);
         cfg.eve_scout = self.hubs;
-        cfg.pochven = self.pochven;
+        cfg.pochven = Some(self.pochven);
         cfg.favourites = Some(self.favourites.iter().map(|&n| uni.name(n).to_string()).collect());
         cfg.avoid_systems = self.avoid.systems.iter().map(|e| AvoidName::new(uni.name(e.item), e.never)).collect();
         cfg.avoid_regions = self.avoid.regions.iter().map(|e| AvoidName::new(&e.item, e.never)).collect();
@@ -487,6 +487,18 @@ mod tests {
         s.store(&uni, &mut cfg);
         let back = Settings::from_config(&cfg, &uni, hulls()).0;
         assert_eq!((back.wormholes, back.bridges), (false, false));
+    }
+
+    #[test]
+    fn pochven_defaults_to_on_and_the_choice_round_trips() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        assert!(Settings::from_config(&Config::default(), &uni, hulls()).0.pochven);
+        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("pochven"));
+        s.pochven = false;
+        let mut cfg = Config::default();
+        s.store(&uni, &mut cfg);
+        assert!(!Settings::from_config(&cfg, &uni, hulls()).0.pochven);
     }
 
     #[test]

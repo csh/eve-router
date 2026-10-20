@@ -328,10 +328,11 @@ pub struct Config {
     /// The Thera and Turnur switches. Both are on in a file without them.
     pub eve_scout: Hubs,
     /// The Pochven switch: whether a route can go into Pochven at all, by a filament or by a
-    /// wormhole (the EVE Metro map). Off by default, because the feature is new and Pochven is a
-    /// long way back. One switch covers all three clades: the SDE shows one Triglavian faction
-    /// only (Triglavian Collective, `500026`), and the clade corporations share it.
-    pub pochven: bool,
+    /// wormhole (the EVE Metro map). `None` gives on. One switch covers all three clades: the SDE
+    /// shows one Triglavian faction only (Triglavian Collective, `500026`), and the clade
+    /// corporations share it.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub pochven: Option<bool>,
     /// The Photon UI faction theme. A name that is not known loads as no theme.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_theme")]
     pub theme: Option<FactionTheme>,
@@ -522,7 +523,7 @@ mod tests {
                 ..Default::default()
             },
             eve_scout: Hubs { thera: false, turnur: true },
-            pochven: true,
+            pochven: Some(true),
             theme: None,
             compact: false,
             check_for_updates: Some(false),
