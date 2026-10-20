@@ -585,7 +585,10 @@ impl Pilots {
             Event::Ship { id, ship } => self.live.entry(id).or_default().ship = Some(ship),
             Event::Online { id, online } => self.live.entry(id).or_default().online = Some(online),
             Event::Refreshed(tokens) => {
+                // The user can remove a character while its refresh is in flight. The result then
+                // arrives after the removal, and storing it would bring the character back.
                 if let Some(accounts) = &mut self.accounts
+                    && accounts.characters.iter().any(|entry| entry.id == tokens.character.id)
                     && let Err(e) = accounts.store(&tokens)
                 {
                     self.notices.push(e.to_string());
@@ -732,6 +735,29 @@ mod tests {
         let mut accounts = Accounts::with_store(None, Box::new(MemoryStore::default())).unwrap();
         accounts.store(&tokens(1, "Alice")).unwrap();
         (pilots_with(accounts, fake.clone(), tmp.path().join("active-route.json")), tmp)
+    }
+
+    #[test]
+    fn a_refresh_for_a_removed_character_is_ignored() {
+        let (mut p, _tmp) = pilots(&Fake::default());
+        // The state after `Pilots::remove`, without its revoke call to the network: the token and
+        // the list entry are gone, and the tracker still sends the result of a refresh in flight.
+        p.accounts.as_mut().unwrap().remove(1).unwrap();
+        p.event(Event::Refreshed(tokens(1, "Alice")));
+        let accounts = p.accounts.as_ref().unwrap();
+        assert!(accounts.characters.is_empty());
+        assert!(accounts.refresh_token(1).unwrap().is_none());
+    }
+
+    #[test]
+    fn a_refresh_for_a_stored_character_keeps_the_new_token() {
+        let (mut p, _tmp) = pilots(&Fake::default());
+        let mut rotated = tokens(1, "Alice");
+        rotated.refresh = RefreshToken::new("r2".into());
+        p.event(Event::Refreshed(rotated));
+        let accounts = p.accounts.as_ref().unwrap();
+        assert_eq!(accounts.characters.len(), 1);
+        assert_eq!(accounts.refresh_token(1).unwrap().unwrap().secret(), "r2");
     }
 
     /// A route of three gates through the systems 1, 2 and 3, for the pilot with the ID 1.
