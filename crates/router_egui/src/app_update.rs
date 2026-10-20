@@ -11,7 +11,7 @@ use std::sync::mpsc::{self, Receiver, TryRecvError};
 
 const OWNER: &str = "csh";
 const REPO: &str = "eve-router";
-const BIN: &str = "eve-router-egui";
+const BIN: &str = "eve-router";
 /// The release asset with the checksum of every other asset.
 const SUMS: &str = "SHA256SUMS";
 

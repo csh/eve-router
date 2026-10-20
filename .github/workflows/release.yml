@@ -50,7 +50,7 @@ jobs:
           ext=""
           if [[ "${{ matrix.target }}" == *windows* ]]; then ext=".exe"; fi
           mkdir -p "pkg/$name"
-          cp "$bin/eve-router-egui$ext" README.md LICENSE-MIT LICENSE-APACHE "pkg/$name/"
+          cp "$bin/eve-router$ext" README.md LICENSE-MIT LICENSE-APACHE "pkg/$name/"
           cd pkg
           if [[ "${{ matrix.archive }}" == zip ]]; then
             7z a "$name.zip" "$name"

@@ -7,7 +7,7 @@ authors.workspace = true
 publish = false
 
 [[bin]]
-name = "eve-router-egui"
+name = "eve-router"
 path = "src/main.rs"
 
 [dependencies]

@@ -28,7 +28,7 @@ $env:EGUI_INSPECTION = "1"; cargo run --features eframe/inspection -p router_egu
   this is a game companion tool; anticheats may flag other automation methods.
 - Never end the instance that the user runs. Record the PID of each instance you start, and end only that PID.
 - A started instance shares the real config and the refresh tokens. Do not log in a pilot unless asked. Do not remove a pilot unless asked.
-- A running `eve-router-egui.exe` locks its file on Windows. If the link step fails, build with another `--target-dir`.
+- A running `eve-router.exe` locks its file on Windows. If the link step fails, build with another `--target-dir`.
 
 ## Build and test
 

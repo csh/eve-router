@@ -44,7 +44,7 @@ The window loads the map and shows the route summaries. Use "Copy route" to copy
 | Crate                 | Contents                                                                 |
 |-----------------------|--------------------------------------------------------------------------|
 | `crates/router_core`  | The SDE, the map graph, the overlays and the route search (library)      |
-| `crates/router_egui`  | The egui window (binary `eve-router-egui`)                               |
+| `crates/router_egui`  | The egui window (binary `eve-router`)                               |
 
 ### Settings
 

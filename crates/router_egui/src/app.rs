@@ -221,7 +221,7 @@ fn ask_to_update(ctx: &egui::Context, tx: &mpsc::Sender<LoadMsg>, available: &Av
 }
 
 /// The startup load, with the config file and the default SDE directory. The arguments
-/// of the command line are the first waypoints, for example `eve-router-egui Jita "New Caldari"`.
+/// of the command line are the first waypoints, for example `eve-router Jita "New Caldari"`.
 fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, StartupError> {
     let paths = AppPaths::detect();
     let cfg = Config::load(&paths.config)?;
