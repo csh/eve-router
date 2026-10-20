@@ -856,8 +856,10 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
 fn pochven_group(ui: &mut Ui, s: &mut Session, locked: bool) {
     group(ui, "Pochven");
     ui.label(
-        RichText::new("Filaments transport one or more pilots to a random system of a clade, assuming an average number of jumps.")
-            .color(theme::TEXT_DIM),
+        RichText::new(
+            "Filaments transport one or more pilots to a random system within Pochven, routing assumes an average number of jumps.",
+        )
+        .color(theme::TEXT_DIM),
     );
     ui.add_space(4.0);
     egui::Grid::new("settings-filaments").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
@@ -1006,9 +1008,9 @@ fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay
     use config::Place;
     use egui_extras::Column;
     let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
-    group(ui, "Wormhole overlay");
+    group(ui, "Overlay");
     ui.label(dim(
-        "Shows what to do at the next wormhole or filament of the active route, in the system where the jump starts. It shows only while the client of the route character has the focus.",
+        "Shows what to do at the next wormhole or filament of the active route, in the system where the jump starts. It shows only while the client of the selected character has focus.",
     ));
     ui.add_space(4.0);
     egui::Grid::new("settings-overlay").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
@@ -1166,7 +1168,12 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
     let disabled = locked || pochven_off;
     let disabled_hover = if locked { LOCKED } else { ACCESS_OFF };
     group(ui, "EVE Metro");
-    ui.label(dim("Activation can take a few minutes after the ingame payment arrives."));
+    ui.horizontal_wrapped(|ui| {
+        ui.hyperlink_to("EVE Metro", "https://evemetro.com/");
+        ui.label(dim(
+            "is a third-party service providing a map of Pochven wormhole connections, a subscription is required to use this feature.",
+        ));
+    });
     ui.add_space(4.0);
     egui::Grid::new("settings-metro").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         label(ui, "Enable");
@@ -1211,16 +1218,12 @@ fn pochven_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
         ui.end_row();
     });
     ui.add_space(14.0);
-    group(ui, "Character");
-    ui.horizontal_wrapped(|ui| {
-        ui.label(dim("The selected character, or its corporation or its alliance, must have a valid"));
-        ui.hyperlink_to("EVE Metro", "https://evemetro.com/");
-        ui.label(dim("subscription, a third-party service."));
-    });
+    group(ui, "Subscription");
+    ui.label(dim("Service activation can take a few minutes after your payment is sent."));
     ui.add_space(4.0);
     let pilots = s.pilots.characters();
     if pilots.is_empty() {
-        ui.label(dim("No linked character. Add one in the Pilots panel."));
+        ui.label(dim("No linked character. Add one in the characters menu."));
         return;
     }
     let picked = s.cfg.eve_metro.character;
