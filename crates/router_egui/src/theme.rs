@@ -173,8 +173,8 @@ pub fn bold() -> FontFamily {
 /// The text size of the body text.
 const BODY_SIZE: f32 = 14.0;
 
-/// Oxanium (SIL Open Font License) for all text, and the Phosphor icons (MIT) for the icons. The egui default fonts stay as the fallback,
-/// for the arrows and the icons that Oxanium does not have.
+/// Oxanium (SIL Open Font License) for all text, and the Phosphor icons (MIT) for the icons. The egui default fonts are not loaded,
+/// so a glyph that Oxanium and Phosphor do not have shows as a box.
 pub fn set_font(ctx: &egui::Context) {
     const OXANIUM: &[u8] = include_bytes!("../assets/fonts/Oxanium.ttf");
     // Oxanium is a variable font: the weight axis gives the regular and the bold face.
@@ -185,11 +185,11 @@ pub fn set_font(ctx: &egui::Context) {
         let tweak = egui::FontTweak { coords: VariationCoords::new([(b"wght", wght)]), y_offset_factor: offset, ..Default::default() };
         Arc::new(FontData::from_static(OXANIUM).tweak(tweak))
     };
-    let mut fonts = FontDefinitions::default();
+    let mut fonts = FontDefinitions::empty();
     fonts.font_data.insert("ui-regular".into(), face(450.0, 0.26));
     fonts.font_data.insert("ui-bold".into(), face(700.0, 0.28));
     for family in [FontFamily::Proportional, FontFamily::Monospace] {
-        fonts.families.entry(family).or_default().insert(0, "ui-regular".into());
+        fonts.families.entry(family).or_default().push("ui-regular".into());
     }
     // Phosphor icons: the regular face is the fallback of all text, so a string can hold an icon.
     egui_phosphor_icons::add_fonts(&mut fonts);
