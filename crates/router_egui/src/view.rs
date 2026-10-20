@@ -773,10 +773,18 @@ fn sidebar(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
 
 /// The sync state of a wormhole source: the dot color and the text, for example "2 min ago".
 /// The dot is green for data from the last 15 minutes, else amber. A source with no data is gray.
+/// A source that the server rate limits is amber, also when its cache is young.
 fn source_state(s: &Session, source: SourceId) -> (Color32, String) {
     const FRESH_SECS: u64 = 15 * 60;
     let now = router_core::wormhole::now();
     let fetched = s.shortcuts.sources.iter().find(|(id, _)| *id == source).map(|&(_, at)| at);
+    let limited = s.shortcuts.warnings.iter().any(
+        |w| matches!(w, router_core::sources::OverlayWarning::Fetch { source: id, error: FetchError::RateLimit, .. } if *id == source),
+    );
+    if limited {
+        let text = fetched.map_or_else(|| "rate limited".into(), |at| format!("rate limited, {}", age_text(at, now)));
+        return (theme::WARN, text);
+    }
     match fetched {
         Some(at) if now.saturating_sub(at) <= FRESH_SECS => (theme::OK, age_text(at, now)),
         Some(at) => (theme::WARN, age_text(at, now)),
@@ -929,6 +937,7 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool) {
 
 /// The wormhole sources and the age of their data, for example "Nexum 2 min ago" after a dot.
 /// The dot is green for data from the last 15 minutes, else amber. A source with no data is gray.
+/// A rate limited source is amber.
 fn sync_status(ui: &mut Ui, s: &Session) {
     // The ages change with time, so the bar draws again each minute.
     ui.ctx().request_repaint_after(std::time::Duration::from_secs(60));
@@ -943,7 +952,7 @@ fn sync_status(ui: &mut Ui, s: &Session) {
         // A painted dot: the fonts have no circle glyph.
         let (rect, response) = ui.allocate_exact_size(vec2(8.0, 8.0), Sense::hover());
         ui.painter().circle_filled(rect.center(), 3.5, dot);
-        response.on_hover_text("Green: data from the last 15 minutes. Amber: older data. Gray: no data.");
+        response.on_hover_text("Green: data from the last 15 minutes. Amber: older data, or the server limits the rate. Gray: no data.");
         ui.add_space(10.0);
     }
 }
@@ -1037,6 +1046,31 @@ mod tests {
         assert_eq!(waypoint_summary(&["A", "B", "C", "D", "E"]), "A » E · 3 midpoints");
         let names = vec!["x"; 21];
         assert_eq!(waypoint_summary(&names), "x » x · 19 midpoints");
+    }
+
+    #[test]
+    fn a_rate_limited_source_gets_an_amber_dot_also_with_a_young_cache() {
+        use router_core::config::Config;
+        use router_core::labels::Shortcuts;
+        use router_core::sources::OverlayWarning;
+        use router_core::test_support::{overlay_universe, settings};
+        let uni = overlay_universe();
+        let settings = settings(&uni, Some("black-ops"));
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default(), &Default::default());
+        let tmp = tempfile::tempdir().unwrap();
+        let mut s = Session::new(std::sync::Arc::new(uni), settings, Config::default(), tmp.path().join("eve-router.json"), shortcuts);
+        let now = router_core::wormhole::now();
+        s.shortcuts.sources = vec![(SourceId::EveMetro, now), (SourceId::EveScout, now)];
+        assert_eq!(source_state(&s, SourceId::EveMetro).0, theme::OK);
+        let limited = |source, error| OverlayWarning::Fetch { source, error, cached_at: Some(now) };
+        s.shortcuts.warnings =
+            vec![limited(SourceId::EveMetro, FetchError::RateLimit), limited(SourceId::EveScout, FetchError::Offline("down".into()))];
+        // The limited source is amber with a young cache. Another failure keeps the age rule.
+        assert_eq!(source_state(&s, SourceId::EveMetro), (theme::WARN, "rate limited, just now".to_string()));
+        assert_eq!(source_state(&s, SourceId::EveScout).0, theme::OK);
+        // With no data, the text still says why.
+        s.shortcuts.sources.clear();
+        assert_eq!(source_state(&s, SourceId::EveMetro), (theme::WARN, "rate limited".to_string()));
     }
 
     #[test]

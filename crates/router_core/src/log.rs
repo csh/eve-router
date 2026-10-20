@@ -41,6 +41,8 @@ pub enum LogEntryKind {
     Auth,
     /// The map was not found.
     NotFound,
+    /// The server limits the rate of the requests (status 429).
+    RateLimit,
     /// EVE Metro denies access to the linked character.
     NoAccess,
     /// Nexum did not give the signatures of some systems.
@@ -112,6 +114,8 @@ mod tests {
         assert!(LogEntryKind::Loaded.is_ok() && LogEntryKind::CacheFresh.is_ok());
         assert!(!FetchError::Auth.kind().is_ok() && !FetchError::NotFound.kind().is_ok());
         assert_eq!(FetchError::Offline("503".into()).kind(), LogEntryKind::Offline);
+        assert_eq!(FetchError::RateLimit.kind(), LogEntryKind::RateLimit);
+        assert!(!LogEntryKind::RateLimit.is_ok());
     }
 
     #[test]

@@ -61,6 +61,9 @@ pub enum FetchError {
     /// 404: the map ID is wrong.
     #[error("not found")]
     NotFound,
+    /// 429: the server limits the rate of the requests.
+    #[error("rate limited")]
+    RateLimit,
     /// A timeout, a network error, a 5xx status or bad JSON.
     #[error("{0}")]
     Offline(String),
@@ -72,6 +75,7 @@ impl FetchError {
         match self {
             FetchError::Auth => LogEntryKind::Auth,
             FetchError::NotFound => LogEntryKind::NotFound,
+            FetchError::RateLimit => LogEntryKind::RateLimit,
             FetchError::Offline(_) => LogEntryKind::Offline,
         }
     }
@@ -83,6 +87,7 @@ impl FetchError {
             (FetchError::Auth, SourceId::Nexum) => "bad API key or no access to the map".into(),
             (FetchError::Auth, SourceId::EveMetro) => "bad API key".into(),
             (FetchError::NotFound, _) => "map not found".into(),
+            (FetchError::RateLimit, _) => "rate limited (status 429)".into(),
             (FetchError::Offline(cause), _) => cause.clone(),
         }
     }
@@ -99,6 +104,8 @@ impl FetchError {
             (FetchError::Auth, _) if source == SourceId::EveScout => format!("{name} refused the request"),
             (FetchError::Auth, _) => format!("{name} key rejected"),
             (FetchError::NotFound, _) => format!("{name} {data} not found"),
+            (FetchError::RateLimit, Some(t)) => format!("{name} rate limited, {data} from {}", local_time(t)),
+            (FetchError::RateLimit, None) => format!("{name} rate limited"),
             (FetchError::Offline(_), Some(t)) => format!("{name} offline, {data} from {}", local_time(t)),
             (FetchError::Offline(_), None) => format!("{name} offline"),
         }
@@ -139,6 +146,7 @@ fn read_body(result: Result<ureq::http::Response<ureq::Body>, ureq::Error>) -> R
         Ok(mut resp) => resp.body_mut().with_config().limit(MAX_BODY).read_to_string().map_err(|e| FetchError::Offline(e.to_string())),
         Err(ureq::Error::StatusCode(401 | 403)) => Err(FetchError::Auth),
         Err(ureq::Error::StatusCode(404)) => Err(FetchError::NotFound),
+        Err(ureq::Error::StatusCode(429)) => Err(FetchError::RateLimit),
         Err(e) => Err(FetchError::Offline(e.to_string())),
     }
 }
@@ -279,9 +287,12 @@ mod tests {
 
     #[test]
     fn status_codes_give_fetch_errors() {
-        for (status, expected) in
-            [("401 Unauthorized", FetchError::Auth), ("403 Forbidden", FetchError::Auth), ("404 Not Found", FetchError::NotFound)]
-        {
+        for (status, expected) in [
+            ("401 Unauthorized", FetchError::Auth),
+            ("403 Forbidden", FetchError::Auth),
+            ("404 Not Found", FetchError::NotFound),
+            ("429 Too Many Requests", FetchError::RateLimit),
+        ] {
             let (url, _) = serve(status, "{}", Duration::ZERO);
             assert_eq!(get(&url, Some("k"), TIMEOUT), Err(expected), "{status}");
         }
@@ -327,6 +338,11 @@ mod tests {
         let offline = FetchError::Offline("x".into()).status(SourceId::Nexum, Some(t));
         assert_eq!(offline, format!("Nexum offline, map from {}", crate::wormhole::local_time(t)));
         assert_eq!(FetchError::Offline("x".into()).status(SourceId::Nexum, None), "Nexum offline");
+        assert_eq!(
+            FetchError::RateLimit.status(SourceId::EveMetro, Some(t)),
+            format!("EVE Metro rate limited, map from {}", crate::wormhole::local_time(t))
+        );
+        assert_eq!(FetchError::RateLimit.status(SourceId::EveMetro, None), "EVE Metro rate limited");
         assert_eq!(FetchError::Auth.status(SourceId::EveScout, None), "EVE-Scout refused the request");
         assert_eq!(FetchError::NotFound.status(SourceId::EveScout, None), "EVE-Scout feed not found");
     }
