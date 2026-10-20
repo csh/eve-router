@@ -8,7 +8,7 @@
 //! text for each system ID and ignores each field that it does not know.
 
 use crate::config::EveMetroConfig;
-use crate::esi::client::Esi;
+use crate::esi::client::{Esi, EsiError};
 use crate::log::{self, LogEntry, LogEntryKind, LogOp};
 use crate::sources::nexum::earlier;
 use crate::sources::{self, FetchError, MassName, OverlayWarning};
@@ -234,7 +234,14 @@ pub fn origin(cfg: &EveMetroConfig) -> Option<String> {
 
 /// Ask ESI for the corporation and the alliance of the character, then POST the query.
 fn fetch(base: &str, esi: &Esi, key: &str, character: u64, timeout: Duration) -> Result<String, FetchError> {
-    let who = esi.affiliation(character).map_err(|e| FetchError::Offline(e.to_string()))?.value;
+    // An ESI limit stops the fetch like a limit of EVE Metro: the pilot waits for the next try.
+    let who = esi
+        .affiliation(character)
+        .map_err(|e| match e {
+            EsiError::Limited { .. } => FetchError::RateLimit,
+            e => FetchError::Offline(e.to_string()),
+        })?
+        .value;
     let query = Query { character_id: character, corporation_id: who.corporation_id, alliance_id: who.alliance_id };
     let body = serde_json::to_string(&query).map_err(|e| FetchError::Offline(e.to_string()))?;
     sources::post_json(&format!("{base}/connections"), key, &body, timeout)
@@ -483,6 +490,15 @@ mod tests {
         let (esi, _, metro) = servers("{}", "200 OK", "{}");
         let result = fetch(&metro, &Esi::new(&esi), "k", 43, sources::TIMEOUT);
         assert!(matches!(result, Err(FetchError::Offline(_))), "{result:?}");
+    }
+
+    #[test]
+    fn a_rate_limit_of_either_service_gives_a_rate_limit() {
+        let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "429 Too Many Requests", "{}");
+        assert_eq!(fetch(&metro, &Esi::new(&esi), "k", 42, sources::TIMEOUT), Err(FetchError::RateLimit));
+        let (esi, _) = crate::test_support::serve_with_headers("420 Error Limited", "{}", &[("X-ESI-Error-Limit-Reset", "30")]);
+        let (metro, _) = serve("200 OK", "{}", Duration::ZERO);
+        assert_eq!(fetch(&metro, &Esi::new(&esi), "k", 42, sources::TIMEOUT), Err(FetchError::RateLimit));
     }
 
     fn load(cfg: &EveMetroConfig, esi: &str, metro: &str, cache_path: PathBuf) -> Load {

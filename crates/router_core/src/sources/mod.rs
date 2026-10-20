@@ -61,7 +61,7 @@ pub enum FetchError {
     /// 404: the map ID is wrong.
     #[error("not found")]
     NotFound,
-    /// 429: the server limits the rate of the requests.
+    /// 429: the server limits the rate of the requests. For EVE Metro, an ESI limit also gives this.
     #[error("rate limited")]
     RateLimit,
     /// A timeout, a network error, a 5xx status or bad JSON.
@@ -87,7 +87,7 @@ impl FetchError {
             (FetchError::Auth, SourceId::Nexum) => "bad API key or no access to the map".into(),
             (FetchError::Auth, SourceId::EveMetro) => "bad API key".into(),
             (FetchError::NotFound, _) => "map not found".into(),
-            (FetchError::RateLimit, _) => "rate limited (status 429)".into(),
+            (FetchError::RateLimit, _) => "rate limited".into(),
             (FetchError::Offline(cause), _) => cause.clone(),
         }
     }
