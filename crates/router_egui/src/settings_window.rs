@@ -1390,6 +1390,17 @@ fn zone_text(s: &Session, node: petgraph::graph::NodeIndex) -> Option<(String, S
 }
 
 fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool) {
+    group(ui, "Engine");
+    ui.label(
+        RichText::new("Adjust how the routing engine adapts to ansiblex usage and missing wormhole signatures.").color(theme::TEXT_DIM),
+    );
+    ui.label(
+        RichText::new(
+            "If you use bookmarks to save wormholes you may wish to leave the unknown signature cost at 1 to prevent suboptimal reroutes.",
+        )
+        .color(theme::TEXT_DIM),
+    );
+    ui.add_space(4.0);
     egui::Grid::new("settings-engine").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         // The max TJ for one bridge jump.
         label(ui, "Max TJ per bridge jump");
