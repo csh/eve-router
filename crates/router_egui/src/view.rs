@@ -15,6 +15,7 @@ use egui_phosphor_icons::icons;
 use petgraph::graph::NodeIndex;
 use router_core::labels::{LinkView, jumps_label, on_off, pilot_label, route_summary, route_tsv};
 use router_core::route::{Mode, Stop};
+use router_core::settings::MAX_TOP;
 use router_core::sources::FetchError;
 use router_core::sources::nexum::MapInfo;
 use router_core::universe::{Link, display_sec};
@@ -449,7 +450,7 @@ fn count_stepper(ui: &mut Ui, s: &mut Session) {
         }
     };
     let plus = |ui: &mut Ui, s: &mut Session| {
-        if ui.app_button("+").clicked() {
+        if ui.add_enabled(s.settings.top < MAX_TOP, AppButton::new("+")).clicked() {
             s.settings.top += 1;
             s.recompute();
             s.save();

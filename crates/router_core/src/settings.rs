@@ -56,6 +56,10 @@ impl RouteCosts {
     }
 }
 
+/// The most routes that the planner shows. The search runs on the UI thread, and its cost grows with
+/// the count: a release build needed 5.5 ms for 5 routes and 37 ms for 20 (Jita to Amarr).
+pub const MAX_TOP: usize = 10;
+
 /// The sentence that follows a "No route" error while a "Never" entry could cause it.
 pub const NO_ROUTE_HINT: &str = "Your avoid list might be in the way.";
 
@@ -193,7 +197,7 @@ impl Settings {
             hulls,
             mode: cfg.mode.unwrap_or(Mode::Shortest),
             optimize: cfg.optimize,
-            top: cfg.top.unwrap_or(5).max(1),
+            top: cfg.top.unwrap_or(5).clamp(1, MAX_TOP),
             wormholes: cfg.wormholes.unwrap_or(true),
             hubs: cfg.eve_scout,
             bridges: cfg.bridges.unwrap_or(true),
@@ -328,6 +332,18 @@ mod tests {
     use super::*;
     use crate::route::WORMHOLE_TIE;
     use crate::test_support::{FIXTURE_TIME, hulls, overlay_universe, settings};
+
+    #[test]
+    fn the_route_count_stays_between_one_and_the_maximum() {
+        let uni = overlay_universe();
+        let top = |top| Settings::from_config(&Config { top: Some(top), ..Config::default() }, &uni, hulls()).unwrap().top;
+        assert_eq!(MAX_TOP, 10);
+        assert_eq!(top(0), 1);
+        assert_eq!(top(7), 7);
+        assert_eq!(top(MAX_TOP), MAX_TOP);
+        assert_eq!(top(11), MAX_TOP);
+        assert_eq!(top(10_000), MAX_TOP);
+    }
 
     #[test]
     fn overlay_reaches_jspace() {
