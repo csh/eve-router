@@ -655,15 +655,67 @@ fn updates_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
     if form.update.busy() {
         ui.ctx().request_repaint_after(Duration::from_millis(250));
     }
-    egui::Grid::new("settings-updates").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+    let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
+    // Both grids use one label width, so the values of the two groups line up.
+    let grid = |id: &'static str| egui::Grid::new(id).num_columns(2).min_col_width(UPDATE_LABEL).spacing(vec2(18.0, 10.0));
+
+    group(ui, "Version");
+    grid("settings-update-version").show(ui, |ui| {
         label(ui, "Current version");
         ui.label(RichText::new(env!("CARGO_PKG_VERSION")).color(theme::TEXT));
         ui.end_row();
-        if let Manual::Found(available) = &form.update {
-            label(ui, "Available");
-            ui.label(RichText::new(&available.version).color(theme::TEXT));
-            ui.end_row();
+
+        // The second row answers the question of the button: is there a newer version?
+        label(ui, "Available");
+        match &form.update {
+            Manual::Idle => _ = ui.label(dim("Not checked")),
+            Manual::Checking(_) => {
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new());
+                    ui.label(dim("Checking…"));
+                });
+            }
+            Manual::Current => _ = ui.label(dim("None. You have the latest version.")),
+            Manual::Found(available) => _ = ui.label(RichText::new(&available.version).family(theme::bold()).color(theme::accent(ui))),
+            Manual::Installing { progress, .. } => {
+                let text = progress.as_ref().map_or_else(|| "Installing the update…".to_string(), |p| p.text());
+                ui.horizontal(|ui| {
+                    ui.add(egui::Spinner::new());
+                    ui.label(dim(&text));
+                });
+            }
+            Manual::Failed(text) => _ = ui.add(egui::Label::new(RichText::new(text).color(theme::ERROR_SOFT)).wrap()),
         }
+        ui.end_row();
+
+        // The action sits under the values, so it reads as the answer to the row above.
+        ui.label("");
+        match &form.update {
+            Manual::Idle | Manual::Current | Manual::Failed(_) => {
+                if ui.app_button("Check for updates").clicked() {
+                    form.update.start_check(ui.ctx());
+                }
+            }
+            Manual::Found(_) => {
+                let button = ui.add_enabled(!locked, AppButton::new("Install").primary());
+                if locked {
+                    button.on_disabled_hover_text("The install restarts the app. Stop the route first.");
+                } else if button.clicked() {
+                    form.update.start_install(ui.ctx());
+                }
+            }
+            Manual::Installing { progress, .. } => match progress.as_ref().and_then(|p| p.fraction()) {
+                Some(fraction) => _ = ui.add(egui::ProgressBar::new(fraction).fill(theme::accent(ui)).desired_width(240.0)),
+                None => _ = ui.label(""),
+            },
+            Manual::Checking(_) => _ = ui.label(""),
+        }
+        ui.end_row();
+    });
+
+    ui.add_space(14.0);
+    group(ui, "At start");
+    grid("settings-update-start").show(ui, |ui| {
         label(ui, "Check for updates");
         let mut check = s.cfg.checks_for_updates();
         if ui.app_checkbox(&mut check, "").changed() {
@@ -679,46 +731,10 @@ fn updates_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
         }
         ui.end_row();
     });
-    ui.add_space(10.0);
-    let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
-    match &form.update {
-        Manual::Idle | Manual::Current | Manual::Failed(_) => {
-            ui.horizontal(|ui| {
-                if ui.app_button("Check for updates").clicked() {
-                    form.update.start_check(ui.ctx());
-                }
-                match &form.update {
-                    Manual::Current => _ = ui.label(dim("You have the latest version.")),
-                    Manual::Failed(text) => _ = ui.label(RichText::new(text).color(theme::ERROR_SOFT)),
-                    _ => {}
-                }
-            });
-        }
-        Manual::Checking(_) => {
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new());
-                ui.label(dim("Checking for a new version…"));
-            });
-        }
-        Manual::Found(_) => {
-            let button = ui.add_enabled(!locked, AppButton::new("Install").primary());
-            if locked {
-                button.on_disabled_hover_text("The install restarts the app. Stop the route first.");
-            } else if button.clicked() {
-                form.update.start_install(ui.ctx());
-            }
-        }
-        Manual::Installing { progress, .. } => {
-            ui.horizontal(|ui| {
-                ui.add(egui::Spinner::new());
-                ui.label(dim(&progress.as_ref().map_or_else(|| "Installing the update…".to_string(), |p| p.text())));
-            });
-            if let Some(fraction) = progress.as_ref().and_then(|p| p.fraction()) {
-                ui.add(egui::ProgressBar::new(fraction).fill(theme::accent(ui)).desired_width(300.0));
-            }
-        }
-    }
 }
+
+/// The width of the label column on the Updates page.
+const UPDATE_LABEL: f32 = 190.0;
 
 fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool, loading: bool) -> Option<Action> {
     let mut action = None;
