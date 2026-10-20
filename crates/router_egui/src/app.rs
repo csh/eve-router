@@ -279,7 +279,9 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
         startup::load(&startup_cfg, &paths, env_flag(sde_update::SKIP_ENV), load_progress)?;
     let startup_lines: Vec<String> = sde.message().into_iter().collect();
     let Snapshot { uni, shortcuts, all, log, closed: _ } = snapshot;
-    let settings = Settings::from_config(&cfg, &uni, hulls)?;
+    // A value that the map or the ship list no longer knows is dropped, and the user sees a warning.
+    let (settings, dropped) = Settings::from_config(&cfg, &uni, hulls);
+    warnings.extend(dropped);
     // The worker gets the wormholes again each 5 minutes, and wakes the window after each refresh.
     let wake = ctx.clone();
     let pairs = report.pairs.clone();

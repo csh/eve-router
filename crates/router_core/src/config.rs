@@ -380,8 +380,6 @@ fn lenient_theme<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Op
 pub enum ConfigError {
     #[error("\"{0}\" is not a URL. Give a URL that starts with https:// or http://.")]
     BadUrl(String),
-    #[error("Unknown hull \"{0}\"")]
-    UnknownHull(String),
     #[error("\"{value}\" is not a TJ value. Give a number from 0 to {max}, or leave it empty for no limit.")]
     BadTjValue { value: String, max: f32 },
     #[error(transparent)]

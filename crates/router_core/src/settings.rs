@@ -183,17 +183,33 @@ pub struct Settings {
 }
 
 impl Settings {
-    /// The settings from the config.
-    pub fn from_config(cfg: &Config, uni: &Universe, hulls: Arc<HullTable>) -> Result<Settings, ConfigError> {
-        let capital = match &cfg.capital {
-            Some(name) => Some(resolve_all(uni, std::slice::from_ref(name))?[0]),
-            None => None,
-        };
-        let hull = match &cfg.hull {
-            Some(name) => Some(hulls.find(name).ok_or_else(|| ConfigError::UnknownHull(name.clone()))?),
-            None => None,
-        };
-        Ok(Settings {
+    /// The settings from the config, and a warning for each value that the map or the ship list does
+    /// not know. A renamed system or hull must not stop the start, so the function drops such a value
+    /// and loads the rest, as `avoid_from_config` does. The warnings are for the user.
+    pub fn from_config(cfg: &Config, uni: &Universe, hulls: Arc<HullTable>) -> (Settings, Vec<String>) {
+        let mut warnings = Vec::new();
+        let capital = cfg.capital.as_ref().and_then(|name| match uni.resolve(name) {
+            Ok(node) => Some(node),
+            Err(e) => {
+                warnings.push(format!("The capital in the config is not usable. {e}. Jump bridges stay off until you pick a capital."));
+                None
+            }
+        });
+        let hull = cfg.hull.as_ref().and_then(|name| {
+            let hull = hulls.find(name);
+            if hull.is_none() {
+                warnings.push(format!("Hull \"{name}\" is unknown, so no hull is set."));
+            }
+            hull
+        });
+        let mut favourites = Vec::new();
+        for name in favourite_names(cfg) {
+            match uni.resolve(&name) {
+                Ok(node) => favourites.push(node),
+                Err(e) => warnings.push(format!("A favourite is not usable and left the list. {e}.")),
+            }
+        }
+        let settings = Settings {
             hulls,
             mode: cfg.mode.unwrap_or(Mode::Shortest),
             optimize: cfg.optimize,
@@ -206,9 +222,10 @@ impl Settings {
             pochven: cfg.pochven,
             hull_source: cfg.pilot.map_or(HullSource::Manual, HullSource::Pilot),
             min_life: cfg.min_life_min.unwrap_or(config::DEFAULT_MIN_LIFE_MIN),
-            favourites: resolve_all(uni, &favourite_names(cfg))?,
+            favourites,
             avoid: avoid_from_config(cfg, uni),
-        })
+        };
+        (settings, warnings)
     }
 
     /// A router for the settings. `now` (Unix seconds) and `min_life` set which wormholes are usable.
@@ -334,9 +351,60 @@ mod tests {
     use crate::test_support::{FIXTURE_TIME, hulls, overlay_universe, settings};
 
     #[test]
+    fn a_config_that_resolves_gives_no_warning() {
+        let uni = overlay_universe();
+        let cfg = Config { capital: Some("JK-Q77".into()), hull: Some("Sin".into()), ..Config::default() };
+        let (s, warnings) = Settings::from_config(&cfg, &uni, hulls());
+        assert!(warnings.is_empty(), "{warnings:?}");
+        assert!(s.rules.capital.is_some() && s.rules.hull.is_some());
+        assert_eq!(s.favourites.len(), config::DEFAULT_FAVOURITES.len());
+    }
+
+    #[test]
+    fn an_unknown_capital_is_dropped_with_a_warning() {
+        let uni = overlay_universe();
+        let cfg = Config { capital: Some("Nowhere".into()), ..Config::default() };
+        let (s, warnings) = Settings::from_config(&cfg, &uni, hulls());
+        assert_eq!(s.rules.capital, None);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("Nowhere"), "{warnings:?}");
+    }
+
+    #[test]
+    fn an_unknown_hull_is_dropped_with_a_warning() {
+        let uni = overlay_universe();
+        let cfg = Config { hull: Some("No Such Ship".into()), ..Config::default() };
+        let (s, warnings) = Settings::from_config(&cfg, &uni, hulls());
+        assert!(s.rules.hull.is_none());
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("No Such Ship"), "{warnings:?}");
+    }
+
+    #[test]
+    fn an_unknown_favourite_is_dropped_and_the_others_stay() {
+        let uni = overlay_universe();
+        let cfg = Config { favourites: Some(vec!["Jita".into(), "Nowhere".into(), "Amarr".into()]), ..Config::default() };
+        let (s, warnings) = Settings::from_config(&cfg, &uni, hulls());
+        let names: Vec<&str> = s.favourites.iter().map(|&n| uni.name(n)).collect();
+        assert_eq!(names, ["Jita", "Amarr"]);
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("Nowhere"), "{warnings:?}");
+    }
+
+    #[test]
+    fn an_ambiguous_prefix_is_dropped_with_a_warning() {
+        // A hand-typed prefix can match more than one system, for example after an SDE update.
+        let uni = overlay_universe();
+        let cfg = Config { favourites: Some(vec!["J".into()]), ..Config::default() };
+        let (s, warnings) = Settings::from_config(&cfg, &uni, hulls());
+        assert!(s.favourites.is_empty());
+        assert!(warnings[0].contains("more than one system"), "{warnings:?}");
+    }
+
+    #[test]
     fn the_route_count_stays_between_one_and_the_maximum() {
         let uni = overlay_universe();
-        let top = |top| Settings::from_config(&Config { top: Some(top), ..Config::default() }, &uni, hulls()).unwrap().top;
+        let top = |top| Settings::from_config(&Config { top: Some(top), ..Config::default() }, &uni, hulls()).0.top;
         assert_eq!(MAX_TOP, 10);
         assert_eq!(top(0), 1);
         assert_eq!(top(7), 7);
@@ -400,7 +468,7 @@ mod tests {
         assert_eq!(cfg.pilot, Some(42));
         // The last known hull stays in the file for the next startup.
         assert_eq!(cfg.hull.as_deref(), Some("Sin"));
-        let back = Settings::from_config(&cfg, &uni, hulls()).unwrap();
+        let back = Settings::from_config(&cfg, &uni, hulls()).0;
         assert_eq!(back.hull_source, HullSource::Pilot(42));
         s.hull_source = HullSource::Manual;
         s.store(&uni, &mut cfg);
@@ -411,11 +479,11 @@ mod tests {
     fn the_wormhole_and_bridge_switches_round_trip_and_default_to_on() {
         let uni = overlay_universe();
         let mut s = settings(&uni, None);
-        assert!(Settings::from_config(&Config::default(), &uni, hulls()).unwrap().wormholes);
+        assert!(Settings::from_config(&Config::default(), &uni, hulls()).0.wormholes);
         (s.wormholes, s.bridges) = (false, false);
         let mut cfg = Config::default();
         s.store(&uni, &mut cfg);
-        let back = Settings::from_config(&cfg, &uni, hulls()).unwrap();
+        let back = Settings::from_config(&cfg, &uni, hulls()).0;
         assert_eq!((back.wormholes, back.bridges), (false, false));
     }
 
@@ -428,14 +496,14 @@ mod tests {
         s.costs = RouteCosts { cap_weight: 1.5, unknown_sig_penalty: 2.0 };
         let mut cfg = Config::default();
         s.store(&uni, &mut cfg);
-        assert_eq!(Settings::from_config(&cfg, &uni, hulls()).unwrap().costs, s.costs);
+        assert_eq!(Settings::from_config(&cfg, &uni, hulls()).0.costs, s.costs);
         // A value that is negative, too large or not a number gives the default.
         cfg.cap_weight = Some(-1.0);
         cfg.unknown_sig_penalty = Some(f32::NAN);
-        let costs = Settings::from_config(&cfg, &uni, hulls()).unwrap().costs;
+        let costs = Settings::from_config(&cfg, &uni, hulls()).0.costs;
         assert_eq!((costs.cap_weight, costs.unknown_sig_penalty), (0.6, 4.0));
         cfg.cap_weight = Some(RouteCosts::MAX + 1.0);
-        assert_eq!(Settings::from_config(&cfg, &uni, hulls()).unwrap().costs.cap_weight, 0.6);
+        assert_eq!(Settings::from_config(&cfg, &uni, hulls()).0.costs.cap_weight, 0.6);
     }
 
     #[test]
@@ -591,12 +659,12 @@ mod tests {
             (cfg.avoid_systems.as_slice(), cfg.avoid_regions.as_slice()),
             (&[AvoidName::new("Rens", true)][..], &[AvoidName::new("Lonetrek", false)][..])
         );
-        let back = Settings::from_config(&cfg, &uni, hulls()).unwrap();
+        let back = Settings::from_config(&cfg, &uni, hulls()).0;
         assert_eq!(back.avoid, s.avoid);
         // A name that the SDE does not know is dropped, and the other entries stay.
         cfg.avoid_systems.push(AvoidName::new("Nowhere", false));
         cfg.avoid_regions.push(AvoidName::new("Nowhere", false));
-        let back = Settings::from_config(&cfg, &uni, hulls()).unwrap();
+        let back = Settings::from_config(&cfg, &uni, hulls()).0;
         assert_eq!((back.avoid.systems.len(), back.avoid.regions.len()), (1, 1));
     }
 
