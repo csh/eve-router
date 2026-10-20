@@ -948,7 +948,15 @@ fn sync_status(ui: &mut Ui, s: &Session) {
 }
 
 /// The loading screen with the current step, or the load error. A download shows a progress bar.
-pub fn splash(ui: &mut Ui, error: Option<&str>, step: Option<&router_core::startup::Progress>) {
+/// With `update` set, it asks to install that version instead of the step. The result is the
+/// answer: `Some(true)` installs, `Some(false)` skips.
+pub fn splash(
+    ui: &mut Ui,
+    error: Option<&str>,
+    step: Option<&router_core::startup::Progress>,
+    update: Option<&router_core::app_update::Available>,
+) -> Option<bool> {
+    let mut answer = None;
     let frame = Frame::new().fill(theme::BG);
     egui::CentralPanel::default().frame(frame).show(ui, |ui| {
         ui.vertical_centered(|ui| {
@@ -957,8 +965,27 @@ pub fn splash(ui: &mut Ui, error: Option<&str>, step: Option<&router_core::start
                 panel(ui, "EVE Router", "", false, |ui| {
                     ui.vertical_centered(|ui| {
                         ui.add_space(8.0);
-                        match error {
-                            None => {
+                        match (error, update) {
+                            (None, Some(update)) => {
+                                ui.label(
+                                    RichText::new("A new version is available").family(theme::bold()).size(16.0).color(Color32::WHITE),
+                                );
+                                ui.add_space(4.0);
+                                ui.label(RichText::new(format!("Current version: {}", env!("CARGO_PKG_VERSION"))).color(theme::TEXT_DIM));
+                                ui.label(RichText::new(format!("Available: {}", update.version)).color(theme::TEXT));
+                                ui.add_space(10.0);
+                                ui.horizontal(|ui| {
+                                    // Center the two buttons: the row takes only its own width.
+                                    ui.add_space(((ui.available_width() - 250.0) / 2.0).max(0.0));
+                                    if ui.add(AppButton::new("Install and restart").primary()).clicked() {
+                                        answer = Some(true);
+                                    }
+                                    if ui.app_button("Skip this time").clicked() {
+                                        answer = Some(false);
+                                    }
+                                });
+                            }
+                            (None, None) => {
                                 ui.add(egui::Spinner::new().size(28.0).color(theme::accent(ui)));
                                 ui.add_space(8.0);
                                 let text = step.map_or_else(|| "Starting…".to_string(), router_core::startup::Progress::text);
@@ -968,7 +995,7 @@ pub fn splash(ui: &mut Ui, error: Option<&str>, step: Option<&router_core::start
                                     ui.add(egui::ProgressBar::new(fraction).fill(theme::accent(ui)).desired_width(300.0));
                                 }
                             }
-                            Some(e) => {
+                            (Some(e), _) => {
                                 ui.add_space(4.0);
                                 ui.label(RichText::new(icons::WARNING_CIRCLE.as_str()).size(30.0).color(theme::ERROR_SOFT));
                                 ui.add_space(10.0);
@@ -990,6 +1017,7 @@ pub fn splash(ui: &mut Ui, error: Option<&str>, step: Option<&router_core::start
             });
         });
     });
+    answer
 }
 
 #[cfg(test)]
@@ -1013,20 +1041,29 @@ mod tests {
     #[test]
     fn the_splash_draws_every_step_and_the_error() {
         use router_core::startup::Progress;
-        let steps = [None, Some(Progress::CheckingSde), Some(Progress::DownloadingSde { done: 5, total: 10 }), Some(Progress::LoadingMap)];
+        let steps = [
+            None,
+            Some(Progress::CheckingUpdate),
+            Some(Progress::DownloadingUpdate { done: 5, total: 10 }),
+            Some(Progress::CheckingSde),
+            Some(Progress::DownloadingSde { done: 5, total: 10 }),
+            Some(Progress::LoadingMap),
+        ];
         // The app registers its fonts and theme first: the splash uses the bold font.
         let ctx = egui::Context::default();
         theme::apply_default(&ctx);
         theme::set_font(&ctx);
-        let draw = |error: Option<&str>, step: Option<&Progress>| {
+        let draw = |error: Option<&str>, step: Option<&Progress>, update: Option<&router_core::app_update::Available>| {
             // The frame output holds texture changes. A test with no renderer drops them.
-            let mut output = ctx.run_ui(Default::default(), |ui| splash(ui, error, step));
+            let mut output = ctx.run_ui(Default::default(), |ui| _ = splash(ui, error, step, update));
             output.textures_delta.clear();
         };
         for step in &steps {
-            draw(None, step.as_ref());
+            draw(None, step.as_ref(), None);
         }
-        draw(Some("Cannot read the config"), None);
+        draw(Some("Cannot read the config"), None, None);
+        let update = router_core::app_update::Available { tag: "v9.9.9".into(), version: "9.9.9".into(), notes: None };
+        draw(None, Some(&Progress::CheckingUpdate), Some(&update));
     }
 
     #[test]

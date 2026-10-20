@@ -8,7 +8,6 @@ use crate::error::UpdateError;
 use self_update::backends::github::{Update, UpdateBuilder};
 use self_update::version::cmp_versions;
 use std::cmp::Ordering;
-use std::convert::Infallible;
 
 const OWNER: &str = "csh";
 const REPO: &str = "eve-router";
@@ -80,9 +79,13 @@ pub fn install(available: &Available, on_progress: impl Fn(u64, Option<u64>) + S
     Ok(())
 }
 
-/// Start the new file with `UPDATED_ARG`, then end this process. It returns only if the start fails.
-pub fn restart() -> Result<Infallible, UpdateError> {
-    Ok(self_update::restart::restart_with([UPDATED_ARG])?)
+/// Start the new file with `UPDATED_ARG`, then end this process. It returns only if the start
+/// fails, and then it gives the fault.
+pub fn restart() -> UpdateError {
+    match self_update::restart::restart_with([UPDATED_ARG]) {
+        Ok(never) => match never {},
+        Err(e) => e.into(),
+    }
 }
 
 #[cfg(test)]

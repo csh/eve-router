@@ -19,6 +19,10 @@ use std::sync::Arc;
 /// A step of the load, for the splash screen.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum Progress {
+    /// Ask GitHub for a newer version of the app.
+    CheckingUpdate,
+    /// Download the new version. `done` and `total` count bytes. `total` is 0 while it is not known.
+    DownloadingUpdate { done: u64, total: u64 },
     /// Ask the server for the latest SDE build.
     CheckingSde,
     /// Download the SDE files. `done` and `total` count compressed bytes.
@@ -33,6 +37,11 @@ impl Progress {
     /// The text for the splash screen, for example "Downloading the SDE: 12.3 of 31.0 MB".
     pub fn text(&self) -> String {
         match self {
+            Progress::CheckingUpdate => "Checking for a new version…".into(),
+            Progress::DownloadingUpdate { done, total: 0 } => format!("Downloading the update: {:.1} MB", *done as f64 / 1e6),
+            Progress::DownloadingUpdate { done, total } => {
+                format!("Downloading the update: {:.1} of {:.1} MB", *done as f64 / 1e6, *total as f64 / 1e6)
+            }
             Progress::CheckingSde => "Checking for a new SDE…".into(),
             Progress::DownloadingSde { done, total } => {
                 format!("Downloading the SDE: {:.1} of {:.1} MB", *done as f64 / 1e6, *total as f64 / 1e6)
@@ -46,7 +55,9 @@ impl Progress {
     /// with no known length.
     pub fn fraction(&self) -> Option<f32> {
         match self {
-            Progress::DownloadingSde { done, total } if *total > 0 => Some((*done as f64 / *total as f64) as f32),
+            Progress::DownloadingSde { done, total } | Progress::DownloadingUpdate { done, total } if *total > 0 => {
+                Some((*done as f64 / *total as f64) as f32)
+            }
             _ => None,
         }
     }
@@ -142,5 +153,18 @@ mod tests {
         assert_eq!(Progress::DownloadingSde { done: 0, total: 0 }.fraction(), None);
         assert_eq!(Progress::LoadingMap.fraction(), None);
         assert_eq!(Progress::CheckingSde.text(), "Checking for a new SDE…");
+    }
+
+    #[test]
+    fn an_update_shows_the_megabytes_and_a_fraction() {
+        let p = Progress::DownloadingUpdate { done: 5_000_000, total: 20_000_000 };
+        assert_eq!(p.text(), "Downloading the update: 5.0 of 20.0 MB");
+        assert_eq!(p.fraction(), Some(0.25));
+        // The server sent no length: the text shows the bytes so far, and the bar stays off.
+        let unknown = Progress::DownloadingUpdate { done: 5_000_000, total: 0 };
+        assert_eq!(unknown.text(), "Downloading the update: 5.0 MB");
+        assert_eq!(unknown.fraction(), None);
+        assert_eq!(Progress::CheckingUpdate.text(), "Checking for a new version…");
+        assert_eq!(Progress::CheckingUpdate.fraction(), None);
     }
 }
