@@ -1,6 +1,7 @@
 //! The modal windows: the settings, the Pilot picker, the Nexum map list and the messages.
 
 use crate::app::Session;
+use crate::app_update::Manual;
 use crate::overlay::Overlay;
 use crate::pilots_view::{Portraits, pilot_portrait};
 use crate::search::SearchBox;
@@ -51,6 +52,8 @@ pub struct SettingsForm {
     /// The EVE Metro key field. It starts empty too.
     metro_key: String,
     error: Option<String>,
+    /// The manual check on the Updates page, and the install after it.
+    update: Manual,
     /// The field that the pilot saved last, and when. "Saved" shows next to it for `SAVED_TIME`.
     saved: Option<(Saved, Instant)>,
 }
@@ -98,6 +101,7 @@ impl SettingsForm {
             key: String::new(),
             metro_key: String::new(),
             error: None,
+            update: Manual::default(),
             saved: None,
         }
     }
@@ -549,7 +553,7 @@ fn settings(
                 #[cfg(windows)]
                 Page::Overlay => {}
                 Page::Engine => engine_page(ui, form, s, locked),
-                Page::Updates => updates_page(ui, s),
+                Page::Updates => updates_page(ui, form, s, locked),
             });
         });
     });
@@ -643,9 +647,23 @@ fn theme_page(ui: &mut Ui, s: &mut Session) {
     });
 }
 
-/// The update settings. A change applies at the next start, and it needs no route recompute.
-fn updates_page(ui: &mut Ui, s: &mut Session) {
+/// The update settings, and the manual check. A change applies at the next start, and it needs no
+/// route recompute. The install restarts the app, so a route that is active locks it.
+fn updates_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool) {
+    form.update.poll();
+    // The worker wakes the window when it ends. This is a backup, in case a thread stops early.
+    if form.update.busy() {
+        ui.ctx().request_repaint_after(Duration::from_millis(250));
+    }
     egui::Grid::new("settings-updates").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        label(ui, "Current version");
+        ui.label(RichText::new(env!("CARGO_PKG_VERSION")).color(theme::TEXT));
+        ui.end_row();
+        if let Manual::Found(available) = &form.update {
+            label(ui, "Available");
+            ui.label(RichText::new(&available.version).color(theme::TEXT));
+            ui.end_row();
+        }
         label(ui, "Check for updates");
         let mut check = s.cfg.checks_for_updates();
         if ui.app_checkbox(&mut check, "").changed() {
@@ -661,6 +679,45 @@ fn updates_page(ui: &mut Ui, s: &mut Session) {
         }
         ui.end_row();
     });
+    ui.add_space(10.0);
+    let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
+    match &form.update {
+        Manual::Idle | Manual::Current | Manual::Failed(_) => {
+            ui.horizontal(|ui| {
+                if ui.app_button("Check for updates").clicked() {
+                    form.update.start_check(ui.ctx());
+                }
+                match &form.update {
+                    Manual::Current => _ = ui.label(dim("You have the latest version.")),
+                    Manual::Failed(text) => _ = ui.label(RichText::new(text).color(theme::ERROR_SOFT)),
+                    _ => {}
+                }
+            });
+        }
+        Manual::Checking(_) => {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new());
+                ui.label(dim("Checking for a new version…"));
+            });
+        }
+        Manual::Found(_) => {
+            let button = ui.add_enabled(!locked, AppButton::new("Install").primary());
+            if locked {
+                button.on_disabled_hover_text("The install restarts the app. Stop the route first.");
+            } else if button.clicked() {
+                form.update.start_install(ui.ctx());
+            }
+        }
+        Manual::Installing { progress, .. } => {
+            ui.horizontal(|ui| {
+                ui.add(egui::Spinner::new());
+                ui.label(dim(&progress.as_ref().map_or_else(|| "Installing the update…".to_string(), |p| p.text())));
+            });
+            if let Some(fraction) = progress.as_ref().and_then(|p| p.fraction()) {
+                ui.add(egui::ProgressBar::new(fraction).fill(theme::accent(ui)).desired_width(300.0));
+            }
+        }
+    }
 }
 
 fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool, loading: bool) -> Option<Action> {
@@ -1610,6 +1667,39 @@ mod tests {
         // Drawing changes no setting.
         assert_eq!(s.cfg.eve_metro.character, Some(99));
         assert!(!s.settings.pochven);
+    }
+
+    #[test]
+    fn the_updates_page_draws_every_state() {
+        use crate::app_update::{Available, Manual, Progress};
+        let (mut s, _tmp) = session_with_pilots();
+        let mut form = SettingsForm::new(&s, Page::Updates);
+        let ctx = egui::Context::default();
+        theme::apply_default(&ctx);
+        theme::set_font(&ctx);
+        let found = || Available { tag: "v9.9.9".into(), version: "9.9.9".into(), notes: None };
+        let (_tx, rx) = std::sync::mpsc::channel();
+        let (_check_tx, check_rx) = std::sync::mpsc::channel();
+        let states = vec![
+            (Manual::Idle, false),
+            (Manual::Current, false),
+            (Manual::Failed("The check for a new version failed: offline".into()), false),
+            (Manual::Checking(check_rx), false),
+            (Manual::Found(found()), false),
+            (Manual::Found(found()), true),
+            (Manual::Installing { rx, progress: Some(Progress::Downloading { done: 5, total: 10 }) }, false),
+        ];
+        for (state, locked) in states {
+            form.update = state;
+            let mut output = ctx.run_ui(Default::default(), |ui| updates_page(ui, &mut form, &mut s, locked));
+            output.textures_delta.clear();
+        }
+        // Drawing changes no setting, and a locked page keeps the version found.
+        assert!(s.cfg.checks_for_updates() && !s.cfg.auto_update);
+        form.update = Manual::Found(found());
+        let mut output = ctx.run_ui(Default::default(), |ui| updates_page(ui, &mut form, &mut s, true));
+        output.textures_delta.clear();
+        assert!(matches!(form.update, Manual::Found(_)));
     }
 
     #[cfg(windows)]
