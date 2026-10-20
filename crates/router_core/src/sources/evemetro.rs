@@ -4,8 +4,9 @@
 //! any of the three has access.
 //!
 //! The format comes from the service code (`calli-eve/eve-metro-api`, `src/handlers/connections.js`).
-//! The router has not yet read a reply from the live service, so the parser accepts a number or a
-//! text for each system ID and ignores each field that it does not know.
+//! A reply from the live service (2026-10-20) is the fixture `evemetro-live.json`. It has integer
+//! system IDs and text for the other fields. The parser still accepts a number or a text for each
+//! system ID and ignores each field that it does not know.
 
 use crate::config::EveMetroConfig;
 use crate::esi::client::Affiliation;
@@ -359,6 +360,20 @@ mod tests {
 
     fn who() -> Affiliation {
         Affiliation { corporation_id: 7, alliance_id: Some(9) }
+    }
+
+    /// A reply from the live service. Both ends are K162, the signature has a trailing space.
+    #[test]
+    fn convert_the_live_reply() {
+        let text = std::fs::read_to_string(crate::test_support::fixture("evemetro-live.json")).unwrap();
+        // 2026-10-20T09:00:00Z, shortly after the creation time of the wormhole.
+        let (data, report) = convert(&parse(&text).unwrap(), |_| true, &types(), 1_792_486_800);
+        assert_eq!(report, MetroReport::default());
+        assert_eq!(data.holes.len(), 1, "{:?}", data.holes);
+        let hole = &data.holes[0];
+        assert_eq!((hole.a, hole.b), (30_001_445, 30_002_087));
+        assert_eq!((hole.mass, hole.wh_type.as_ref(), hole.expiry), (Some(MassStatus::Stable), None, None));
+        assert!(hole.sig_at(30_001_445).is_some_and(|s| s.starts_with("XOB") && !s.ends_with(' ')), "{:?}", hole.sig_at(30_001_445));
     }
 
     #[test]
