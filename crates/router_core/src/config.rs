@@ -1,6 +1,7 @@
 //! The `eve-router.json` file.
 
 use crate::error::{FileError, write_atomic_with};
+use crate::esi::client::Affiliation;
 use crate::route::{Mode, RouteError};
 use crate::wormhole::Hubs;
 use crate::wormhole::SourceId;
@@ -204,6 +205,11 @@ pub struct EveMetroConfig {
     pub key: Option<ApiKey>,
     /// The character that identifies the user to the API. It must be a linked character.
     pub character: Option<u64>,
+    /// The corporation and the alliance of `character`. The file never holds them. The app sets
+    /// them from the ESI poll of a character with a valid login (`Pilots::affiliation`), because
+    /// the service grants access by these IDs.
+    #[serde(skip)]
+    pub affiliation: Option<Affiliation>,
 }
 
 impl EveMetroConfig {
@@ -213,6 +219,13 @@ impl EveMetroConfig {
             return None;
         }
         Some((self.key.as_ref()?.0.as_str(), self.character?))
+    }
+
+    /// What a request needs: the key, the character and its verified affiliation. `None` while the
+    /// settings are not complete or ESI has not given the affiliation.
+    pub fn request(&self) -> Option<(&str, u64, &Affiliation)> {
+        let (key, character) = self.complete()?;
+        Some((key, character, self.affiliation.as_ref()?))
     }
 
     /// The settings that the router uses. EVE Metro needs a logged-in character to identify the
@@ -502,7 +515,12 @@ mod tests {
                 map_ids: vec!["m1".into()],
                 keep_unsigned: true,
             },
-            eve_metro: EveMetroConfig { enabled: true, key: Some(ApiKey("metro_key".into())), character: Some(2112345678) },
+            eve_metro: EveMetroConfig {
+                enabled: true,
+                key: Some(ApiKey("metro_key".into())),
+                character: Some(2112345678),
+                ..Default::default()
+            },
             eve_scout: Hubs { thera: false, turnur: true },
             pochven: true,
             theme: None,
@@ -624,7 +642,7 @@ mod tests {
 
     #[test]
     fn eve_metro_is_off_without_a_client_id() {
-        let cfg = EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(42) };
+        let cfg = EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(42), ..Default::default() };
         assert_eq!(cfg.gated(true), cfg);
         assert_eq!(cfg.gated(false), EveMetroConfig::default());
         assert_eq!(cfg.gated(false).complete(), None);
@@ -639,7 +657,12 @@ mod tests {
         assert_eq!(cfg.eve_metro, EveMetroConfig::default());
         assert_eq!(cfg.eve_metro.complete(), None);
         let cfg = Config {
-            eve_metro: EveMetroConfig { enabled: true, key: Some(ApiKey("metro_SECRET_000000000abc".into())), character: Some(7) },
+            eve_metro: EveMetroConfig {
+                enabled: true,
+                key: Some(ApiKey("metro_SECRET_000000000abc".into())),
+                character: Some(7),
+                ..Default::default()
+            },
             ..Config::default()
         };
         let debug = format!("{cfg:?}");
@@ -650,14 +673,20 @@ mod tests {
     #[test]
     fn the_eve_metro_key_never_reaches_the_file() {
         let cfg = Config {
-            eve_metro: EveMetroConfig { enabled: true, key: Some(ApiKey("metro_SECRET".into())), character: Some(7) },
+            eve_metro: EveMetroConfig { enabled: true, key: Some(ApiKey("metro_SECRET".into())), character: Some(7), ..Default::default() },
             ..Config::default()
         };
         let text = serde_json::to_string(&cfg).unwrap();
         assert!(!text.contains("SECRET"), "{text}");
+        // The file cannot supply the affiliation either: a pilot could name a paying corporation.
+        let forged: EveMetroConfig =
+            serde_json::from_str(r#"{"enabled":true,"character":7,"affiliation":{"corporation_id":1,"alliance_id":2}}"#).unwrap();
+        assert_eq!(forged.affiliation, None);
+        let with = EveMetroConfig { affiliation: Some(Affiliation { corporation_id: 1, alliance_id: Some(2) }), ..forged };
+        assert!(!serde_json::to_string(&with).unwrap().contains("corporation"));
         // A key from an older file is ignored.
         let old: EveMetroConfig = serde_json::from_str(r#"{"enabled":true,"key":"metro_OLD","character":7}"#).unwrap();
-        assert_eq!(old, EveMetroConfig { enabled: true, key: None, character: Some(7) });
+        assert_eq!(old, EveMetroConfig { enabled: true, key: None, character: Some(7), ..Default::default() });
     }
 
     #[test]

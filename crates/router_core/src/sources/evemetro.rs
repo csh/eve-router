@@ -8,7 +8,7 @@
 //! text for each system ID and ignores each field that it does not know.
 
 use crate::config::EveMetroConfig;
-use crate::esi::client::{Esi, EsiError};
+use crate::esi::client::Affiliation;
 use crate::log::{self, LogEntry, LogEntryKind, LogOp};
 use crate::sources::nexum::earlier;
 use crate::sources::{self, FetchError, MassName, OverlayWarning};
@@ -218,6 +218,9 @@ pub enum Pending {
     None,
     /// A cache that is less than 5 minutes old. The router sends no request.
     Cache(SourceData),
+    /// The settings are complete, but ESI has not given the affiliation of the character yet. The
+    /// router sends no request and uses the cache, of any age. The affiliation starts a fetch.
+    Waiting(Option<SourceData>),
     /// A fetch on a thread. The cache is the fallback for a failure.
     Fetch { thread: JoinHandle<Result<String, FetchError>>, started: u64, origin: String, cache: Option<SourceData>, cache_path: PathBuf },
 }
@@ -232,34 +235,27 @@ pub fn origin(cfg: &EveMetroConfig) -> Option<String> {
     cfg.complete().map(|(_, character)| origin_at(URL, character))
 }
 
-/// Ask ESI for the corporation and the alliance of the character, then POST the query.
-fn fetch(base: &str, esi: &Esi, key: &str, character: u64, timeout: Duration) -> Result<String, FetchError> {
-    // An ESI limit stops the fetch like a limit of EVE Metro: the pilot waits for the next try.
-    let who = esi
-        .affiliation(character)
-        .map_err(|e| match e {
-            EsiError::Limited { .. } => FetchError::RateLimit,
-            e => FetchError::Offline(e.to_string()),
-        })?
-        .value;
+/// POST the query. `who` is the affiliation that ESI gave for the character. The service grants
+/// access by these IDs, so the caller never gets them from a file.
+fn fetch(base: &str, key: &str, character: u64, who: &Affiliation, timeout: Duration) -> Result<String, FetchError> {
     let query = Query { character_id: character, corporation_id: who.corporation_id, alliance_id: who.alliance_id };
     let body = serde_json::to_string(&query).map_err(|e| FetchError::Offline(e.to_string()))?;
     sources::post_json(&format!("{base}/connections"), key, &body, timeout)
 }
 
-/// Start the EVE Metro load: a fresh cache, else a fetch on a thread. `base` is `URL` and `esi`
-/// is `ESI_URL`. A test gives the addresses of its own servers.
-pub fn start(cfg: &EveMetroConfig, base: &str, esi: &str, cache_path: PathBuf, now: u64) -> Pending {
-    start_with(cfg, base, esi, cache_path, now, true)
+/// Start the EVE Metro load: a fresh cache, else a fetch on a thread. `base` is `URL`. A test
+/// gives the address of its own server.
+pub fn start(cfg: &EveMetroConfig, base: &str, cache_path: PathBuf, now: u64) -> Pending {
+    start_with(cfg, base, cache_path, now, true)
 }
 
 /// Start a fetch, also when the cache is fresh. A settings change needs this.
-pub fn start_fetch(cfg: &EveMetroConfig, base: &str, esi: &str, cache_path: PathBuf, now: u64) -> Pending {
-    start_with(cfg, base, esi, cache_path, now, false)
+pub fn start_fetch(cfg: &EveMetroConfig, base: &str, cache_path: PathBuf, now: u64) -> Pending {
+    start_with(cfg, base, cache_path, now, false)
 }
 
 /// Start the EVE Metro load. `use_fresh` false skips the fresh-cache check.
-fn start_with(cfg: &EveMetroConfig, base: &str, esi: &str, cache_path: PathBuf, now: u64, use_fresh: bool) -> Pending {
+fn start_with(cfg: &EveMetroConfig, base: &str, cache_path: PathBuf, now: u64, use_fresh: bool) -> Pending {
     let Some((key, character)) = cfg.complete() else {
         return Pending::None;
     };
@@ -268,8 +264,12 @@ fn start_with(cfg: &EveMetroConfig, base: &str, esi: &str, cache_path: PathBuf, 
     if use_fresh && let Some(data) = cache.as_ref().filter(|d| sources::cache_is_fresh(d, now)) {
         return Pending::Cache(data.clone());
     }
-    let (base, esi, key) = (base.to_string(), Esi::new(esi), key.to_string());
-    let thread = sources::spawn_fetch(SourceId::EveMetro, move || fetch(&base, &esi, &key, character, sources::TIMEOUT));
+    // No verified affiliation, no request. A pilot could otherwise name any corporation or alliance.
+    let Some((_, _, who)) = cfg.request() else {
+        return Pending::Waiting(cache);
+    };
+    let (base, key, who) = (base.to_string(), key.to_string(), who.clone());
+    let thread = sources::spawn_fetch(SourceId::EveMetro, move || fetch(&base, &key, character, &who, sources::TIMEOUT));
     Pending::Fetch { thread, started: now, origin, cache, cache_path }
 }
 
@@ -286,6 +286,10 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
                 message: "cache is fresh".into(),
             }];
             Load { data: Some(data), log, ..Load::default() }
+        }
+        Pending::Waiting(cache) => {
+            tracing::info!(cache_in_use = cache.is_some(), "EVE Metro waits for the affiliation of the character, so no request goes out");
+            Load { data: cache, ..Load::default() }
         }
         Pending::Fetch { thread, started, origin, cache, cache_path } => {
             let fetched = thread.join().unwrap_or_else(|_| Err(FetchError::Offline("the fetch thread failed".into())));
@@ -322,10 +326,9 @@ pub fn finish(pending: Pending, known: impl Fn(u32) -> bool, types: &WormholeTyp
 mod tests {
     use super::*;
     use crate::config::ApiKey;
-    use crate::test_support::{serve, serve_routes};
+    use crate::test_support::serve;
     use crate::wormhole::MassStatus;
     use crate::wormhole_types::WormholeType;
-    use std::collections::HashMap;
 
     /// 2026-10-05T12:00:00Z.
     const FETCHED: u64 = 1_791_201_600;
@@ -351,7 +354,11 @@ mod tests {
     }
 
     fn cfg() -> EveMetroConfig {
-        EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(42) }
+        EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(42), affiliation: Some(who()) }
+    }
+
+    fn who() -> Affiliation {
+        Affiliation { corporation_id: 7, alliance_id: Some(9) }
     }
 
     #[test]
@@ -448,21 +455,20 @@ mod tests {
         assert_eq!(EveMetroConfig { enabled: false, ..cfg() }.complete(), None);
         assert_eq!(EveMetroConfig { key: None, ..cfg() }.complete(), None);
         assert_eq!(EveMetroConfig { character: None, ..cfg() }.complete(), None);
-        assert!(matches!(start(&EveMetroConfig::default(), URL, "http://esi.test", PathBuf::from("none.json"), 0), Pending::None));
+        assert!(matches!(start(&EveMetroConfig::default(), URL, PathBuf::from("none.json"), 0), Pending::None));
     }
 
-    /// The addresses of an ESI test server and an EVE Metro test server.
-    fn servers(esi_body: &str, metro_status: &str, metro_body: &str) -> (String, std::sync::mpsc::Receiver<String>, String) {
-        let routes = HashMap::from([("/characters/42/".to_string(), esi_body.to_string())]);
-        let (esi, _) = serve_routes(routes);
-        let (metro, request) = serve(metro_status, metro_body, Duration::ZERO);
-        (esi, request, metro)
+    #[test]
+    fn a_request_needs_the_affiliation() {
+        assert_eq!(cfg().request(), Some(("metro_test_key", 42, &who())));
+        assert_eq!(EveMetroConfig { affiliation: None, ..cfg() }.request(), None);
+        assert_eq!(EveMetroConfig { enabled: false, ..cfg() }.request(), None);
     }
 
     #[test]
     fn fetch_sends_the_key_and_all_three_ids() {
-        let (esi, request, metro) = servers(r#"{"corporation_id":7,"alliance_id":9,"name":"x"}"#, "200 OK", &fixture_text());
-        let text = fetch(&metro, &Esi::new(&esi), "metro_test_key", 42, sources::TIMEOUT).unwrap();
+        let (metro, request) = serve("200 OK", &fixture_text(), Duration::ZERO);
+        let text = fetch(&metro, "metro_test_key", 42, &who(), sources::TIMEOUT).unwrap();
         assert!(text.contains("Kino"));
         let request = request.recv().unwrap();
         let lower = request.to_lowercase();
@@ -475,34 +481,23 @@ mod tests {
 
     #[test]
     fn a_character_with_no_alliance_sends_no_alliance() {
-        let (esi, request, metro) = servers(r#"{"corporation_id":7}"#, "200 OK", "{}");
-        fetch(&metro, &Esi::new(&esi), "k", 42, sources::TIMEOUT).unwrap();
+        let (metro, request) = serve("200 OK", "{}", Duration::ZERO);
+        fetch(&metro, "k", 42, &Affiliation { corporation_id: 7, alliance_id: None }, sources::TIMEOUT).unwrap();
         let request = request.recv().unwrap();
         let body: serde_json::Value = serde_json::from_str(request.split("\r\n\r\n").nth(1).unwrap()).unwrap();
         assert_eq!(body, serde_json::json!({"character_id": 42, "corporation_id": 7}));
     }
 
     #[test]
-    fn a_refused_key_and_a_failed_esi_call() {
-        let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "403 Forbidden", "{}");
-        assert_eq!(fetch(&metro, &Esi::new(&esi), "bad", 42, sources::TIMEOUT), Err(FetchError::Auth));
-        // The ESI test server answers 500 for a character that it does not know.
-        let (esi, _, metro) = servers("{}", "200 OK", "{}");
-        let result = fetch(&metro, &Esi::new(&esi), "k", 43, sources::TIMEOUT);
-        assert!(matches!(result, Err(FetchError::Offline(_))), "{result:?}");
+    fn a_refused_key_and_a_rate_limit() {
+        let (metro, _) = serve("403 Forbidden", "{}", Duration::ZERO);
+        assert_eq!(fetch(&metro, "bad", 42, &who(), sources::TIMEOUT), Err(FetchError::Auth));
+        let (metro, _) = serve("429 Too Many Requests", "{}", Duration::ZERO);
+        assert_eq!(fetch(&metro, "k", 42, &who(), sources::TIMEOUT), Err(FetchError::RateLimit));
     }
 
-    #[test]
-    fn a_rate_limit_of_either_service_gives_a_rate_limit() {
-        let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "429 Too Many Requests", "{}");
-        assert_eq!(fetch(&metro, &Esi::new(&esi), "k", 42, sources::TIMEOUT), Err(FetchError::RateLimit));
-        let (esi, _) = crate::test_support::serve_with_headers("420 Error Limited", "{}", &[("X-ESI-Error-Limit-Reset", "30")]);
-        let (metro, _) = serve("200 OK", "{}", Duration::ZERO);
-        assert_eq!(fetch(&metro, &Esi::new(&esi), "k", 42, sources::TIMEOUT), Err(FetchError::RateLimit));
-    }
-
-    fn load(cfg: &EveMetroConfig, esi: &str, metro: &str, cache_path: PathBuf) -> Load {
-        let pending = start_with(cfg, metro, esi, cache_path, FETCHED, true);
+    fn load(cfg: &EveMetroConfig, metro: &str, cache_path: PathBuf) -> Load {
+        let pending = start_with(cfg, metro, cache_path, FETCHED, true);
         finish(pending, |id| id != 39_999_999, &types())
     }
 
@@ -510,8 +505,8 @@ mod tests {
     fn a_fetch_loads_and_writes_the_cache() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("eve-metro.json");
-        let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "200 OK", &fixture_text());
-        let result = load(&cfg(), &esi, &metro, path.clone());
+        let (metro, _) = serve("200 OK", &fixture_text(), Duration::ZERO);
+        let result = load(&cfg(), &metro, path.clone());
         assert!(result.warnings.is_empty());
         assert_eq!(result.data.as_ref().map(|d| d.holes.len()), Some(2));
         assert_eq!(result.log[0].op, LogOp::EveMetroFetch);
@@ -521,17 +516,42 @@ mod tests {
         assert_eq!(origin(&cfg()), Some(format!("{URL}/connections#42")));
         assert_eq!(origin(&EveMetroConfig::default()), None);
         // A fresh cache for the same character stops the fetch. Another character does not use it.
-        assert!(matches!(start_with(&cfg(), &metro, &esi, path.clone(), FETCHED, true), Pending::Cache(_)));
+        assert!(matches!(start_with(&cfg(), &metro, path.clone(), FETCHED, true), Pending::Cache(_)));
         let other = EveMetroConfig { character: Some(43), ..cfg() };
-        assert!(matches!(start_with(&other, &metro, &esi, path, FETCHED, true), Pending::Fetch { cache: None, .. }));
+        assert!(matches!(start_with(&other, &metro, path, FETCHED, true), Pending::Fetch { cache: None, .. }));
+    }
+
+    #[test]
+    fn no_affiliation_means_no_request_and_the_cache_of_any_age() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("eve-metro.json");
+        let (metro, _) = serve("200 OK", &fixture_text(), Duration::ZERO);
+        load(&cfg(), &metro, path.clone());
+        // Old cache, and a server that must not see a request. The origin names that server.
+        let (silent, requests) = serve("200 OK", "{}", Duration::ZERO);
+        let old =
+            SourceData { fetched_at: FETCHED - 2 * HOUR, origin: Some(origin_at(&silent, 42)), ..sources::read_cache(&path).unwrap() };
+        sources::write_cache(&path, &old).unwrap();
+        let unverified = EveMetroConfig { affiliation: None, ..cfg() };
+        for use_fresh in [true, false] {
+            let pending = start_with(&unverified, &silent, path.clone(), FETCHED, use_fresh);
+            assert!(matches!(pending, Pending::Waiting(Some(_))));
+            let result = finish(pending, |_| true, &types());
+            assert_eq!(result.data.as_ref().map(|d| d.holes.len()), Some(2));
+            assert!(result.warnings.is_empty());
+        }
+        assert!(requests.recv_timeout(Duration::from_millis(300)).is_err(), "a request went out with no verified affiliation");
+        // No cache and no affiliation: nothing to show.
+        let none = start_with(&unverified, &silent, tmp.path().join("other.json"), FETCHED, true);
+        assert_eq!(finish(none, |_| true, &types()).data, None);
     }
 
     #[test]
     fn no_access_gives_a_warning_and_no_wormholes() {
         let tmp = tempfile::tempdir().unwrap();
-        let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "200 OK", r#"{"access":false}"#);
+        let (metro, _) = serve("200 OK", r#"{"access":false}"#, Duration::ZERO);
         // No cache exists yet, so there is nothing to keep.
-        let result = load(&cfg(), &esi, &metro, tmp.path().join("eve-metro.json"));
+        let result = load(&cfg(), &metro, tmp.path().join("eve-metro.json"));
         assert_eq!(result.warnings, [OverlayWarning::MetroNoAccess]);
         assert_eq!(result.data, None);
         assert!(result.report.no_access);
@@ -545,16 +565,16 @@ mod tests {
     fn no_access_keeps_a_good_cache() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("eve-metro.json");
-        let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "200 OK", &fixture_text());
-        load(&cfg(), &esi, &metro, path.clone());
+        let (metro, _) = serve("200 OK", &fixture_text(), Duration::ZERO);
+        load(&cfg(), &metro, path.clone());
         let before = sources::read_cache(&path).expect("no cache file");
         assert_eq!(before.holes.len(), 2);
 
-        let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "200 OK", r#"{"access":false}"#);
+        let (metro, _) = serve("200 OK", r#"{"access":false}"#, Duration::ZERO);
         // The cache must be old, else `load` takes it with no fetch, and the test proves nothing.
         let old = SourceData { fetched_at: FETCHED - 2 * HOUR, origin: Some(origin_at(&metro, 42)), ..before.clone() };
         sources::write_cache(&path, &old).unwrap();
-        let result = load(&cfg(), &esi, &metro, path.clone());
+        let result = load(&cfg(), &metro, path.clone());
         assert_eq!(result.data.as_ref().map(|d| d.holes.len()), Some(2), "the cached map stays");
         assert_eq!(result.warnings, [OverlayWarning::MetroNoAccess]);
         // The cache file on disk is untouched too, not just the in-memory result.
@@ -565,13 +585,13 @@ mod tests {
     fn a_failure_uses_the_cache() {
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().join("eve-metro.json");
-        let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "200 OK", &fixture_text());
-        load(&cfg(), &esi, &metro, path.clone());
+        let (metro, _) = serve("200 OK", &fixture_text(), Duration::ZERO);
+        load(&cfg(), &metro, path.clone());
         // The cache is old now, and the server refuses the key.
-        let (esi, _, metro) = servers(r#"{"corporation_id":7}"#, "403 Forbidden", "{}");
+        let (metro, _) = serve("403 Forbidden", "{}", Duration::ZERO);
         let old = SourceData { fetched_at: FETCHED - 2 * HOUR, origin: Some(origin_at(&metro, 42)), ..sources::read_cache(&path).unwrap() };
         sources::write_cache(&path, &old).unwrap();
-        let result = load(&cfg(), &esi, &metro, path);
+        let result = load(&cfg(), &metro, path);
         assert_eq!(result.data.as_ref().map(|d| d.holes.len()), Some(2));
         assert_eq!(sources::warning_text(&result.warnings).as_deref(), Some("EVE Metro key rejected"));
         assert_eq!(result.log[0].kind, LogEntryKind::Auth);

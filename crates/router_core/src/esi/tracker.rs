@@ -5,12 +5,13 @@
 //! Poll intervals (`Intervals::default`):
 //! - location: 5 s for the active pilot, 30 s for the others,
 //! - ship: 30 s,
-//! - online: 60 s.
+//! - online: 60 s,
+//! - affiliation (corporation and alliance): 30 min.
 //!
 //! A poll never comes before the `Expires` time of the last response. When the ESI error budget
 //! falls below `SLOW_BELOW`, each interval is 4 times longer, and `Event::Limited(true)` goes out.
 
-use super::client::{Esi, EsiError, Fetched, Location, Online, Ship};
+use super::client::{Affiliation, Esi, EsiError, Fetched, Location, Online, Ship};
 use super::sso::{LoginError, Sso, Tokens};
 use oauth2::{AccessToken, RefreshToken};
 use std::collections::HashMap;
@@ -32,6 +33,7 @@ pub trait Api: Send + 'static {
     fn location(&self, token: &AccessToken, id: u64) -> Result<Fetched<Location>, EsiError>;
     fn ship(&self, token: &AccessToken, id: u64) -> Result<Fetched<Ship>, EsiError>;
     fn online(&self, token: &AccessToken, id: u64) -> Result<Fetched<Online>, EsiError>;
+    fn affiliation(&self, id: u64) -> Result<Fetched<Affiliation>, EsiError>;
     fn add_waypoint(&self, token: &AccessToken, system: u32, clear: bool) -> Result<(), EsiError>;
 }
 
@@ -53,6 +55,9 @@ impl Api for Live {
     fn online(&self, token: &AccessToken, id: u64) -> Result<Fetched<Online>, EsiError> {
         self.esi.online(token, id)
     }
+    fn affiliation(&self, id: u64) -> Result<Fetched<Affiliation>, EsiError> {
+        self.esi.affiliation(id)
+    }
     fn add_waypoint(&self, token: &AccessToken, system: u32, clear: bool) -> Result<(), EsiError> {
         self.esi.add_waypoint(token, system, clear)
     }
@@ -64,6 +69,7 @@ pub struct Intervals {
     pub location: Duration,
     pub ship: Duration,
     pub online: Duration,
+    pub affiliation: Duration,
 }
 
 impl Default for Intervals {
@@ -73,6 +79,7 @@ impl Default for Intervals {
             location: Duration::from_secs(30),
             ship: Duration::from_secs(30),
             online: Duration::from_secs(60),
+            affiliation: Duration::from_secs(30 * 60),
         }
     }
 }
@@ -122,6 +129,13 @@ pub enum Event {
     Online {
         id: u64,
         online: bool,
+    },
+    /// The corporation and the alliance of a character, from a successful poll. It goes out at
+    /// each poll, also without a change, so the listener knows the age of the value. A poll runs
+    /// only for a character with a valid login.
+    Affiliation {
+        id: u64,
+        affiliation: Affiliation,
     },
     /// New tokens. Store the refresh token with `Accounts::store`, because SSO can rotate it.
     Refreshed(Tokens),
@@ -186,6 +200,7 @@ struct Pilot {
     next_location: Instant,
     next_ship: Instant,
     next_online: Instant,
+    next_affiliation: Instant,
     system: Option<u32>,
     ship: Option<Ship>,
     online: Option<bool>,
@@ -211,12 +226,14 @@ enum Reading {
     Location(u32),
     Ship(Ship),
     Online(bool),
+    Affiliation(Affiliation),
 }
 
 enum Kind {
     Location,
     Ship,
     Online,
+    Affiliation,
 }
 
 impl<A: Api, W: Fn()> Worker<A, W> {
@@ -243,7 +260,8 @@ impl<A: Api, W: Fn()> Worker<A, W> {
 
     /// The earliest time at which a poll is due.
     fn next_due(&self) -> Option<Instant> {
-        let polls = self.pilots.values().filter(|p| !p.paused).flat_map(|p| [p.next_location, p.next_ship, p.next_online]);
+        let polls =
+            self.pilots.values().filter(|p| !p.paused).flat_map(|p| [p.next_location, p.next_ship, p.next_online, p.next_affiliation]);
         let due = polls.min()?;
         Some(self.blocked_until.map_or(due, |b| due.max(b)))
     }
@@ -259,6 +277,7 @@ impl<A: Api, W: Fn()> Worker<A, W> {
                     next_location: now,
                     next_ship: now,
                     next_online: now,
+                    next_affiliation: now,
                     system: None,
                     ship: None,
                     online: None,
@@ -291,12 +310,13 @@ impl<A: Api, W: Fn()> Worker<A, W> {
         self.blocked_until = None;
         let ids: Vec<u64> = self.pilots.keys().copied().collect();
         for id in ids {
-            for kind in [Kind::Location, Kind::Ship, Kind::Online] {
+            for kind in [Kind::Location, Kind::Ship, Kind::Online, Kind::Affiliation] {
                 let Some(pilot) = self.pilots.get(&id) else { break };
                 let due = match kind {
                     Kind::Location => pilot.next_location,
                     Kind::Ship => pilot.next_ship,
                     Kind::Online => pilot.next_online,
+                    Kind::Affiliation => pilot.next_affiliation,
                 };
                 if pilot.paused || now < due {
                     continue;
@@ -316,12 +336,16 @@ impl<A: Api, W: Fn()> Worker<A, W> {
             Kind::Location => self.intervals.location,
             Kind::Ship => self.intervals.ship,
             Kind::Online => self.intervals.online,
+            Kind::Affiliation => self.intervals.affiliation,
         };
         let interval = self.interval(base);
         let result: Result<Polled, EsiError> = match kind {
             Kind::Location => self.api.location(&token, id).map(|f| (Reading::Location(f.value.solar_system_id), f.expires, f.errors_left)),
             Kind::Ship => self.api.ship(&token, id).map(|f| (Reading::Ship(f.value), f.expires, f.errors_left)),
             Kind::Online => self.api.online(&token, id).map(|f| (Reading::Online(f.value.online), f.expires, f.errors_left)),
+            // The call needs no token. The poll runs only with a valid login, which proves that the
+            // user controls the character.
+            Kind::Affiliation => self.api.affiliation(id).map(|f| (Reading::Affiliation(f.value), f.expires, f.errors_left)),
         };
         let next = match result {
             Ok((reading, expires, errors_left)) => {
@@ -348,6 +372,7 @@ impl<A: Api, W: Fn()> Worker<A, W> {
             Kind::Location => pilot.next_location = next,
             Kind::Ship => pilot.next_ship = next,
             Kind::Online => pilot.next_online = next,
+            Kind::Affiliation => pilot.next_affiliation = next,
         }
     }
 
@@ -371,6 +396,8 @@ impl<A: Api, W: Fn()> Worker<A, W> {
                 pilot.online = Some(online);
                 changed.then_some(Event::Online { id, online })
             }
+            // Each success is an event: the age of the value matters to the listener.
+            Reading::Affiliation(affiliation) => Some(Event::Affiliation { id, affiliation }),
         }
     }
 
@@ -454,6 +481,7 @@ impl<A: Api, W: Fn()> Worker<A, W> {
                     pilot.next_location = pilot.next_location.max(retry);
                     pilot.next_ship = pilot.next_ship.max(retry);
                     pilot.next_online = pilot.next_online.max(retry);
+                    pilot.next_affiliation = pilot.next_affiliation.max(retry);
                 }
                 self.emit(Event::Error { id, text: e.to_string() });
                 None
@@ -519,6 +547,8 @@ pub(crate) mod fake {
         pub refresh_rejected: bool,
         pub errors_left: Option<u32>,
         pub limited: bool,
+        /// The affiliation call fails.
+        pub affiliation_fails: bool,
         /// The waypoint call fails at this index.
         pub fail_waypoint_at: Option<usize>,
         pub waypoints: Vec<(u32, bool)>,
@@ -564,6 +594,14 @@ pub(crate) mod fake {
             self.0.lock().unwrap().calls.push(format!("online {id}"));
             Ok(fetched(Online { online: true }, None))
         }
+        fn affiliation(&self, id: u64) -> Result<Fetched<Affiliation>, EsiError> {
+            let mut s = self.0.lock().unwrap();
+            s.calls.push(format!("affiliation {id}"));
+            if s.affiliation_fails {
+                return Err(EsiError::Offline("down".into()));
+            }
+            Ok(fetched(Affiliation { corporation_id: 7, alliance_id: Some(9) }, None))
+        }
         fn add_waypoint(&self, _: &AccessToken, system: u32, clear: bool) -> Result<(), EsiError> {
             let mut s = self.0.lock().unwrap();
             if s.fail_waypoint_at == Some(s.waypoints.len()) {
@@ -582,7 +620,7 @@ mod tests {
 
     fn fast() -> Intervals {
         let ms = Duration::from_millis;
-        Intervals { active_location: ms(20), location: ms(200), ship: ms(10_000), online: ms(10_000) }
+        Intervals { active_location: ms(20), location: ms(200), ship: ms(10_000), online: ms(10_000), affiliation: ms(10_000) }
     }
 
     /// Wait for the first event that `pick` accepts. Other events are dropped.
@@ -640,6 +678,39 @@ mod tests {
         assert_eq!(wait_for(&tracker, |e| if let Event::Location { system, .. } = e { Some(system) } else { None }), 30000142);
         wait_for(&tracker, |e| matches!(e, Event::Ship { .. }).then_some(()));
         wait_for(&tracker, |e| matches!(e, Event::Online { online: true, .. }).then_some(()));
+    }
+
+    #[test]
+    fn the_affiliation_comes_with_each_poll_of_a_valid_login() {
+        let fake = Fake::default();
+        let tracker = start(&fake);
+        let who = Affiliation { corporation_id: 7, alliance_id: Some(9) };
+        let first = wait_for(&tracker, |e| if let Event::Affiliation { id, affiliation } = e { Some((id, affiliation)) } else { None });
+        assert_eq!(first, (1, who));
+    }
+
+    #[test]
+    fn a_rejected_login_polls_no_affiliation() {
+        let fake = Fake::default();
+        fake.0.lock().unwrap().refresh_rejected = true;
+        let tracker = start(&fake);
+        wait_for(&tracker, |e| matches!(e, Event::LoginExpired(1)).then_some(()));
+        std::thread::sleep(SETTLE);
+        let calls = fake.0.lock().unwrap().calls.clone();
+        assert!(!calls.iter().any(|c| c.starts_with("affiliation")), "{calls:?}");
+    }
+
+    #[test]
+    fn a_failed_affiliation_poll_gives_no_value() {
+        let fake = Fake::default();
+        fake.0.lock().unwrap().affiliation_fails = true;
+        let tracker = start(&fake);
+        wait_calls(&fake, |calls| calls.iter().any(|c| c == "affiliation 1"));
+        let mut events = Vec::new();
+        while let Ok(event) = tracker.events.recv_timeout(Duration::from_millis(100)) {
+            events.push(event);
+        }
+        assert!(!events.iter().any(|e| matches!(e, Event::Affiliation { .. })), "{events:?}");
     }
 
     #[test]

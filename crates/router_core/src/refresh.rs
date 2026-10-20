@@ -2,6 +2,7 @@
 //! map. Thus a route of the old map keeps correct edge indices until the app swaps the map.
 
 use crate::config::{AppPaths, EveMetroConfig, NexumConfig};
+use crate::esi::client::Affiliation;
 use crate::labels::Shortcuts;
 use crate::log::LogEntry;
 use crate::overlay::{self, OverlayReport};
@@ -179,9 +180,8 @@ pub struct Setup {
     pub metro: EveMetroConfig,
     /// The cache file of the EVE Metro data.
     pub metro_cache: PathBuf,
-    /// The URL of EVE Metro, and the URL of ESI for the corporation and the alliance.
+    /// The URL of EVE Metro.
     pub metro_url: String,
-    pub esi_url: String,
     /// The URL of the EVE-Scout feed.
     pub scout_url: String,
     /// The cache file of the EVE-Scout data.
@@ -205,7 +205,6 @@ impl Setup {
             metro: EveMetroConfig::default(),
             metro_cache: paths.cache_file(SourceId::EveMetro),
             metro_url: evemetro::URL.into(),
-            esi_url: crate::esi::client::ESI_URL.into(),
             scout_url: evescout::URL.into(),
             scout_cache: paths.cache_file(SourceId::EveScout),
             interval: INTERVAL,
@@ -222,6 +221,9 @@ pub enum Control {
     Nexum(NexumConfig),
     /// Use these EVE Metro settings. Refresh at once with no fresh-cache check, then start a new interval.
     EveMetro(EveMetroConfig),
+    /// The verified affiliation of the EVE Metro character changed: ESI gave a new one, or the
+    /// last one is too old. Refresh EVE Metro only, with no fresh-cache check. `None` stops the requests.
+    Affiliation(Option<Affiliation>),
     /// Refresh at once with no fresh-cache check, then start a new interval.
     Refresh,
     /// Leave this hole out of each map until the app stops. A fresh cache stays in use.
@@ -279,6 +281,12 @@ impl Refresher {
         let _ = self.control.send(Control::Reopen(hole));
     }
 
+    /// Use a new verified affiliation for EVE Metro, and refresh EVE Metro at once. A stopped
+    /// worker ignores the message.
+    pub fn affiliation(&self, affiliation: Option<Affiliation>) {
+        let _ = self.control.send(Control::Affiliation(affiliation));
+    }
+
     /// Refresh at once, also when a cache is fresh. A stopped worker ignores the message.
     pub fn refresh(&self) {
         let _ = self.control.send(Control::Refresh);
@@ -308,6 +316,8 @@ struct Worker {
     last_metro: Option<SourceData>,
     /// The holes that the pilot closed. They live as long as the worker, so they never reach a file.
     closed: Vec<ClosedHole>,
+    /// The next tick fetches EVE Metro with no fresh-cache check, after an affiliation change.
+    force_metro: bool,
 }
 
 impl Worker {
@@ -319,6 +329,7 @@ impl Worker {
             last_scout: last(SourceId::EveScout),
             last_metro: last(SourceId::EveMetro),
             closed: Vec::new(),
+            force_metro: false,
             setup,
         }
     }
@@ -340,6 +351,14 @@ impl Worker {
                 Ok(Control::EveMetro(cfg)) => {
                     self.setup.metro = cfg;
                     true
+                }
+                Ok(Control::Affiliation(affiliation)) => {
+                    // The message follows the verified value, so a change in either direction counts.
+                    if self.setup.metro.affiliation != affiliation {
+                        self.setup.metro.affiliation = affiliation;
+                        self.force_metro = true;
+                    }
+                    false
                 }
                 Ok(Control::Refresh) => true,
                 Ok(Control::Close(hole)) => {
@@ -367,6 +386,7 @@ impl Worker {
     /// One refresh at `now`. `force` skips the fresh-cache check of both sources.
     #[tracing::instrument(level = "info", skip_all, fields(force = force))]
     fn tick(&mut self, now: u64, force: bool) -> Snapshot {
+        let force_metro = force || std::mem::take(&mut self.force_metro);
         let s = &self.setup;
         let pending = if force {
             nexum::start_fetch(&s.nexum, s.nexum_cache.clone(), now)
@@ -378,10 +398,10 @@ impl Worker {
         } else {
             evescout::start(&s.scout_url, s.scout_cache.clone(), now)
         };
-        let metro_pending = if force {
-            evemetro::start_fetch(&s.metro, &s.metro_url, &s.esi_url, s.metro_cache.clone(), now)
+        let metro_pending = if force_metro {
+            evemetro::start_fetch(&s.metro, &s.metro_url, s.metro_cache.clone(), now)
         } else {
-            evemetro::start(&s.metro, &s.metro_url, &s.esi_url, s.metro_cache.clone(), now)
+            evemetro::start(&s.metro, &s.metro_url, s.metro_cache.clone(), now)
         };
         let known = |id: u32| s.base.by_id.contains_key(&id);
         let mut wh = nexum::finish(pending, known, &s.types);
@@ -607,7 +627,6 @@ mod tests {
             metro: EveMetroConfig::default(),
             metro_cache: dir.join("eve-metro.json"),
             metro_url: "http://127.0.0.1:9".into(),
-            esi_url: "http://127.0.0.1:9".into(),
             scout_url,
             scout_cache: dir.join("eve-scout.json"),
             interval,
@@ -697,7 +716,12 @@ mod tests {
     }
 
     fn metro_cfg(character: u64) -> EveMetroConfig {
-        EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(character) }
+        EveMetroConfig {
+            enabled: true,
+            key: Some(ApiKey("metro_test_key".into())),
+            character: Some(character),
+            affiliation: Some(Affiliation { corporation_id: 7, alliance_id: Some(9) }),
+        }
     }
 
     #[test]
@@ -705,10 +729,9 @@ mod tests {
         let reply = format!(
             r#"{{"access":true,"connections":[{{"systemId":"{JITA}","systemEdges":[{{"solarSystemIdDst":{AMARR},"signatureSrc":"ABC-123","wormholeTypeSrc":"K162","wormholeTypeDst":"B274"}}]}}]}}"#
         );
-        let (esi, _) = serve_routes(HashMap::from([("/characters/42/".to_string(), r#"{"corporation_id":7}"#.to_string())]));
         let (metro, request) = serve("200 OK", &reply, Duration::ZERO);
-        let (mut setup, _tmp) = setup(format!("{esi}/scout"), Duration::from_secs(3600));
-        (setup.metro_url, setup.esi_url) = (metro, esi);
+        let (mut setup, _tmp) = setup("http://127.0.0.1:9/scout".into(), Duration::from_secs(3600));
+        setup.metro_url = metro;
         let r = Refresher::start(setup, || FIXTURE_TIME, || {});
         r.eve_metro(metro_cfg(42));
         let snap = r.recv_timeout(Duration::from_secs(10)).expect("no refresh after the message");
@@ -719,6 +742,27 @@ mod tests {
         assert_eq!(snap.shortcuts.metro, 1);
         assert!(snap.shortcuts.sources.iter().any(|(source, _)| *source == SourceId::EveMetro));
         assert!(snap.log.iter().any(|l| l.op == LogOp::EveMetroFetch && l.kind.is_ok()));
+    }
+
+    #[test]
+    fn an_affiliation_message_starts_the_eve_metro_fetch_and_a_loss_stops_it() {
+        let reply = r#"{"access":true,"connections":[]}"#;
+        let (metro, request) = serve("200 OK", reply, Duration::ZERO);
+        // One hour: a snapshot in this test comes from a message, not from the interval.
+        let (mut setup, _tmp) = setup("http://127.0.0.1:9/scout".into(), Duration::from_secs(3600));
+        setup.metro_url = metro;
+        // The settings are complete, but ESI has not verified the affiliation.
+        setup.metro = EveMetroConfig { affiliation: None, ..metro_cfg(42) };
+        let r = Refresher::start(setup, || FIXTURE_TIME, || {});
+        r.affiliation(Some(Affiliation { corporation_id: 7, alliance_id: Some(9) }));
+        r.recv_timeout(Duration::from_secs(10)).expect("no refresh after the affiliation");
+        let text = request.recv_timeout(Duration::from_secs(5)).expect("no request after the affiliation");
+        assert!(text.contains("\"corporation_id\":7") && text.contains("\"alliance_id\":9"), "{text}");
+        // The same value again changes nothing, and a lost value sends no new request.
+        r.affiliation(Some(Affiliation { corporation_id: 7, alliance_id: Some(9) }));
+        r.affiliation(None);
+        r.recv_timeout(Duration::from_secs(10)).expect("no refresh after the loss");
+        assert!(request.recv_timeout(Duration::from_millis(300)).is_err(), "a request went out with no affiliation");
     }
 
     #[test]
@@ -738,7 +782,7 @@ mod tests {
         // The ESI server has no routes, so each fetch fails, and no cache file exists.
         let (url, _) = serve_routes(HashMap::new());
         let (mut setup, _tmp) = setup(format!("{url}/scout"), INTERVAL);
-        (setup.metro_url, setup.esi_url) = (url.clone(), url);
+        setup.metro_url = url;
         let mut worker = Worker::new(setup);
         worker.setup.metro = metro_cfg(42);
         let kept = |character: u64| SourceData {

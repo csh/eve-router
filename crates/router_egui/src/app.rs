@@ -5,8 +5,9 @@ use crate::notice::{Level, Notice};
 use crate::theme;
 use crate::view::View;
 use petgraph::graph::NodeIndex;
-use router_core::config::{AppPaths, Config};
+use router_core::config::{AppPaths, Config, EveMetroConfig};
 use router_core::error::FileError;
+use router_core::esi::client::Affiliation;
 use router_core::esi::pilots::Pilots;
 use router_core::esi::store::{Keyring, StoreError, TokenStore};
 use router_core::esi::{self, active::active_path};
@@ -338,6 +339,8 @@ pub struct Session {
     refresher: Option<Refresher>,
     /// The time of the last manual refresh.
     refreshed_at: Option<Instant>,
+    /// The verified affiliation that the worker has for EVE Metro. See `sync_metro_affiliation`.
+    metro_affiliation: Option<Affiliation>,
     /// The SDE update messages of the startup load.
     /// The messages for the pilot. The window moves them to the toasts at the next frame.
     pub notices: Vec<Notice>,
@@ -383,6 +386,7 @@ impl Session {
             log: Vec::new(),
             refresher: None,
             refreshed_at: None,
+            metro_affiliation: None,
             notices: Vec::new(),
             bridges_reason: None,
             fetch_warnings: Vec::new(),
@@ -830,6 +834,29 @@ impl Session {
         }
     }
 
+    /// The EVE Metro settings that the worker gets: the settings of the user, gated by the EVE
+    /// client ID, with the corporation and the alliance that ESI gave for the picked character.
+    /// A character that is not tracked, or whose login expired, has none, so the worker sends no request.
+    fn metro_settings(&self) -> EveMetroConfig {
+        let mut settings = self.cfg.eve_metro.gated(self.pilots.shows_characters());
+        settings.affiliation = settings.character.and_then(|id| self.pilots.affiliation(id));
+        settings
+    }
+
+    /// Tell the worker when the verified affiliation of the EVE Metro character changes. Call this
+    /// each frame. The change starts a fetch of EVE Metro. A lost value (a login that expired, or
+    /// a value older than `AFFILIATION_MAX_AGE`) stops the requests.
+    pub fn sync_metro_affiliation(&mut self) {
+        let current = self.metro_settings().affiliation;
+        if current == self.metro_affiliation {
+            return;
+        }
+        self.metro_affiliation.clone_from(&current);
+        if let Some(refresher) = &self.refresher {
+            refresher.affiliation(current);
+        }
+    }
+
     /// Save the config after a change to an EVE Metro value. The refresh worker loads the map at
     /// once. Without an EVE client ID the source stays off, and the worker gets the settings off.
     pub fn eve_metro_saved(&mut self) {
@@ -843,7 +870,8 @@ impl Session {
             self.notify(Level::Info, "EVE Metro settings saved. Restart to load the map.");
             return;
         };
-        refresher.eve_metro(self.cfg.eve_metro.gated(sso_ready));
+        refresher.eve_metro(self.metro_settings());
+        self.metro_affiliation = self.cfg.eve_metro.character.and_then(|id| self.pilots.affiliation(id));
         if !sso_ready {
             self.notify(Level::Warning, evemetro::NEEDS_CLIENT_ID);
         } else if self.cfg.eve_metro.enabled {
@@ -1322,7 +1350,7 @@ mod tests {
     }
 
     fn metro_settings() -> EveMetroConfig {
-        EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(42) }
+        EveMetroConfig { enabled: true, key: Some(ApiKey("metro_test_key".into())), character: Some(42), ..Default::default() }
     }
 
     #[test]
@@ -1338,6 +1366,37 @@ mod tests {
         assert_eq!(sent, metro_settings());
         // The settings are in the file, but the key is not.
         assert_eq!(Config::load(&s.cfg_path).unwrap().eve_metro, EveMetroConfig { key: None, ..metro_settings() });
+    }
+
+    #[test]
+    fn the_worker_follows_the_verified_affiliation_of_the_picked_character() {
+        let (refresher, _snapshots, control) = fake_refresher();
+        let (mut s, tmp) = session();
+        s.refresher = Some(refresher);
+        s.pilots = Pilots::offline_with_client_id(tmp.path().join("active-route.json"), &[(42, "Pilot")]);
+        s.cfg.eve_metro = metro_settings();
+        let who = Affiliation { corporation_id: 7, alliance_id: Some(9) };
+        // Nothing verified yet: no message.
+        s.sync_metro_affiliation();
+        assert!(control.try_recv().is_err());
+        // ESI gives the value: one message. The same value again sends nothing.
+        s.pilots.set_affiliation(42, who.clone(), Duration::ZERO);
+        s.sync_metro_affiliation();
+        s.sync_metro_affiliation();
+        assert!(matches!(control.try_recv(), Ok(Control::Affiliation(Some(a))) if a == who));
+        assert!(control.try_recv().is_err());
+        // The settings message carries the verified value.
+        s.eve_metro_saved();
+        let Ok(Control::EveMetro(sent)) = control.try_recv() else { panic!("no EVE Metro message") };
+        assert_eq!(sent.affiliation, Some(who.clone()));
+        // The value gets too old: the worker loses it.
+        s.pilots.set_affiliation(42, who.clone(), router_core::esi::pilots::AFFILIATION_MAX_AGE + Duration::from_secs(1));
+        s.sync_metro_affiliation();
+        assert!(matches!(control.try_recv(), Ok(Control::Affiliation(None))));
+        // A character that is not tracked never gets a value, whatever the config file says.
+        s.cfg.eve_metro.character = Some(43);
+        s.pilots.set_affiliation(42, who, Duration::ZERO);
+        assert_eq!(s.metro_settings().affiliation, None);
     }
 
     #[test]

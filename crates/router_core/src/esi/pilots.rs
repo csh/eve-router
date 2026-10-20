@@ -7,7 +7,7 @@
 
 use super::Character;
 use super::active::{ActiveRoute, Observation, active_path};
-use super::client::{Esi, Location, Ship};
+use super::client::{Affiliation, Esi, Location, Ship};
 use super::sso::{Login, LoginError, Sso, Tokens};
 use super::store::{Accounts, StoreError, TokenStore, characters_path};
 use super::tracker::{Command, Event, Intervals, Live, SendError, Tracker};
@@ -20,6 +20,10 @@ use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver};
+use std::time::{Duration, Instant};
+
+/// The longest age of an affiliation that `Pilots::affiliation` still gives after failed polls.
+pub const AFFILIATION_MAX_AGE: Duration = Duration::from_secs(24 * 60 * 60);
 
 /// Runs after a background event, for example to repaint the window.
 pub type Wake = Arc<dyn Fn() + Send + Sync>;
@@ -159,6 +163,9 @@ pub struct Pilots {
     client_id: Option<String>,
     tracker: Option<Tracker>,
     pub live: HashMap<u64, PilotState>,
+    /// The corporation and the alliance of a character, with the time of the last successful ESI
+    /// poll. They live in memory only: a value in a file could be edited. See `affiliation`.
+    affiliations: HashMap<u64, (Affiliation, Instant)>,
     pub login: Option<LoginFlow>,
     /// The route that is in the game. The UI hides the planner while it is `Some`.
     pub active: Option<ActiveRoute>,
@@ -237,6 +244,7 @@ impl Pilots {
             client_id,
             tracker,
             live: HashMap::new(),
+            affiliations: HashMap::new(),
             login: None,
             active: None,
             pending: None,
@@ -293,6 +301,22 @@ impl Pilots {
         Ok(client_id)
     }
 
+    /// The corporation and the alliance of a character, when ESI gave them in this run for a
+    /// character with a valid login, at most `AFFILIATION_MAX_AGE` ago. A failed poll keeps the last
+    /// value until that age. After it, and for a character that is not tracked, the result is
+    /// `None`. EVE Metro grants access by these IDs, so nothing else may supply them.
+    pub fn affiliation(&self, id: u64) -> Option<Affiliation> {
+        let (affiliation, at) = self.affiliations.get(&id)?;
+        (at.elapsed() < AFFILIATION_MAX_AGE).then(|| affiliation.clone())
+    }
+
+    /// Set a verified value with its age. The tests use it.
+    #[cfg(any(test, feature = "test-support"))]
+    pub fn set_affiliation(&mut self, id: u64, affiliation: Affiliation, age: Duration) {
+        let at = Instant::now().checked_sub(age).unwrap_or_else(Instant::now);
+        self.affiliations.insert(id, (affiliation, at));
+    }
+
     /// True if the UI shows the characters. Without a client ID the router can neither log in nor
     /// track a character, so the UI hides them. The stored characters stay in the file.
     pub fn shows_characters(&self) -> bool {
@@ -346,6 +370,7 @@ impl Pilots {
             tracker.send(Command::Remove(id));
         }
         self.live.remove(&id);
+        self.affiliations.remove(&id);
         let Some(accounts) = &mut self.accounts else { return };
         if let (Ok(Some(refresh)), Some(client_id)) = (accounts.refresh_token(id), self.client_id.clone()) {
             std::thread::spawn(move || match Sso::new(&client_id).revoke(&refresh) {
@@ -598,6 +623,7 @@ impl Pilots {
             Event::Seen { id, system } => self.observe(id, system),
             Event::Ship { id, ship } => self.live.entry(id).or_default().ship = Some(ship),
             Event::Online { id, online } => self.live.entry(id).or_default().online = Some(online),
+            Event::Affiliation { id, affiliation } => _ = self.affiliations.insert(id, (affiliation, Instant::now())),
             Event::Refreshed(tokens) => {
                 // The user can remove a character while its refresh is in flight. The result then
                 // arrives after the removal, and storing it would bring the character back.
@@ -610,6 +636,8 @@ impl Pilots {
             }
             Event::LoginExpired(id) => {
                 self.live.entry(id).or_default().expired = true;
+                // Without a valid login, the value is not verified any more.
+                self.affiliations.remove(&id);
                 let name = self.name(id);
                 self.notices.push(format!("Tracking paused - {name}'s login expired. Log in again."));
             }
@@ -739,7 +767,7 @@ mod tests {
     /// `Pilots` with a test `Api` and short poll intervals, so a test sees a change in milliseconds.
     fn pilots_with(accounts: Accounts, api: impl crate::esi::tracker::Api, active_path: PathBuf) -> Pilots {
         let ms = Duration::from_millis;
-        let intervals = Intervals { active_location: ms(20), location: ms(50), ship: ms(1000), online: ms(1000) };
+        let intervals = Intervals { active_location: ms(20), location: ms(50), ship: ms(1000), online: ms(1000), affiliation: ms(1000) };
         let tracker = Tracker::start(api, intervals, || {});
         Pilots::with_parts(Some(accounts), Some("test-client".into()), Some(tracker), active_path, Arc::new(|| {}))
     }
@@ -749,6 +777,30 @@ mod tests {
         let mut accounts = Accounts::with_store(None, Box::new(MemoryStore::default())).unwrap();
         accounts.store(&tokens(1, "Alice")).unwrap();
         (pilots_with(accounts, fake.clone(), tmp.path().join("active-route.json")), tmp)
+    }
+
+    #[test]
+    fn an_affiliation_is_valid_for_a_day_and_only_for_a_valid_login() {
+        let who = Affiliation { corporation_id: 7, alliance_id: Some(9) };
+        let (mut p, _tmp) = pilots(&Fake::default());
+        assert_eq!(p.affiliation(1), None, "nothing is known before the first poll");
+        p.event(Event::Affiliation { id: 1, affiliation: who.clone() });
+        assert_eq!(p.affiliation(1), Some(who.clone()));
+        // Only a tracked character with a poll has a value.
+        assert_eq!(p.affiliation(2), None);
+        // A value from a failed run of polls stays until the limit, and then it goes.
+        p.set_affiliation(1, who.clone(), AFFILIATION_MAX_AGE - Duration::from_secs(60));
+        assert_eq!(p.affiliation(1), Some(who.clone()));
+        p.set_affiliation(1, who.clone(), AFFILIATION_MAX_AGE + Duration::from_secs(1));
+        assert_eq!(p.affiliation(1), None);
+        // An expired login removes the value at once.
+        p.event(Event::Affiliation { id: 1, affiliation: who.clone() });
+        p.event(Event::LoginExpired(1));
+        assert_eq!(p.affiliation(1), None);
+        // A removal of the character does too.
+        p.event(Event::Affiliation { id: 1, affiliation: who });
+        p.remove(1);
+        assert_eq!(p.affiliation(1), None);
     }
 
     #[test]

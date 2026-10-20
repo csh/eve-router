@@ -5,7 +5,6 @@
 
 use crate::config::{self, AppPaths, Config, ConfigError};
 use crate::error::{FileError, SdeError};
-use crate::esi::client::ESI_URL;
 use crate::overlay::{self, OverlayReport};
 use crate::refresh::{self, Snapshot};
 use crate::sde_update::{self, Outcome};
@@ -88,7 +87,7 @@ pub fn load(cfg: &Config, paths: &AppPaths, skip_sde_check: bool, progress: impl
     let scout = evescout::start(evescout::URL, paths.cache_file(SourceId::EveScout), wormhole::now());
     // EVE Metro needs a key and a picked character. Without them the source stays off.
     let metro_cache = paths.cache_file(SourceId::EveMetro);
-    let metro = evemetro::start(&cfg.eve_metro, evemetro::URL, ESI_URL, metro_cache, wormhole::now());
+    let metro = evemetro::start(&cfg.eve_metro, evemetro::URL, metro_cache, wormhole::now());
 
     let sde_dir = paths.sde.as_path();
     progress(Progress::CheckingSde);

@@ -217,6 +217,7 @@ impl PilotsUi {
         self.portraits.poll(ctx);
         let had_login = s.pilots.login.is_some();
         s.pilots.update();
+        s.sync_metro_affiliation();
         match s.pilots.sync_hull(&mut s.settings) {
             HullSync::None => {}
             HullSync::Source => s.save(),
