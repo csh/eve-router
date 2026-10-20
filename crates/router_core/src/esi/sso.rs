@@ -106,7 +106,7 @@ impl Http {
     fn new() -> Http {
         let config = ureq::Agent::config_builder()
             .timeout_global(Some(TIMEOUT))
-            .user_agent(concat!("eve-router/", env!("CARGO_PKG_VERSION")))
+            .user_agent(crate::sources::USER_AGENT)
             // `oauth2` reads the error body of a 4xx response.
             .http_status_as_error(false)
             // A redirect from the token endpoint is not followed.

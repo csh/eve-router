@@ -97,7 +97,7 @@ impl Esi {
     pub fn new(base: &str) -> Esi {
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(TIMEOUT))
-            .user_agent(concat!("eve-router/", env!("CARGO_PKG_VERSION")))
+            .user_agent(crate::sources::USER_AGENT)
             // The status and the headers of an error response are needed.
             .http_status_as_error(false)
             .build()
@@ -206,6 +206,15 @@ mod tests {
         assert!(request.starts_with("get /characters/2112625428/location http/1.1"), "{request}");
         assert!(request.contains("authorization: bearer t0ken"), "{request}");
         assert!(request.contains(&format!("x-compatibility-date: {COMPATIBILITY_DATE}")), "{request}");
+    }
+
+    #[test]
+    fn requests_name_the_author_and_the_repository() {
+        let (url, rx) = serve("200 OK", r#"{"online": true}"#, Duration::ZERO);
+        Esi::new(&url).online(&token(), 1).unwrap();
+        let request = rx.recv().unwrap().to_lowercase();
+        assert!(request.contains(&format!("user-agent: {}", crate::sources::USER_AGENT.to_lowercase())), "{request}");
+        assert!(crate::sources::USER_AGENT.contains("github.com/csh/eve-router") && crate::sources::USER_AGENT.contains("eve:smrkn"));
     }
 
     #[test]

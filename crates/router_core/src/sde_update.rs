@@ -104,11 +104,7 @@ fn local_build(dir: &Path) -> Option<u32> {
 }
 
 fn agent() -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(Duration::from_secs(30)))
-        .user_agent(concat!("eve-router/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .new_agent()
+    ureq::Agent::config_builder().timeout_global(Some(Duration::from_secs(30))).user_agent(crate::sources::USER_AGENT).build().new_agent()
 }
 
 fn latest_build(agent: &ureq::Agent) -> Result<u32, SdeError> {

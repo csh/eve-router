@@ -105,13 +105,15 @@ impl FetchError {
     }
 }
 
+/// The User-Agent of every HTTP request: the app and its version, the source repository and the
+/// EVE character of the author, so a service operator can find the author.
+pub const USER_AGENT: &str = concat!("eve-router/", env!("CARGO_PKG_VERSION"), " (+https://github.com/csh/eve-router; eve:smrkn)");
+
 /// The HTTP client of the sources and the portraits. All threads share it, so the requests reuse
 /// the open connections. A request sets its own timeout. A clone is cheap and shares the pool.
 pub fn agent() -> ureq::Agent {
     static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
-    AGENT
-        .get_or_init(|| ureq::Agent::config_builder().user_agent(concat!("eve-router/", env!("CARGO_PKG_VERSION"))).build().new_agent())
-        .clone()
+    AGENT.get_or_init(|| ureq::Agent::config_builder().user_agent(USER_AGENT).build().new_agent()).clone()
 }
 
 /// Send one GET request, with a bearer key if `key` is set, and return the body.
