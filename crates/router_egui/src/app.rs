@@ -220,6 +220,11 @@ fn ask_to_update(ctx: &egui::Context, tx: &mpsc::Sender<LoadMsg>, available: &Av
     answer.recv().unwrap_or(false)
 }
 
+/// The command-line arguments that name systems. The restart flag of an update is not a system.
+fn waypoint_args(args: impl Iterator<Item = String>) -> Vec<String> {
+    args.filter(|arg| arg != app_update::UPDATED_ARG).collect()
+}
+
 /// The startup load, with the config file and the default SDE directory. The arguments
 /// of the command line are the first waypoints, for example `eve-router Jita "New Caldari"`.
 fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, StartupError> {
@@ -292,7 +297,7 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     // A tracker event or a login result repaints the window.
     session.pilots = Pilots::open(&paths.config, keyring(), client_id(), Arc::new(move || ctx.request_repaint()));
     // The command line can give the start, the midpoints and the destination.
-    let systems: Vec<String> = std::env::args().skip(1).collect();
+    let systems = waypoint_args(std::env::args().skip(1));
     if !systems.is_empty() {
         session.add_list(&systems.join(","));
     }
@@ -1619,5 +1624,13 @@ mod tests {
         assert_eq!(saved.position_of(Place::Character(7)), None);
         assert_eq!(saved.position_of(Place::Global), Some(Pos { x: 5, y: 6 }));
         std::fs::remove_file(&s.cfg_path).unwrap();
+    }
+
+    /// The update restart starts the app with `--updated`. It is a flag, not a system name.
+    #[test]
+    fn the_update_flag_is_not_a_waypoint() {
+        let args = ["--updated", "Jita", "Amarr"].map(String::from);
+        assert_eq!(waypoint_args(args.into_iter()), ["Jita", "Amarr"]);
+        assert!(waypoint_args(["--updated".to_string()].into_iter()).is_empty());
     }
 }
