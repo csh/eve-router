@@ -109,6 +109,12 @@ pub enum Event {
         id: u64,
         system: u32,
     },
+    /// A poll of the active pilot that found the same system as before. It lets the route count
+    /// the polls off the path. Another pilot gets no such event.
+    Seen {
+        id: u64,
+        system: u32,
+    },
     Ship {
         id: u64,
         ship: Ship,
@@ -319,8 +325,16 @@ impl<A: Api, W: Fn()> Worker<A, W> {
         };
         let next = match result {
             Ok((reading, expires, errors_left)) => {
-                if let Some(event) = self.record(id, reading) {
-                    self.emit(event);
+                // The route of the active pilot counts each poll of the location, not only a change.
+                let watch = matches!(reading, Reading::Location(_)) && self.active == Some(id);
+                match self.record(id, reading) {
+                    Some(event) => self.emit(event),
+                    None if watch => {
+                        if let Some(system) = self.pilots.get(&id).and_then(|pilot| pilot.system) {
+                            self.emit(Event::Seen { id, system });
+                        }
+                    }
+                    None => {}
                 }
                 self.budget(errors_left);
                 // Not before ESI has new data.
@@ -639,6 +653,27 @@ mod tests {
         assert_eq!(seen, [2]);
         let polls = fake.0.lock().unwrap().calls.iter().filter(|c| *c == "location 1").count();
         assert!(polls >= 3, "{polls} polls");
+    }
+
+    #[test]
+    fn an_unchanged_location_of_the_active_pilot_sends_seen() {
+        let fake = Fake::default();
+        fake.0.lock().unwrap().system = 30000142;
+        let tracker = start(&fake);
+        tracker.send(Command::SetActive(Some(1)));
+        wait_for(&tracker, |e| matches!(e, Event::Location { system: 30000142, .. }).then_some(()));
+        // The next polls find no change. The route needs them to count the polls off the path.
+        wait_for(&tracker, |e| matches!(e, Event::Seen { id: 1, system: 30000142 }).then_some(()));
+    }
+
+    #[test]
+    fn an_unchanged_location_of_another_pilot_sends_no_seen() {
+        let fake = Fake::default();
+        fake.0.lock().unwrap().system = 1;
+        let tracker = start(&fake);
+        wait_calls(&fake, |calls| calls.iter().filter(|c| *c == "location 1").count() >= 3);
+        let seen = tracker.events.try_iter().filter(|e| matches!(e, Event::Seen { .. })).count();
+        assert_eq!(seen, 0);
     }
 
     #[test]

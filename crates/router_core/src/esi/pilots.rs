@@ -581,6 +581,7 @@ impl Pilots {
                 self.live.entry(id).or_default().system = Some(system);
                 self.observe(id, system);
             }
+            Event::Seen { id, system } => self.observe(id, system),
             Event::Ship { id, ship } => self.live.entry(id).or_default().ship = Some(ship),
             Event::Online { id, online } => self.live.entry(id).or_default().online = Some(online),
             Event::Refreshed(tokens) => {
@@ -621,11 +622,13 @@ impl Pilots {
     fn observe(&mut self, id: u64, system: u32) {
         let Some(route) = self.active.as_mut().filter(|r| r.character == id) else { return };
         let observation = route.observe(&Location { solar_system_id: system, station_id: None, structure_id: None });
+        // Most polls change nothing, so skip the copy and the write for them.
+        if observation == Observation::Same {
+            return;
+        }
         let route = route.clone();
-        match observation {
-            Observation::Same => return,
-            Observation::NextSegment { waypoints, .. } => self.send_waypoints(id, waypoints),
-            Observation::Arrived | Observation::Progress(_) | Observation::OffRoute { .. } => {}
+        if let Observation::NextSegment { waypoints, .. } = observation {
+            self.send_waypoints(id, waypoints);
         }
         self.save(&route);
     }
@@ -729,6 +732,38 @@ mod tests {
         let mut accounts = Accounts::with_store(None, Box::new(MemoryStore::default())).unwrap();
         accounts.store(&tokens(1, "Alice")).unwrap();
         (pilots_with(accounts, fake.clone(), tmp.path().join("active-route.json")), tmp)
+    }
+
+    /// A route of three gates through the systems 1, 2 and 3, for the pilot with the ID 1.
+    fn gate_route() -> ActiveRoute {
+        let steps = [1u32, 2, 3]
+            .iter()
+            .enumerate()
+            .map(|(i, &system)| Step { system, hop: if i == 0 { Hop::Start } else { Hop::Gate }, link: None, sig: None })
+            .collect();
+        ActiveRoute::from_steps(steps, vec![0, 2], 1, 1, "Alice")
+    }
+
+    #[test]
+    fn a_pilot_who_stops_off_route_gets_the_off_route_state() {
+        let (mut p, _tmp) = pilots(&Fake::default());
+        p.active = Some(gate_route());
+        // The tracker sends the jump once. Each later poll with no change is a `Seen` event.
+        p.event(Event::Location { id: 1, system: 99 });
+        assert!(!p.active.as_ref().unwrap().is_off_route());
+        p.event(Event::Seen { id: 1, system: 99 });
+        assert!(p.active.as_ref().unwrap().is_off_route());
+    }
+
+    #[test]
+    fn a_pilot_docked_on_route_is_never_off_route() {
+        let (mut p, _tmp) = pilots(&Fake::default());
+        p.active = Some(gate_route());
+        p.event(Event::Location { id: 1, system: 2 });
+        for _ in 0..5 {
+            p.event(Event::Seen { id: 1, system: 2 });
+        }
+        assert!(!p.active.as_ref().unwrap().is_off_route());
     }
 
     #[test]
