@@ -31,11 +31,6 @@ allow = [
 ]
 confidence-threshold = 0.9
 
-# The default egui fonts. These are font files, not linked code.
-[[licenses.exceptions]]
-crate = "epaint_default_fonts"
-allow = ["OFL-1.1", "Ubuntu-font-1.0"]
-
 # The workspace crates are not on crates.io.
 [licenses.private]
 ignore = true

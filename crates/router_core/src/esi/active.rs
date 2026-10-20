@@ -19,8 +19,8 @@ use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
 
-/// The most waypoints that one segment sends. Not measured in game yet: phase 6 of the plan
-/// measures the in-game cap. Above it, a segment sends its stops and its last system only.
+/// The most waypoints that one segment sends. Nobody has measured the in-game cap yet. Above this
+/// count, a segment sends its stops and its last system only.
 pub const WAYPOINT_CAP: usize = 100;
 /// The off-route state needs this many polls in a row off the path. One odd poll (a pod kill,
 /// a cyno, a wormhole exit) does not give an alarm.
@@ -222,8 +222,8 @@ impl ActiveRoute {
         range.filter(|&i| i == last || self.stops.contains(&i)).map(|i| self.steps[i].system).collect()
     }
 
-    /// The step of the next wormhole after the progress: the end of the segment in the game.
-    /// The step of the next manual hop ahead: a wormhole, or a filament.
+    /// The step of the next manual hop ahead: a wormhole, or a filament. It ends the segment that is
+    /// in the game.
     pub fn next_manual_hop(&self) -> Option<usize> {
         (self.progress + 1..self.steps.len()).find(|&i| self.steps[i].hop.is_manual())
     }
