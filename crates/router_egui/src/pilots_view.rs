@@ -12,7 +12,7 @@ use egui::{
 use egui_extras::{Column, TableBuilder};
 use egui_phosphor_icons::icons;
 use router_core::esi::active::{ActiveRoute, Hop};
-use router_core::esi::client::{IMAGES_URL, portrait};
+use router_core::esi::client::{EsiError, IMAGES_URL, portrait};
 use router_core::esi::pilots::{HullSync, PilotView, Pilots, StartPlan, pilots_by_step};
 use router_core::labels::{LinkView, hull_label, manual_hop_hint, ship_text};
 use router_core::refresh::kept_route;
@@ -30,6 +30,8 @@ pub const MAX_AVATARS: usize = 3;
 pub const AVATAR: f32 = 20.0;
 /// The portrait size to download. 64 px is sharp at 32 px on a 2x display.
 const PORTRAIT_SIZE: u32 = 64;
+/// The wait before the one retry of a failed portrait download.
+const PORTRAIT_RETRY_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
 /// "+1 other character" or "+4 other characters".
 pub fn overflow_text(hidden: usize) -> String {
@@ -80,12 +82,24 @@ impl Portraits {
             entry.insert(None);
             let (tx, ctx) = (self.tx.clone(), ctx.clone());
             std::thread::spawn(move || {
-                let image = portrait(IMAGES_URL, id, PORTRAIT_SIZE).ok().and_then(|bytes| decode(&bytes));
+                let image = download(id).and_then(|bytes| decode(&bytes));
                 let _ = tx.send((id, image));
                 ctx.request_repaint();
             });
         }
         self.textures.get(&id)?.as_ref()
+    }
+}
+
+/// The portrait bytes. A network failure gets one more try after a short wait. A status error
+/// (for example 404) does not, because the server has answered.
+fn download(id: u64) -> Option<Vec<u8>> {
+    match portrait(IMAGES_URL, id, PORTRAIT_SIZE) {
+        Err(EsiError::Offline(_)) => {
+            std::thread::sleep(PORTRAIT_RETRY_WAIT);
+            portrait(IMAGES_URL, id, PORTRAIT_SIZE).ok()
+        }
+        result => result.ok(),
     }
 }
 

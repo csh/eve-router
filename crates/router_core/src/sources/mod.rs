@@ -12,6 +12,7 @@ use serde::Deserialize;
 use std::fmt;
 use std::fs;
 use std::path::Path;
+use std::sync::OnceLock;
 use std::time::Duration;
 
 /// The kind of a signature in the Nexum and EVE-Scout data. A new kind is `Other`.
@@ -104,25 +105,19 @@ impl FetchError {
     }
 }
 
-/// An HTTP agent with a timeout for each request. One agent keeps its connections open,
-/// so a batch of requests to one server uses one agent.
-pub fn agent(timeout: Duration) -> ureq::Agent {
-    ureq::Agent::config_builder()
-        .timeout_global(Some(timeout))
-        .user_agent(concat!("eve-router/", env!("CARGO_PKG_VERSION")))
-        .build()
-        .new_agent()
-}
-
-/// Send one GET request with a new agent. See `get_with`.
-pub fn get(url: &str, key: Option<&str>, timeout: Duration) -> Result<String, FetchError> {
-    get_with(&agent(timeout), url, key)
+/// The HTTP client of the sources and the portraits. All threads share it, so the requests reuse
+/// the open connections. A request sets its own timeout. A clone is cheap and shares the pool.
+pub fn agent() -> ureq::Agent {
+    static AGENT: OnceLock<ureq::Agent> = OnceLock::new();
+    AGENT
+        .get_or_init(|| ureq::Agent::config_builder().user_agent(concat!("eve-router/", env!("CARGO_PKG_VERSION"))).build().new_agent())
+        .clone()
 }
 
 /// Send one GET request, with a bearer key if `key` is set, and return the body.
 /// A source gets its data with GET. The one exception is `post_json`.
-pub fn get_with(agent: &ureq::Agent, url: &str, key: Option<&str>) -> Result<String, FetchError> {
-    let mut request = agent.get(url);
+pub fn get(url: &str, key: Option<&str>, timeout: Duration) -> Result<String, FetchError> {
+    let mut request = agent().get(url).config().timeout_global(Some(timeout)).build();
     if let Some(key) = key {
         request = request.header("Authorization", &format!("Bearer {key}"));
     }
@@ -132,8 +127,8 @@ pub fn get_with(agent: &ureq::Agent, url: &str, key: Option<&str>) -> Result<Str
 /// Send one POST request with a JSON body and the key in the `x-api-key` header, and return the
 /// body. Only EVE Metro uses it. Its query is a POST that reads data and changes nothing.
 pub fn post_json(url: &str, key: &str, body: &str, timeout: Duration) -> Result<String, FetchError> {
-    let request = agent(timeout).post(url).header("x-api-key", key).header("Content-Type", "application/json");
-    read_body(request.send(body))
+    let request = agent().post(url).config().timeout_global(Some(timeout)).build();
+    read_body(request.header("x-api-key", key).header("Content-Type", "application/json").send(body))
 }
 
 /// The body of a response, or the fetch error of its status.

@@ -155,7 +155,8 @@ impl Esi {
 /// from 32 to 1024.
 pub fn portrait(base: &str, id: u64, size: u32) -> Result<Vec<u8>, EsiError> {
     let url = format!("{}/characters/{id}/portrait?size={size}", base.trim_end_matches('/'));
-    let mut response = crate::sources::agent(TIMEOUT).get(&url).call().map_err(|e| match e {
+    let request = crate::sources::agent().get(&url).config().timeout_global(Some(TIMEOUT)).build();
+    let mut response = request.call().map_err(|e| match e {
         ureq::Error::StatusCode(code) => EsiError::Status(code),
         e => EsiError::Offline(e.to_string()),
     })?;

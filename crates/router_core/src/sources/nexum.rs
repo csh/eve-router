@@ -213,8 +213,6 @@ pub fn fetch_sigs(cfg: &NexumConfig, map_id: &str, ids: &[String], timeout: Dura
     let (Some(map), Some(key)) = (map_url(cfg, map_id), cfg.key.as_ref()) else {
         return (SystemSigs::new(), ids.len());
     };
-    // One agent for all workers, so the requests reuse the connections.
-    let agent = sources::agent(timeout);
     let next = AtomicUsize::new(0);
     let results = Mutex::new(Vec::with_capacity(ids.len()));
     std::thread::scope(|scope| {
@@ -222,8 +220,7 @@ pub fn fetch_sigs(cfg: &NexumConfig, map_id: &str, ids: &[String], timeout: Dura
             scope.spawn(|| {
                 while let Some(id) = ids.get(next.fetch_add(1, Ordering::Relaxed)) {
                     let url = format!("{map}/systems/{id}/signatures");
-                    let sigs =
-                        sources::get_with(&agent, &url, Some(&key.0)).ok().and_then(|t| serde_json::from_str::<Vec<NexumSig>>(&t).ok());
+                    let sigs = sources::get(&url, Some(&key.0), timeout).ok().and_then(|t| serde_json::from_str::<Vec<NexumSig>>(&t).ok());
                     results.lock().unwrap().push((id.clone(), sigs));
                 }
             });
