@@ -4,6 +4,7 @@
 //! The egui window of EVE Router.
 
 mod app;
+mod app_update;
 mod chrome;
 mod log_window;
 mod notice;

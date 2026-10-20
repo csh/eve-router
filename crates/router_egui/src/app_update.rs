@@ -4,7 +4,6 @@
 //! endpoint hides a pre-release, and every `v0.*` release is one. `install` pins the tag that
 //! `check` found, so the user gets the release that the screen showed.
 
-use crate::error::UpdateError;
 use self_update::backends::github::{Update, UpdateBuilder};
 use self_update::version::cmp_versions;
 use std::cmp::Ordering;
@@ -14,6 +13,44 @@ const REPO: &str = "eve-router";
 const BIN: &str = "eve-router-egui";
 /// The release asset with the checksum of every other asset.
 const SUMS: &str = "SHA256SUMS";
+
+/// A fault while the app looks for a new version, installs it, or restarts.
+#[derive(Debug, thiserror::Error)]
+pub enum UpdateError {
+    #[error("{0}")]
+    Update(#[from] self_update::Error),
+}
+
+/// A step of the update, for the splash screen.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Progress {
+    /// Ask GitHub for a newer version of the app.
+    Checking,
+    /// Download the new version. `done` and `total` count bytes. `total` is 0 while it is not known.
+    Downloading { done: u64, total: u64 },
+}
+
+impl Progress {
+    /// The text for the splash screen, for example "Downloading the update: 5.0 of 20.0 MB".
+    pub fn text(&self) -> String {
+        match self {
+            Progress::Checking => "Checking for a new version…".into(),
+            Progress::Downloading { done, total: 0 } => format!("Downloading the update: {:.1} MB", *done as f64 / 1e6),
+            Progress::Downloading { done, total } => {
+                format!("Downloading the update: {:.1} of {:.1} MB", *done as f64 / 1e6, *total as f64 / 1e6)
+            }
+        }
+    }
+
+    /// The share of the work that is done, from 0.0 to 1.0, for a progress bar. `None` while the
+    /// length is not known.
+    pub fn fraction(&self) -> Option<f32> {
+        match self {
+            Progress::Downloading { done, total } if *total > 0 => Some((*done as f64 / *total as f64) as f32),
+            _ => None,
+        }
+    }
+}
 
 /// Set this variable to `1` to skip the check at the start.
 pub const SKIP_ENV: &str = "EVE_ROUTER_SKIP_UPDATE_CHECK";
@@ -91,8 +128,21 @@ pub fn restart() -> UpdateError {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::test_support::serve;
+    use router_core::test_support::serve;
     use std::time::Duration;
+
+    #[test]
+    fn an_update_shows_the_megabytes_and_a_fraction() {
+        let p = Progress::Downloading { done: 5_000_000, total: 20_000_000 };
+        assert_eq!(p.text(), "Downloading the update: 5.0 of 20.0 MB");
+        assert_eq!(p.fraction(), Some(0.25));
+        // The server sent no length: the text shows the bytes so far, and the bar stays off.
+        let unknown = Progress::Downloading { done: 5_000_000, total: 0 };
+        assert_eq!(unknown.text(), "Downloading the update: 5.0 MB");
+        assert_eq!(unknown.fraction(), None);
+        assert_eq!(Progress::Checking.text(), "Checking for a new version…");
+        assert_eq!(Progress::Checking.fraction(), None);
+    }
 
     fn release(tag: &str, prerelease: bool) -> String {
         format!(

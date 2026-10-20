@@ -62,13 +62,6 @@ pub enum SdeError {
     Download { dir: PathBuf, source: Box<SdeError> },
 }
 
-/// A fault while the app looks for a new version, installs it, or restarts.
-#[derive(Debug, thiserror::Error)]
-pub enum UpdateError {
-    #[error("{0}")]
-    Update(#[from] self_update::Error),
-}
-
 /// Write `text` to `path` through a temporary file and a rename, so a reader never sees half a
 /// file. The directory of `path` is made first.
 pub fn write_atomic(path: &Path, tmp: &Path, text: &str) -> Result<(), FileError> {

@@ -112,11 +112,6 @@ macro_rules! assert_snapshot {
     };
 }
 
-/// Any update error, for a test of the code that handles one.
-pub fn update_error() -> crate::error::UpdateError {
-    self_update::Error::NoCurrentVersion.into()
-}
-
 pub fn check_snapshot(manifest_dir: &Path, name: &str, text: &str) {
     let path = manifest_dir.join("tests").join("snapshots").join(format!("{name}.txt"));
     if std::env::var("UPDATE_SNAPSHOTS").as_deref() == Ok("1") {

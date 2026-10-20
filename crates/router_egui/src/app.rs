@@ -1,12 +1,12 @@
 //! The window state, the startup load and the route search.
 
+use crate::app_update::{self, Available, UpdateError};
 use crate::notice::{Level, Notice};
 use crate::theme;
 use crate::view::View;
 use petgraph::graph::NodeIndex;
-use router_core::app_update::{self, Available};
 use router_core::config::{AppPaths, Config};
-use router_core::error::{FileError, UpdateError};
+use router_core::error::FileError;
 use router_core::esi::pilots::Pilots;
 use router_core::esi::store::{Keyring, StoreError, TokenStore};
 use router_core::esi::{self, active::active_path};
@@ -30,11 +30,34 @@ use std::time::{Duration, Instant};
 /// A message from the load thread.
 enum LoadMsg {
     /// The load starts a new step.
-    Progress(startup::Progress),
+    Progress(Step),
     /// A newer version exists, and the pilot has to choose. The load waits for the reply.
     UpdatePrompt(UpdatePrompt),
     /// The load ends.
     Done(Box<Result<Session, String>>),
+}
+
+/// A step of the start, for the splash screen: the update, then the load of the core.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Step {
+    Update(app_update::Progress),
+    Load(startup::Progress),
+}
+
+impl Step {
+    pub fn text(&self) -> String {
+        match self {
+            Step::Update(step) => step.text(),
+            Step::Load(step) => step.text(),
+        }
+    }
+
+    pub fn fraction(&self) -> Option<f32> {
+        match self {
+            Step::Update(step) => step.fraction(),
+            Step::Load(step) => step.fraction(),
+        }
+    }
 }
 
 /// The question of the splash screen: install the new version now, or not.
@@ -47,7 +70,7 @@ pub struct UpdatePrompt {
 /// The load thread and the step that it reported last.
 struct Loading {
     rx: Receiver<LoadMsg>,
-    step: Option<startup::Progress>,
+    step: Option<Step>,
     /// The open question, until the pilot answers.
     prompt: Option<UpdatePrompt>,
 }
@@ -207,6 +230,7 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
         let _ = tx.send(LoadMsg::Progress(step));
         ctx.request_repaint();
     };
+    let load_progress = |step| progress(Step::Load(step));
     // EVE Metro needs a logged-in character, so it stays off without an EVE client ID.
     let sso_ready = client_id().is_some();
     // The update step comes first. A restart after it must not repeat the check.
@@ -217,15 +241,15 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
             enabled,
             cfg.auto_update,
             || {
-                progress(startup::Progress::CheckingUpdate);
+                progress(Step::Update(app_update::Progress::Checking));
                 app_update::check()
             },
             |available| ask_to_update(&ctx, &tx, available),
             |available| {
-                progress(startup::Progress::DownloadingUpdate { done: 0, total: 0 });
+                progress(Step::Update(app_update::Progress::Downloading { done: 0, total: 0 }));
                 let (tx, ctx) = (tx.clone(), ctx.clone());
                 app_update::install(available, move |done, total| {
-                    let _ = tx.send(LoadMsg::Progress(startup::Progress::DownloadingUpdate { done, total: total.unwrap_or(0) }));
+                    let _ = tx.send(LoadMsg::Progress(Step::Update(app_update::Progress::Downloading { done, total: total.unwrap_or(0) })));
                     ctx.request_repaint();
                 })
             },
@@ -243,7 +267,7 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     }
     let startup_cfg = Config { eve_metro: cfg.eve_metro.gated(sso_ready), ..cfg.clone() };
     let startup::Loaded { sde, hulls, snapshot, base, report, types } =
-        startup::load(&startup_cfg, &paths, env_flag(sde_update::SKIP_ENV), progress)?;
+        startup::load(&startup_cfg, &paths, env_flag(sde_update::SKIP_ENV), load_progress)?;
     let startup_lines: Vec<String> = sde.message().into_iter().collect();
     let Snapshot { uni, shortcuts, all, log, closed: _ } = snapshot;
     let settings = Settings::from_config(&cfg, &uni, hulls)?;
@@ -1397,11 +1421,11 @@ mod tests {
     fn the_splash_keeps_the_newest_step() {
         let (tx, rx) = mpsc::channel::<LoadMsg>();
         let mut app = RouterApp { state: State::Loading(Loading { rx, step: None, prompt: None }) };
-        tx.send(LoadMsg::Progress(startup::Progress::CheckingSde)).unwrap();
-        tx.send(LoadMsg::Progress(startup::Progress::DownloadingSde { done: 5, total: 10 })).unwrap();
+        tx.send(LoadMsg::Progress(Step::Load(startup::Progress::CheckingSde))).unwrap();
+        tx.send(LoadMsg::Progress(Step::Load(startup::Progress::DownloadingSde { done: 5, total: 10 }))).unwrap();
         app.poll(&egui::Context::default());
         let State::Loading(loading) = &app.state else { panic!("the load ended") };
-        assert_eq!(loading.step, Some(startup::Progress::DownloadingSde { done: 5, total: 10 }));
+        assert_eq!(loading.step, Some(Step::Load(startup::Progress::DownloadingSde { done: 5, total: 10 })));
     }
 
     fn available() -> Available {
@@ -1443,7 +1467,7 @@ mod tests {
 
     #[test]
     fn a_fault_of_the_step_gives_a_notice_text() {
-        let fault = router_core::test_support::update_error;
+        let fault = || UpdateError::from(self_update::Error::NoCurrentVersion);
         let step = update_step(true, true, || Err(fault()), |_| panic!("ask"), |_| panic!("install"));
         assert!(matches!(&step, UpdateStep::Failed(text) if text.starts_with("The check for a new version failed")), "{step:?}");
         let step = update_step(true, true, || Ok(Some(available())), |_| panic!("ask"), |_| Err(fault()));

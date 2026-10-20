@@ -953,8 +953,8 @@ fn sync_status(ui: &mut Ui, s: &Session) {
 pub fn splash(
     ui: &mut Ui,
     error: Option<&str>,
-    step: Option<&router_core::startup::Progress>,
-    update: Option<&router_core::app_update::Available>,
+    step: Option<&crate::app::Step>,
+    update: Option<&crate::app_update::Available>,
 ) -> Option<bool> {
     let mut answer = None;
     let frame = Frame::new().fill(theme::BG);
@@ -988,9 +988,9 @@ pub fn splash(
                             (None, None) => {
                                 ui.add(egui::Spinner::new().size(28.0).color(theme::accent(ui)));
                                 ui.add_space(8.0);
-                                let text = step.map_or_else(|| "Starting…".to_string(), router_core::startup::Progress::text);
+                                let text = step.map_or_else(|| "Starting…".to_string(), crate::app::Step::text);
                                 ui.label(RichText::new(text).color(theme::TEXT));
-                                if let Some(fraction) = step.and_then(router_core::startup::Progress::fraction) {
+                                if let Some(fraction) = step.and_then(crate::app::Step::fraction) {
                                     ui.add_space(6.0);
                                     ui.add(egui::ProgressBar::new(fraction).fill(theme::accent(ui)).desired_width(300.0));
                                 }
@@ -1040,20 +1040,22 @@ mod tests {
 
     #[test]
     fn the_splash_draws_every_step_and_the_error() {
+        use crate::app::Step;
+        use crate::app_update::Progress as Update;
         use router_core::startup::Progress;
         let steps = [
             None,
-            Some(Progress::CheckingUpdate),
-            Some(Progress::DownloadingUpdate { done: 5, total: 10 }),
-            Some(Progress::CheckingSde),
-            Some(Progress::DownloadingSde { done: 5, total: 10 }),
-            Some(Progress::LoadingMap),
+            Some(Step::Update(Update::Checking)),
+            Some(Step::Update(Update::Downloading { done: 5, total: 10 })),
+            Some(Step::Load(Progress::CheckingSde)),
+            Some(Step::Load(Progress::DownloadingSde { done: 5, total: 10 })),
+            Some(Step::Load(Progress::LoadingMap)),
         ];
         // The app registers its fonts and theme first: the splash uses the bold font.
         let ctx = egui::Context::default();
         theme::apply_default(&ctx);
         theme::set_font(&ctx);
-        let draw = |error: Option<&str>, step: Option<&Progress>, update: Option<&router_core::app_update::Available>| {
+        let draw = |error: Option<&str>, step: Option<&Step>, update: Option<&crate::app_update::Available>| {
             // The frame output holds texture changes. A test with no renderer drops them.
             let mut output = ctx.run_ui(Default::default(), |ui| _ = splash(ui, error, step, update));
             output.textures_delta.clear();
@@ -1062,8 +1064,8 @@ mod tests {
             draw(None, step.as_ref(), None);
         }
         draw(Some("Cannot read the config"), None, None);
-        let update = router_core::app_update::Available { tag: "v9.9.9".into(), version: "9.9.9".into(), notes: None };
-        draw(None, Some(&Progress::CheckingUpdate), Some(&update));
+        let update = crate::app_update::Available { tag: "v9.9.9".into(), version: "9.9.9".into(), notes: None };
+        draw(None, Some(&Step::Update(Update::Checking)), Some(&update));
     }
 
     #[test]

@@ -3897,7 +3897,6 @@ dependencies = [
  "oauth2",
  "petgraph",
  "rayon",
- "self_update",
  "serde",
  "serde_json",
  "tempfile",
@@ -3923,7 +3922,9 @@ dependencies = [
  "raw-window-handle",
  "rayon",
  "router_core",
+ "self_update",
  "tempfile",
+ "thiserror 2.0.21",
  "windows",
 ]
 

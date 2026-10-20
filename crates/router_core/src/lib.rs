@@ -2,7 +2,6 @@
 //! The user interfaces are separate crates.
 
 pub mod ansiblex;
-pub mod app_update;
 pub mod config;
 pub mod error;
 pub mod esi;
