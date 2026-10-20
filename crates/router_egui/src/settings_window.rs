@@ -596,7 +596,7 @@ fn favourites_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session) {
                 ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
                     // The grip at the left of the name shows that a row can move. The name drags too.
                     handle.ui(ui, |ui| {
-                        ui.label(icons::DOTS_SIX_VERTICAL.bold().size(16.0).color(theme::TEXT_DIM));
+                        ui.label(RichText::new(icons::LIST.as_str()).size(16.0).color(theme::TEXT_DIM));
                         ui.add(egui::Label::new(RichText::new(s.uni.name(fav)).color(theme::TEXT)).truncate());
                     });
                 });
