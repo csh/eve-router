@@ -47,6 +47,8 @@ pub struct SettingsForm {
     bridge_confirm: bool,
     replace_confirm: bool,
     url: String,
+    /// The warning for the saved URL, if it has one. It shows under the URL field.
+    url_warning: Option<&'static str>,
     /// The key field starts empty, so the key never shows on the screen.
     key: String,
     /// The EVE Metro key field. It starts empty too.
@@ -98,6 +100,7 @@ impl SettingsForm {
             bridge_confirm: false,
             replace_confirm: false,
             url: s.cfg.nexum.url.clone().unwrap_or_default(),
+            url_warning: s.cfg.nexum.url.as_deref().and_then(config::url_warning),
             key: String::new(),
             metro_key: String::new(),
             error: None,
@@ -749,6 +752,7 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
                 if ui.add(AppButton::new("Save").primary()).clicked() {
                     match config::parse_nexum_url(&form.url) {
                         Ok(url) => {
+                            form.url_warning = url.as_deref().and_then(config::url_warning);
                             s.cfg.nexum.url = url;
                             form.error = None;
                             form.maps_stale(s);
@@ -764,6 +768,12 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
         .response
         .on_disabled_hover_text(LOCKED);
         ui.end_row();
+        // A plain http:// URL to a remote host sends the key in clear text. A local Nexum needs no warning.
+        if let Some(warning) = form.url_warning {
+            ui.label("");
+            ui.label(RichText::new(warning).color(theme::WARN));
+            ui.end_row();
+        }
 
         label(ui, "Key");
         ui.add_enabled_ui(!locked, |ui| {
@@ -1787,6 +1797,27 @@ mod tests {
         let mut found = Vec::new();
         output.shapes.iter().for_each(|clipped| walk(&clipped.shape, &mut found));
         found
+    }
+
+    #[test]
+    fn the_wormholes_page_warns_about_a_remote_http_url_only() {
+        let (mut s, _tmp) = session_with_pilots();
+        let ctx = egui::Context::default();
+        theme::apply_default(&ctx);
+        theme::set_font(&ctx);
+        for (url, warned) in [
+            ("http://203.0.113.5", true),
+            ("http://localhost:3000", false),
+            ("http://192.168.1.5", false),
+            ("https://nexum.example", false),
+        ] {
+            s.cfg.nexum.url = Some(url.to_string());
+            let mut form = SettingsForm::new(&s, Page::Wormholes);
+            let mut output = ctx.run_ui(Default::default(), |ui| _ = wormholes_page(ui, &mut form, &mut s, false, false));
+            output.textures_delta.clear();
+            let shown = drawn_texts(&output).iter().any(|(text, _, _)| text.contains("crosses the network in clear text"));
+            assert_eq!(shown, warned, "{url}");
+        }
     }
 
     #[test]

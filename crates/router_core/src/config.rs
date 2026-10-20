@@ -378,7 +378,7 @@ fn lenient_theme<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Op
 /// Why a value of the config or of a settings field is not valid.
 #[derive(Debug, PartialEq, thiserror::Error)]
 pub enum ConfigError {
-    #[error("\"{0}\" is not a URL. Give a URL that starts with https://.")]
+    #[error("\"{0}\" is not a URL. Give a URL that starts with https:// or http://.")]
     BadUrl(String),
     #[error("Unknown hull \"{0}\"")]
     UnknownHull(String),
@@ -398,6 +398,27 @@ pub fn parse_nexum_url(text: &str) -> Result<Option<String>, ConfigError> {
     } else {
         Err(ConfigError::BadUrl(value.to_string()))
     }
+}
+
+/// The warning for a Nexum URL that uses plain `http://` to a remote host.
+const HTTP_WARNING: &str = "This URL uses http://, so the API key crosses the network in clear text.";
+
+/// The warning for a Nexum URL, or `None`. Both `https://` and `http://` are valid. The API key goes
+/// in the header of each request, so `http://` to a remote host sends it in clear text. A URL for
+/// this machine or for a private network address (a Nexum on the same computer or on a LAN) gets
+/// no warning. A text that is not a URL also gets none, because `parse_nexum_url` rejects it.
+pub fn url_warning(text: &str) -> Option<&'static str> {
+    use oauth2::url::{Host, Url};
+    let url = Url::parse(text.trim()).ok()?;
+    if url.scheme() != "http" {
+        return None;
+    }
+    let local = match url.host()? {
+        Host::Domain(name) => name.eq_ignore_ascii_case("localhost"),
+        Host::Ipv4(ip) => ip.is_loopback() || ip.is_private(),
+        Host::Ipv6(ip) => ip.is_loopback(),
+    };
+    (!local).then_some(HTTP_WARNING)
 }
 
 impl Config {
@@ -731,6 +752,47 @@ mod tests {
         assert_eq!(parse_nexum_url(" https://nexum.example/ "), Ok(Some("https://nexum.example".into())));
         assert_eq!(parse_nexum_url("ftp://x"), Err(ConfigError::BadUrl("ftp://x".into())));
         assert!(parse_nexum_url("ftp://x").unwrap_err().to_string().contains("is not a URL"));
+    }
+
+    #[test]
+    fn http_to_a_remote_host_gets_a_warning() {
+        assert!(url_warning("http://203.0.113.5").is_some());
+        assert!(url_warning("http://nexum.example").is_some());
+        assert!(url_warning(" HTTP://Nexum.Example:3000/ ").is_some());
+    }
+
+    #[test]
+    fn http_to_this_machine_or_a_private_address_gets_none() {
+        for url in [
+            "http://localhost:3000",
+            "http://LOCALHOST",
+            "http://127.0.0.1",
+            "http://192.168.1.5",
+            "http://10.0.0.2:8080",
+            "http://[::1]:3000",
+        ] {
+            assert_eq!(url_warning(url), None, "{url}");
+        }
+    }
+
+    #[test]
+    fn https_and_a_bad_url_get_no_warning() {
+        assert_eq!(url_warning("https://nexum.example"), None);
+        assert_eq!(url_warning("https://203.0.113.5"), None);
+        assert_eq!(url_warning("not a url"), None);
+        assert_eq!(url_warning(""), None);
+    }
+
+    #[test]
+    fn both_schemes_are_valid_urls() {
+        assert_eq!(parse_nexum_url("http://localhost:3000/"), Ok(Some("http://localhost:3000".into())));
+        assert_eq!(parse_nexum_url("https://nexum.example"), Ok(Some("https://nexum.example".into())));
+    }
+
+    #[test]
+    fn the_url_error_names_both_schemes() {
+        let text = parse_nexum_url("ftp://x").unwrap_err().to_string();
+        assert!(text.contains("https://") && text.contains("http://"), "{text}");
     }
 
     #[test]
