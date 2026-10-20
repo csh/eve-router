@@ -171,8 +171,8 @@ pub struct Settings {
     pub bridges: bool,
     pub rules: BridgeRules,
     pub costs: RouteCosts,
-    /// Whether a route can enter Pochven.
-    pub pochven: bool,
+    /// Whether a route can use a filament.
+    pub filaments: bool,
     /// With `Pilot`, `follow` sets `rules.hull`.
     pub hull_source: HullSource,
     /// The minimum time (minutes) that a wormhole must have left. The router skips other wormholes.
@@ -219,7 +219,7 @@ impl Settings {
             bridges: cfg.bridges.unwrap_or(true),
             rules: BridgeRules { capital, hull, max_cap: cfg.max_cap_tj },
             costs: RouteCosts::from_config(cfg),
-            pochven: cfg.pochven.unwrap_or(true),
+            filaments: cfg.filaments.unwrap_or(true),
             hull_source: cfg.pilot.map_or(HullSource::Manual, HullSource::Pilot),
             min_life: cfg.min_life_min.unwrap_or(config::DEFAULT_MIN_LIFE_MIN),
             favourites,
@@ -239,7 +239,7 @@ impl Settings {
             rules: self.rules.clone(),
             cap_weight: RouteCosts::milli(self.costs.cap_weight),
             unknown_sig_penalty: RouteCosts::milli(self.costs.unknown_sig_penalty),
-            pochven: self.pochven,
+            filaments: self.filaments,
             now: now + self.min_life * 60,
         };
         let mut router = Router::new(uni, options);
@@ -278,7 +278,7 @@ impl Settings {
         cfg.cap_weight = Some(self.costs.cap_weight);
         cfg.unknown_sig_penalty = Some(self.costs.unknown_sig_penalty);
         cfg.eve_scout = self.hubs;
-        cfg.pochven = Some(self.pochven);
+        cfg.filaments = Some(self.filaments);
         cfg.favourites = Some(self.favourites.iter().map(|&n| uni.name(n).to_string()).collect());
         cfg.avoid_systems = self.avoid.systems.iter().map(|e| AvoidName::new(uni.name(e.item), e.never)).collect();
         cfg.avoid_regions = self.avoid.regions.iter().map(|e| AvoidName::new(&e.item, e.never)).collect();
@@ -490,15 +490,23 @@ mod tests {
     }
 
     #[test]
-    fn pochven_defaults_to_on_and_the_choice_round_trips() {
+    fn filaments_default_to_on_and_the_choice_round_trips() {
         let uni = overlay_universe();
         let mut s = settings(&uni, None);
-        assert!(Settings::from_config(&Config::default(), &uni, hulls()).0.pochven);
-        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("pochven"));
-        s.pochven = false;
+        assert!(Settings::from_config(&Config::default(), &uni, hulls()).0.filaments);
+        assert!(!serde_json::to_string(&Config::default()).unwrap().contains("filaments"));
+        s.filaments = false;
         let mut cfg = Config::default();
         s.store(&uni, &mut cfg);
-        assert!(!Settings::from_config(&cfg, &uni, hulls()).0.pochven);
+        assert!(!Settings::from_config(&cfg, &uni, hulls()).0.filaments);
+    }
+
+    /// A file from before the rename keeps its choice: the old key is `pochven`.
+    #[test]
+    fn the_old_pochven_key_sets_the_filaments_switch() {
+        let uni = overlay_universe();
+        let cfg: Config = serde_json::from_str(r#"{"pochven": false}"#).unwrap();
+        assert!(!Settings::from_config(&cfg, &uni, hulls()).0.filaments);
     }
 
     #[test]

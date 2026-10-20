@@ -42,7 +42,7 @@
     "thera": false,
     "turnur": true
   },
-  "pochven": true,
+  "filaments": true,
   "check_for_updates": false,
   "auto_update": true
 }

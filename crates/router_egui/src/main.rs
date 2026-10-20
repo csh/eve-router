@@ -34,7 +34,7 @@ fn main() -> eframe::Result {
             .with_title("EVE Router")
             .with_decorations(false)
             .with_inner_size([1280.0, 820.0])
-            .with_min_inner_size([1100.0, 748.0]),
+            .with_min_inner_size([1280.0, 748.0]),
         ..Default::default()
     };
     eframe::run_native("EVE Router", options, Box::new(|cc| Ok(Box::new(RouterApp::new(cc.egui_ctx.clone())))))

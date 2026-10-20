@@ -28,12 +28,6 @@ pub const MAX_SHARED: f64 = 0.7;
 /// needs 1000 wormholes before these costs add up to one jump.
 pub const WORMHOLE_TIE: u64 = 1;
 
-/// True if either end of the edge is in Pochven.
-fn in_pochven(uni: &Universe, a: NodeIndex, b: NodeIndex) -> bool {
-    let region = crate::universe::POCHVEN_REGION;
-    uni.system(a).region_id == region || uni.system(b).region_id == region
-}
-
 /// True if the hull can activate a filament. No hull set: allow it, as the wormhole size check does.
 /// `Hull::filament_ok` comes from the SDE type list "InvalidShipGroupsForRandomJump", so a ban
 /// list change needs only an SDE update, not a rebuild.
@@ -191,8 +185,9 @@ pub struct RouterOptions {
     pub cap_weight: u32,
     /// The extra cost of a wormhole with no known signature at its departure system, in milli-jumps.
     pub unknown_sig_penalty: u32,
-    /// Whether a route can enter Pochven, by a filament or by a wormhole.
-    pub pochven: bool,
+    /// Whether a route can use a filament. A filament is the only way into Pochven from outside
+    /// that the game gives, so with this off a route reaches Pochven only by a wormhole.
+    pub filaments: bool,
     /// Unix seconds. It sets which wormholes are expired.
     pub now: u64,
 }
@@ -207,7 +202,7 @@ impl Default for RouterOptions {
             rules: BridgeRules::default(),
             cap_weight: DEFAULT_CAP_WEIGHT,
             unknown_sig_penalty: DEFAULT_UNKNOWN_SIG_PENALTY,
-            pochven: false,
+            filaments: false,
             now: 0,
         }
     }
@@ -261,9 +256,9 @@ impl Bans {
 impl<'a> Router<'a> {
     /// Calculate the node costs and the edge permissions one time, in parallel.
     /// Each search then reads them instead of calculating them again.
-    #[tracing::instrument(level = "info", skip_all, fields(mode = ?options.mode, wormholes = options.wormholes, bridges = options.bridges, pochven = options.pochven))]
+    #[tracing::instrument(level = "info", skip_all, fields(mode = ?options.mode, wormholes = options.wormholes, bridges = options.bridges, filaments = options.filaments))]
     pub fn new(uni: &'a Universe, options: RouterOptions) -> Self {
-        let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, unknown_sig_penalty, pochven, now } = options;
+        let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, unknown_sig_penalty, filaments, now } = options;
         let graph = &uni.graph;
         let node_cost = graph
             .raw_nodes()
@@ -292,17 +287,11 @@ impl<'a> Router<'a> {
                 }
                 match &e.weight {
                     Link::Stargate => true,
-                    // The Pochven switch also gates a wormhole with an end in Pochven (the EVE Metro
-                    // map): the switch means "allow Pochven", not "allow a filament only".
-                    Link::Wormhole(w) => {
-                        wormholes
-                            && wormhole_hull_ok
-                            && hubs.allows(w)
-                            && w.usable(now, hull_kg)
-                            && (pochven || !in_pochven(uni, e.source(), e.target()))
-                    }
+                    // The filaments switch gates the filament links only. A wormhole with an end in
+                    // Pochven (the EVE Metro map) follows the wormholes switch like any other.
+                    Link::Wormhole(w) => wormholes && wormhole_hull_ok && hubs.allows(w) && w.usable(now, hull_kg),
                     Link::JumpBridge => bridges && rules.allowed(uni, e.target()),
-                    Link::Filament(_) => pochven && filament_hull_ok,
+                    Link::Filament(_) => filaments && filament_hull_ok,
                 }
             })
             .collect();
@@ -1218,8 +1207,8 @@ mod tests {
         use petgraph::visit::EdgeRef;
         let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
         let target = uni.graph.edges(perun).next().unwrap().target();
-        let pochven = true;
-        let r = Router::new(uni, RouterOptions { pochven, ..Default::default() });
+        let filaments = true;
+        let r = Router::new(uni, RouterOptions { filaments, ..Default::default() });
         let route = r.routes(&[node("Jita"), target], 1).unwrap().remove(0);
         // Two filament edges: the activation, and the jump from the hub into the clade.
         assert_eq!(route.jumps, 2);
@@ -1233,29 +1222,28 @@ mod tests {
         use petgraph::visit::EdgeRef;
         let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
         let target = uni.graph.edges(perun).next().unwrap().target();
-        let pochven = true;
+        let filaments = true;
         // A Titan is on the banned list. No hull set still allows the filament.
         let banned = RouterOptions {
-            pochven,
+            filaments,
             rules: BridgeRules { capital: None, hull: hulls().find("Titan"), max_cap: None },
             ..Default::default()
         };
         assert!(Router::new(uni, banned).routes(&[node("Jita"), target], 1).is_err());
         let allowed = RouterOptions {
-            pochven,
+            filaments,
             rules: BridgeRules { capital: None, hull: hulls().find("Rifter"), max_cap: None },
             ..Default::default()
         };
         assert!(Router::new(uni, allowed).routes(&[node("Jita"), target], 1).is_ok());
-        let no_hull = RouterOptions { pochven, ..Default::default() };
+        let no_hull = RouterOptions { filaments, ..Default::default() };
         assert!(Router::new(uni, no_hull).routes(&[node("Jita"), target], 1).is_ok());
     }
 
-    /// The Pochven switch also gates a plain wormhole with an end in Pochven, the shape that an
-    /// EVE Metro connection takes once it is on the map: the switch means "allow Pochven", not
-    /// "allow a filament only".
+    /// The filaments switch gates the filament links only. A plain wormhole with an end in Pochven,
+    /// the shape that an EVE Metro connection takes once it is on the map, works with the switch off.
     #[test]
-    fn pochven_off_blocks_a_wormhole_into_pochven_too() {
+    fn filaments_off_still_allows_a_wormhole_into_pochven() {
         let base = universe();
         let mut uni = base.clone();
         use petgraph::visit::EdgeRef;
@@ -1265,13 +1253,46 @@ mod tests {
         uni.add_wormholes(&[hole(jita_id, pochven_id)]);
         let (jita, target) = (uni.exact("Jita").unwrap(), uni.by_id[&pochven_id]);
 
-        assert!(Router::new(&uni, RouterOptions::default()).routes(&[jita, target], 1).is_err());
         // No signature penalty: the test proves the wormhole is usable, not that it beats a filament.
-        let pochven = true;
-        let options = RouterOptions { pochven, unknown_sig_penalty: 0, ..Default::default() };
-        let route = Router::new(&uni, options).routes(&[jita, target], 1).unwrap().remove(0);
-        assert_eq!(route.jumps, 1);
-        assert_eq!(route.wormholes, 1);
+        for filaments in [false, true] {
+            let options = RouterOptions { filaments, unknown_sig_penalty: 0, ..Default::default() };
+            let route = Router::new(&uni, options).routes(&[jita, target], 1).unwrap().remove(0);
+            assert_eq!(route.jumps, 1);
+            assert_eq!(route.wormholes, 1);
+        }
+    }
+
+    /// A route can go into Pochven by one wormhole, cross it by stargate and leave by another
+    /// wormhole, with no filament. Two EVE Metro connections have this shape. The route must
+    /// work with the filaments switch off, and it must beat the long way round in New Eden.
+    #[test]
+    fn a_route_crosses_pochven_by_wormholes_only() {
+        use petgraph::visit::EdgeRef;
+        let base = universe();
+        let region = crate::universe::POCHVEN_REGION;
+        let in_pochven = |n| base.system(n).region_id == region;
+        let gate = base
+            .graph
+            .edge_references()
+            .find(|e| matches!(e.weight(), Link::Stargate) && in_pochven(e.source()) && in_pochven(e.target()))
+            .expect("the map has a stargate inside Pochven");
+        let (entry, exit) = (base.system(gate.source()).id, base.system(gate.target()).id);
+        let (jita_id, far_id) = (base.system(node("Jita")).id, base.system(node("D-3GIQ")).id);
+        let mut uni = base.clone();
+        uni.add_wormholes(&[hole(jita_id, entry), hole(exit, far_id)]);
+        let (jita, far) = (uni.exact("Jita").unwrap(), uni.exact("D-3GIQ").unwrap());
+
+        // No signature penalty: the test proves the route exists, not that it is the cheapest.
+        let options = RouterOptions { filaments: false, unknown_sig_penalty: 0, ..Default::default() };
+        let route = Router::new(&uni, options).routes(&[jita, far], 1).unwrap().remove(0);
+        // In by a wormhole, across by the stargate, out by a wormhole.
+        assert_eq!(route.jumps, 3);
+        assert_eq!(route.wormholes, 2);
+        assert!(!route.path.edges.iter().any(|&e| matches!(uni.graph[e], Link::Filament(_))));
+        // The wormholes switch still gates the same route.
+        let no_wormholes = RouterOptions { wormholes: false, filaments: false, ..Default::default() };
+        let direct = Router::new(&uni, no_wormholes).routes(&[jita, far], 1).unwrap().remove(0);
+        assert!(direct.jumps > 3);
     }
 
     /// The ten classes confirmed in game 2026-10-18 are banned, with the SDE's own

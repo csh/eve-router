@@ -433,9 +433,6 @@ fn label(ui: &mut Ui, text: &str) {
 /// The hover text of a control that a route start locks.
 pub const LOCKED: &str = "Locked while route is active - stop the route to change this";
 
-/// The hover text of a control that the Pochven Access switch locks.
-const ACCESS_OFF: &str = "Turn on Pochven access above first";
-
 /// The pages of the settings window, in the order of the list.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
 pub enum Page {
@@ -855,7 +852,7 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
     action
 }
 
-/// The Pochven group of the Pochven page: the access switch. It acts at route time, like the
+/// The Pochven group of the Pochven page: the filaments switch. It acts at route time, like the
 /// EVE-Scout hub switches. Filament travel needs no
 /// client ID, unlike EVE Metro, so it always shows.
 fn pochven_group(ui: &mut Ui, s: &mut Session, locked: bool) {
@@ -868,8 +865,8 @@ fn pochven_group(ui: &mut Ui, s: &mut Session, locked: bool) {
     );
     ui.add_space(4.0);
     egui::Grid::new("settings-filaments").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        label(ui, "Allow travel via Pochven");
-        let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(&mut s.settings.pochven, "").changed());
+        label(ui, "Allow travel via Filaments");
+        let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(&mut s.settings.filaments, "").changed());
         row.response.on_disabled_hover_text(LOCKED);
         if row.inner {
             s.recompute();
@@ -1167,11 +1164,8 @@ fn pochven_page(ui: &mut Ui, s: &mut Session, locked: bool, portraits: &mut Port
     if !s.pilots.shows_characters() || s.cfg.eve_metro.key.is_none() {
         return;
     }
-    // A route cannot use EVE Metro while the Access switch above is off. The switch gives the
-    // reason, so the controls here only dim, with no second line of text to repeat it.
-    let pochven_off = !s.settings.pochven;
-    let disabled = locked || pochven_off;
-    let disabled_hover = if locked { LOCKED } else { ACCESS_OFF };
+    // The filaments switch does not gate EVE Metro: its wormholes follow the wormholes switch.
+    let disabled = locked;
     group(ui, "EVE Metro");
     ui.horizontal_wrapped(|ui| {
         ui.hyperlink_to("EVE Metro", "https://evemetro.com/");
@@ -1187,7 +1181,7 @@ fn pochven_page(ui: &mut Ui, s: &mut Session, locked: bool, portraits: &mut Port
             let changed = ui.app_checkbox(&mut on, "").changed();
             (changed, on)
         });
-        row.response.on_disabled_hover_text(disabled_hover);
+        row.response.on_disabled_hover_text(LOCKED);
         if row.inner.0 {
             s.cfg.eve_metro.enabled = row.inner.1;
             s.eve_metro_saved();
@@ -1226,7 +1220,7 @@ fn pochven_page(ui: &mut Ui, s: &mut Session, locked: bool, portraits: &mut Port
             }
             _ if picked == Some(pilot.id) => _ = ui.label(RichText::new("In use").color(theme::accent(ui))),
             _ => {
-                if ui.add_enabled(!disabled, AppButton::new("Use")).on_disabled_hover_text(disabled_hover).clicked() {
+                if ui.add_enabled(!disabled, AppButton::new("Use")).on_disabled_hover_text(LOCKED).clicked() {
                     pick = Some(pilot.id);
                 }
             }
@@ -1683,7 +1677,7 @@ mod tests {
         draw(&mut s, false);
         // Drawing changes no setting.
         assert_eq!(s.cfg.eve_metro.character, Some(99));
-        assert!(!s.settings.pochven);
+        assert!(!s.settings.filaments);
     }
 
     #[test]

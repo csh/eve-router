@@ -267,6 +267,7 @@ impl View {
                 ui.separator();
                 wormholes_toggle(ui, s);
                 bridges_toggle(ui, s);
+                filaments_toggle(ui, s);
                 ui.separator();
                 ui.label(theme::header_text("Show up to"));
                 count_stepper(ui, s);
@@ -493,6 +494,16 @@ fn bridges_toggle(ui: &mut Ui, s: &mut Session) {
 fn wormholes_toggle(ui: &mut Ui, s: &mut Session) {
     if ui.add(AppButton::new(format!("Wormholes: {}", on_off(s.settings.wormholes))).selected(s.settings.wormholes)).clicked() {
         s.settings.wormholes = !s.settings.wormholes;
+        s.recompute();
+        s.save();
+    }
+}
+
+fn filaments_toggle(ui: &mut Ui, s: &mut Session) {
+    let button = AppButton::new(format!("Filaments: {}", on_off(s.settings.filaments))).selected(s.settings.filaments);
+    let tip = "Allow routes to use a filament into Pochven";
+    if ui.add(button).on_hover_text(tip).clicked() {
+        s.settings.filaments = !s.settings.filaments;
         s.recompute();
         s.save();
     }
