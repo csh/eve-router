@@ -154,6 +154,18 @@ Zones are not in the SDE, so they come from the [capacitor update](https://www.e
 
 Set `EVE_ROUTER_SKIP_SDE_CHECK=1` to skip this check on startup.
 
+## Log file
+
+The app writes one log file for each day, `eve-router.YYYY-MM-DD.log`, in the `logs` folder of the cache folder. It keeps the files of the last 7 days. By default the log holds warnings and errors only.
+
+To collect more detail for a bug report, set `EVE_ROUTER_LOG` before you start the app, then attach the log file:
+
+```sh
+EVE_ROUTER_LOG=router_core=info,eve_router=info
+```
+
+In PowerShell: `$env:EVE_ROUTER_LOG = "router_core=info,eve_router=info"`. Use `debug` in place of `info` for the most detail.
+
 ## Development
 
 ```sh

@@ -93,13 +93,18 @@ fn builder(api_base: Option<&str>) -> UpdateBuilder {
     builder
 }
 
+/// The time limit of the check. A stalled server must not hold the splash screen.
+const CHECK_TIMEOUT: std::time::Duration = std::time::Duration::from_secs(10);
+
 /// The newest release that is newer than the running version, or `None`.
 pub fn check() -> Result<Option<Available>, UpdateError> {
     check_at(None)
 }
 
 fn check_at(api_base: Option<&str>) -> Result<Option<Available>, UpdateError> {
-    let releases = builder(api_base).build()?.get_newer_releases()?;
+    let mut builder = builder(api_base);
+    builder.timeout(CHECK_TIMEOUT);
+    let releases = builder.build()?.get_newer_releases()?;
     let newest = releases.into_vec().into_iter().max_by(|a, b| cmp_versions(a.version(), b.version()).unwrap_or(Ordering::Equal));
     Ok(newest.map(|release| Available {
         tag: format!("v{}", release.version()),

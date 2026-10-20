@@ -6,10 +6,10 @@
 //! the files that are older than 7 days. The writer keeps a number of files and not an age, and an
 //! app that does not run every day would keep too much.
 //!
-//! By default the log holds the events at the level info and above of `router_core` and
-//! `eve_router` (the name of the crate of this binary) and nothing else. That includes the line that
-//! each closed span writes, with its busy time. The spans of the parts of the route engine are at the
-//! level debug, so they need a filter. The environment variable `EVE_ROUTER_LOG` replaces the
+//! By default the log holds the events at the level warn and above of `router_core` and
+//! `eve_router` (the name of the crate of this binary) and nothing else. The info events, and the
+//! line that each closed span writes with its busy time, need a filter. The spans of the parts of
+//! the route engine are at the level debug. The environment variable `EVE_ROUTER_LOG` replaces the
 //! default filter. Its syntax is `target=level,target=level`, for example
 //! `EVE_ROUTER_LOG=router_core=debug,ureq=debug`. A set variable also lets the `log` records of the
 //! dependencies in.
@@ -43,7 +43,7 @@ pub fn log_dir(paths: &AppPaths) -> PathBuf {
     paths.cache.join("logs")
 }
 
-/// Info, warnings and errors of the two crates of this workspace. A target that the filter does not name is off.
+/// Warnings and errors of the two crates of this workspace. A target that the filter does not name is off.
 fn default_filter() -> Targets {
     Targets::new().with_target("router_core", Level::WARN).with_target("eve_router", Level::WARN)
 }
