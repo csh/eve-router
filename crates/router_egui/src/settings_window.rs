@@ -1326,8 +1326,9 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
     }
     let rows: Vec<_> = s.bridges.iter().map(|&(a, b)| (a, b, zone_text(s, a), zone_text(s, b))).collect();
     let mut remove = None;
-    // The table takes the height that is left, minus the row of the Clear all button.
-    let table_height = (ui.available_height() - 44.0).max(84.0);
+    // The table takes the height that is left, minus its header and the row of the Clear all button.
+    // The reserve must be large enough, or the page grows past the body height and the window changes size.
+    let table_height = (ui.available_height() - 66.0).max(84.0);
     use egui_extras::Column;
     egui_extras::TableBuilder::new(ui)
         .id_salt("ansiblex-bridges")
@@ -1339,6 +1340,7 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
         .column(Column::remainder().at_least(110.0).clip(true))
         .column(Column::exact(56.0))
         .column(Column::exact(80.0))
+        .min_scrolled_height(0.0)
         .max_scroll_height(table_height)
         .auto_shrink([false, false])
         .header(22.0, |mut header| {
