@@ -34,6 +34,10 @@ pub struct SdeSystem {
     /// Set on a few systems that an NPC faction holds. See `SdeRegion::faction_id`.
     #[serde(rename = "factionID", default, skip_serializing_if = "Option::is_none")]
     pub faction_id: Option<u32>,
+    /// The wormhole class. The SDE sets it on the five Drifter systems only. The other systems of
+    /// wormhole space take the class of their constellation, and then of their region.
+    #[serde(rename = "wormholeClassID", default, skip_serializing_if = "Option::is_none")]
+    pub wormhole_class: Option<u32>,
 }
 
 #[derive(Deserialize, Serialize)]
@@ -59,6 +63,9 @@ pub struct SdeRegion {
     /// agreed with this rule for every nullsec system (3538 on 2026-10-20).
     #[serde(rename = "factionID", default, skip_serializing_if = "Option::is_none")]
     pub faction_id: Option<u32>,
+    /// The wormhole class of each system in the region that has no class of its own.
+    #[serde(rename = "wormholeClassID", default, skip_serializing_if = "Option::is_none")]
+    pub wormhole_class: Option<u32>,
 }
 
 /// A constellation. A sovereignty region can hold an NPC constellation (Delve, Fountain).
@@ -69,6 +76,9 @@ pub struct SdeConstellation {
     /// See `SdeRegion::faction_id`.
     #[serde(rename = "factionID", default, skip_serializing_if = "Option::is_none")]
     pub faction_id: Option<u32>,
+    /// The wormhole class of each system in the constellation that has no class of its own.
+    #[serde(rename = "wormholeClassID", default, skip_serializing_if = "Option::is_none")]
+    pub wormhole_class: Option<u32>,
 }
 
 #[derive(Deserialize)]

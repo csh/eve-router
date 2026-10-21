@@ -23,6 +23,9 @@ pub struct System {
     /// capable. Only such a system can hold a sovereignty hub, so only there can an Ansiblex or
     /// a Pharolux work.
     pub sov_null: bool,
+    /// The wormhole class from the SDE: the system, else its constellation, else its region.
+    /// `None` for a system of known space.
+    pub wormhole_class: Option<u32>,
     /// Position in meters.
     pub pos: [f64; 3],
 }
@@ -145,6 +148,7 @@ fn add_filaments(graph: &mut DiGraph<System, Link>, by_id: &mut HashMap<u32, Nod
             constellation_id: clade.constellation_id(),
             security: -1.0,
             sov_null: false,
+            wormhole_class: None,
             pos,
         });
         by_id.insert(id, hub);
@@ -197,6 +201,8 @@ impl Universe {
     pub fn from_sde(data: SdeData) -> Self {
         let npc_regions: HashSet<u32> = data.regions.iter().filter(|r| r.faction_id.is_some()).map(|r| r.id).collect();
         let npc_constellations: HashSet<u32> = data.constellations.iter().filter(|c| c.faction_id.is_some()).map(|c| c.id).collect();
+        let region_class: HashMap<u32, u32> = data.regions.iter().filter_map(|r| Some((r.id, r.wormhole_class?))).collect();
+        let constellation_class: HashMap<u32, u32> = data.constellations.iter().filter_map(|c| Some((c.id, c.wormhole_class?))).collect();
         let regions: HashMap<u32, String> = data.regions.into_iter().map(|r| (r.id, r.name.en)).collect();
         let mut graph = DiGraph::with_capacity(data.systems.len(), data.stargates.len());
         let mut by_id = HashMap::with_capacity(data.systems.len());
@@ -205,6 +211,8 @@ impl Universe {
             let region = regions.get(&s.region_id).cloned().unwrap_or_default();
             let npc = s.faction_id.is_some() || npc_regions.contains(&s.region_id) || npc_constellations.contains(&s.constellation_id);
             let sov_null = band(s.security) == Band::Null && !WORMHOLE_REGIONS.contains(&s.region_id) && !npc;
+            let wormhole_class =
+                s.wormhole_class.or_else(|| constellation_class.get(&s.constellation_id).copied()).or_else(|| region_class.get(&s.region_id).copied());
             let node = graph.add_node(System {
                 id: s.id,
                 name: s.name.en,
@@ -213,6 +221,7 @@ impl Universe {
                 constellation_id: s.constellation_id,
                 security: s.security,
                 sov_null,
+                wormhole_class,
                 pos: [s.position.x, s.position.y, s.position.z],
             });
             by_id.insert(s.id, node);
@@ -379,6 +388,24 @@ pub mod tests {
     }
 
     #[test]
+    fn systems_get_the_wormhole_class_from_the_sde() {
+        let uni = universe();
+        let class = |name: &str| uni.system(uni.exact(name).unwrap_or_else(|| panic!("{name} is not on the map"))).wormhole_class;
+        // A Drifter system has its own class. Thera takes the class of its region.
+        assert_eq!(class("Sentinel MZ"), Some(14));
+        assert_eq!(class("Azdaja Redoubt"), Some(18));
+        assert_eq!(class("Thera"), Some(12));
+        // A system of wormhole space takes the class of its constellation, and known space has a class too (Pochven is 25).
+        assert_eq!(class("J105443"), Some(1));
+        assert_eq!(class("Jita"), Some(7));
+        assert_eq!(class("Tama"), Some(8));
+        assert_eq!(class("Kuharah"), Some(25));
+        // Exactly five systems carry a Drifter class.
+        let drifters = uni.graph.node_weights().filter(|s| s.wormhole_class.is_some_and(|c| (14..=18).contains(&c))).count();
+        assert_eq!(drifters, 5);
+    }
+
+    #[test]
     fn search_puts_prefix_matches_first() {
         let uni = universe();
         let names: Vec<&str> = uni.search("ama", 50).iter().map(|&n| uni.name(n)).collect();
@@ -438,6 +465,7 @@ pub mod tests {
             constellation_id: 0,
             security: 0.0,
             sov_null: false,
+            wormhole_class: None,
             pos: [0.0; 3],
         }
     }

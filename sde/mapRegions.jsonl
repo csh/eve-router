@@ -1,114 +1,114 @@
-{"_key":10000001,"name":{"en":"Derelik"},"factionID":500007}
-{"_key":10000002,"name":{"en":"The Forge"},"factionID":500001}
-{"_key":10000003,"name":{"en":"Vale of the Silent"}}
+{"_key":10000001,"name":{"en":"Derelik"},"factionID":500007,"wormholeClassID":7}
+{"_key":10000002,"name":{"en":"The Forge"},"factionID":500001,"wormholeClassID":7}
+{"_key":10000003,"name":{"en":"Vale of the Silent"},"wormholeClassID":9}
 {"_key":10000004,"name":{"en":"UUA-F4"}}
-{"_key":10000005,"name":{"en":"Detorid"}}
-{"_key":10000006,"name":{"en":"Wicked Creek"}}
-{"_key":10000007,"name":{"en":"Cache"}}
-{"_key":10000008,"name":{"en":"Scalding Pass"}}
-{"_key":10000009,"name":{"en":"Insmother"}}
-{"_key":10000010,"name":{"en":"Tribute"}}
-{"_key":10000011,"name":{"en":"Great Wildlands"},"factionID":500015}
-{"_key":10000012,"name":{"en":"Curse"},"factionID":500011}
-{"_key":10000013,"name":{"en":"Malpais"}}
-{"_key":10000014,"name":{"en":"Catch"}}
-{"_key":10000015,"name":{"en":"Venal"},"factionID":500010}
-{"_key":10000016,"name":{"en":"Lonetrek"},"factionID":500001}
+{"_key":10000005,"name":{"en":"Detorid"},"wormholeClassID":9}
+{"_key":10000006,"name":{"en":"Wicked Creek"},"wormholeClassID":9}
+{"_key":10000007,"name":{"en":"Cache"},"wormholeClassID":9}
+{"_key":10000008,"name":{"en":"Scalding Pass"},"wormholeClassID":9}
+{"_key":10000009,"name":{"en":"Insmother"},"wormholeClassID":9}
+{"_key":10000010,"name":{"en":"Tribute"},"wormholeClassID":9}
+{"_key":10000011,"name":{"en":"Great Wildlands"},"factionID":500015,"wormholeClassID":9}
+{"_key":10000012,"name":{"en":"Curse"},"factionID":500011,"wormholeClassID":9}
+{"_key":10000013,"name":{"en":"Malpais"},"wormholeClassID":9}
+{"_key":10000014,"name":{"en":"Catch"},"wormholeClassID":9}
+{"_key":10000015,"name":{"en":"Venal"},"factionID":500010,"wormholeClassID":9}
+{"_key":10000016,"name":{"en":"Lonetrek"},"factionID":500001,"wormholeClassID":7}
 {"_key":10000017,"name":{"en":"J7HZ-F"},"factionID":500005}
-{"_key":10000018,"name":{"en":"The Spire"}}
+{"_key":10000018,"name":{"en":"The Spire"},"wormholeClassID":9}
 {"_key":10000019,"name":{"en":"A821-A"},"factionID":500005}
-{"_key":10000020,"name":{"en":"Tash-Murkon"},"factionID":500003}
-{"_key":10000021,"name":{"en":"Outer Passage"}}
-{"_key":10000022,"name":{"en":"Stain"},"factionID":500019}
-{"_key":10000023,"name":{"en":"Pure Blind"}}
-{"_key":10000025,"name":{"en":"Immensea"}}
-{"_key":10000027,"name":{"en":"Etherium Reach"}}
-{"_key":10000028,"name":{"en":"Molden Heath"},"factionID":500002}
-{"_key":10000029,"name":{"en":"Geminate"}}
-{"_key":10000030,"name":{"en":"Heimatar"},"factionID":500002}
-{"_key":10000031,"name":{"en":"Impass"}}
-{"_key":10000032,"name":{"en":"Sinq Laison"},"factionID":500004}
-{"_key":10000033,"name":{"en":"The Citadel"},"factionID":500001}
-{"_key":10000034,"name":{"en":"The Kalevala Expanse"}}
-{"_key":10000035,"name":{"en":"Deklein"}}
-{"_key":10000036,"name":{"en":"Devoid"},"factionID":500003}
-{"_key":10000037,"name":{"en":"Everyshore"},"factionID":500004}
-{"_key":10000038,"name":{"en":"The Bleak Lands"},"factionID":500003}
-{"_key":10000039,"name":{"en":"Esoteria"}}
-{"_key":10000040,"name":{"en":"Oasa"}}
+{"_key":10000020,"name":{"en":"Tash-Murkon"},"factionID":500003,"wormholeClassID":7}
+{"_key":10000021,"name":{"en":"Outer Passage"},"wormholeClassID":9}
+{"_key":10000022,"name":{"en":"Stain"},"factionID":500019,"wormholeClassID":9}
+{"_key":10000023,"name":{"en":"Pure Blind"},"wormholeClassID":9}
+{"_key":10000025,"name":{"en":"Immensea"},"wormholeClassID":9}
+{"_key":10000027,"name":{"en":"Etherium Reach"},"wormholeClassID":9}
+{"_key":10000028,"name":{"en":"Molden Heath"},"factionID":500002,"wormholeClassID":7}
+{"_key":10000029,"name":{"en":"Geminate"},"wormholeClassID":9}
+{"_key":10000030,"name":{"en":"Heimatar"},"factionID":500002,"wormholeClassID":7}
+{"_key":10000031,"name":{"en":"Impass"},"wormholeClassID":9}
+{"_key":10000032,"name":{"en":"Sinq Laison"},"factionID":500004,"wormholeClassID":7}
+{"_key":10000033,"name":{"en":"The Citadel"},"factionID":500001,"wormholeClassID":7}
+{"_key":10000034,"name":{"en":"The Kalevala Expanse"},"wormholeClassID":9}
+{"_key":10000035,"name":{"en":"Deklein"},"wormholeClassID":9}
+{"_key":10000036,"name":{"en":"Devoid"},"factionID":500003,"wormholeClassID":7}
+{"_key":10000037,"name":{"en":"Everyshore"},"factionID":500004,"wormholeClassID":7}
+{"_key":10000038,"name":{"en":"The Bleak Lands"},"factionID":500003,"wormholeClassID":7}
+{"_key":10000039,"name":{"en":"Esoteria"},"wormholeClassID":9}
+{"_key":10000040,"name":{"en":"Oasa"},"wormholeClassID":9}
 {"_key":10000041,"name":{"en":"Syndicate"},"factionID":500001}
-{"_key":10000042,"name":{"en":"Metropolis"},"factionID":500002}
-{"_key":10000043,"name":{"en":"Domain"},"factionID":500003}
-{"_key":10000044,"name":{"en":"Solitude"},"factionID":500004}
-{"_key":10000045,"name":{"en":"Tenal"}}
-{"_key":10000046,"name":{"en":"Fade"}}
-{"_key":10000047,"name":{"en":"Providence"}}
-{"_key":10000048,"name":{"en":"Placid"},"factionID":500004}
-{"_key":10000049,"name":{"en":"Khanid"},"factionID":500008}
-{"_key":10000050,"name":{"en":"Querious"}}
-{"_key":10000051,"name":{"en":"Cloud Ring"}}
-{"_key":10000052,"name":{"en":"Kador"},"factionID":500003}
-{"_key":10000053,"name":{"en":"Cobalt Edge"}}
-{"_key":10000054,"name":{"en":"Aridia"},"factionID":500003}
-{"_key":10000055,"name":{"en":"Branch"}}
-{"_key":10000056,"name":{"en":"Feythabolis"}}
-{"_key":10000057,"name":{"en":"Outer Ring"},"factionID":500014}
-{"_key":10000058,"name":{"en":"Fountain"}}
-{"_key":10000059,"name":{"en":"Paragon Soul"}}
-{"_key":10000060,"name":{"en":"Delve"}}
-{"_key":10000061,"name":{"en":"Tenerifis"}}
-{"_key":10000062,"name":{"en":"Omist"}}
-{"_key":10000063,"name":{"en":"Period Basis"}}
-{"_key":10000064,"name":{"en":"Essence"},"factionID":500004}
-{"_key":10000065,"name":{"en":"Kor-Azor"},"factionID":500003}
-{"_key":10000066,"name":{"en":"Perrigen Falls"}}
-{"_key":10000067,"name":{"en":"Genesis"},"factionID":500003}
-{"_key":10000068,"name":{"en":"Verge Vendor"},"factionID":500004}
-{"_key":10000069,"name":{"en":"Black Rise"},"factionID":500001}
-{"_key":10000070,"name":{"en":"Pochven"},"factionID":500026}
+{"_key":10000042,"name":{"en":"Metropolis"},"factionID":500002,"wormholeClassID":7}
+{"_key":10000043,"name":{"en":"Domain"},"factionID":500003,"wormholeClassID":7}
+{"_key":10000044,"name":{"en":"Solitude"},"factionID":500004,"wormholeClassID":7}
+{"_key":10000045,"name":{"en":"Tenal"},"wormholeClassID":9}
+{"_key":10000046,"name":{"en":"Fade"},"wormholeClassID":9}
+{"_key":10000047,"name":{"en":"Providence"},"wormholeClassID":9}
+{"_key":10000048,"name":{"en":"Placid"},"factionID":500004,"wormholeClassID":7}
+{"_key":10000049,"name":{"en":"Khanid"},"factionID":500008,"wormholeClassID":7}
+{"_key":10000050,"name":{"en":"Querious"},"wormholeClassID":9}
+{"_key":10000051,"name":{"en":"Cloud Ring"},"wormholeClassID":9}
+{"_key":10000052,"name":{"en":"Kador"},"factionID":500003,"wormholeClassID":7}
+{"_key":10000053,"name":{"en":"Cobalt Edge"},"wormholeClassID":9}
+{"_key":10000054,"name":{"en":"Aridia"},"factionID":500003,"wormholeClassID":7}
+{"_key":10000055,"name":{"en":"Branch"},"wormholeClassID":9}
+{"_key":10000056,"name":{"en":"Feythabolis"},"wormholeClassID":9}
+{"_key":10000057,"name":{"en":"Outer Ring"},"factionID":500014,"wormholeClassID":9}
+{"_key":10000058,"name":{"en":"Fountain"},"wormholeClassID":9}
+{"_key":10000059,"name":{"en":"Paragon Soul"},"wormholeClassID":9}
+{"_key":10000060,"name":{"en":"Delve"},"wormholeClassID":9}
+{"_key":10000061,"name":{"en":"Tenerifis"},"wormholeClassID":9}
+{"_key":10000062,"name":{"en":"Omist"},"wormholeClassID":9}
+{"_key":10000063,"name":{"en":"Period Basis"},"wormholeClassID":9}
+{"_key":10000064,"name":{"en":"Essence"},"factionID":500004,"wormholeClassID":7}
+{"_key":10000065,"name":{"en":"Kor-Azor"},"factionID":500003,"wormholeClassID":7}
+{"_key":10000066,"name":{"en":"Perrigen Falls"},"wormholeClassID":9}
+{"_key":10000067,"name":{"en":"Genesis"},"factionID":500003,"wormholeClassID":7}
+{"_key":10000068,"name":{"en":"Verge Vendor"},"factionID":500004,"wormholeClassID":7}
+{"_key":10000069,"name":{"en":"Black Rise"},"factionID":500001,"wormholeClassID":7}
+{"_key":10000070,"name":{"en":"Pochven"},"factionID":500026,"wormholeClassID":25}
 {"_key":10001000,"name":{"en":"Yasna Zakh"}}
 {"_key":10001004,"name":{"en":"Exordium"},"factionID":500006}
-{"_key":11000001,"name":{"en":"A-R00001"}}
-{"_key":11000002,"name":{"en":"A-R00002"}}
-{"_key":11000003,"name":{"en":"A-R00003"}}
-{"_key":11000004,"name":{"en":"B-R00004"}}
-{"_key":11000005,"name":{"en":"B-R00005"}}
-{"_key":11000006,"name":{"en":"B-R00006"}}
-{"_key":11000007,"name":{"en":"B-R00007"}}
-{"_key":11000008,"name":{"en":"B-R00008"}}
-{"_key":11000009,"name":{"en":"C-R00009"}}
-{"_key":11000010,"name":{"en":"C-R00010"}}
-{"_key":11000011,"name":{"en":"C-R00011"}}
-{"_key":11000012,"name":{"en":"C-R00012"}}
-{"_key":11000013,"name":{"en":"C-R00013"}}
-{"_key":11000014,"name":{"en":"C-R00014"}}
-{"_key":11000015,"name":{"en":"C-R00015"}}
-{"_key":11000016,"name":{"en":"D-R00016"}}
-{"_key":11000017,"name":{"en":"D-R00017"}}
-{"_key":11000018,"name":{"en":"D-R00018"}}
-{"_key":11000019,"name":{"en":"D-R00019"}}
-{"_key":11000020,"name":{"en":"D-R00020"}}
-{"_key":11000021,"name":{"en":"D-R00021"}}
-{"_key":11000022,"name":{"en":"D-R00022"}}
-{"_key":11000023,"name":{"en":"D-R00023"}}
-{"_key":11000024,"name":{"en":"E-R00024"}}
-{"_key":11000025,"name":{"en":"E-R00025"}}
-{"_key":11000026,"name":{"en":"E-R00026"}}
-{"_key":11000027,"name":{"en":"E-R00027"}}
-{"_key":11000028,"name":{"en":"E-R00028"}}
-{"_key":11000029,"name":{"en":"E-R00029"}}
-{"_key":11000030,"name":{"en":"F-R00030"}}
-{"_key":11000031,"name":{"en":"G-R00031"}}
-{"_key":11000032,"name":{"en":"H-R00032"}}
-{"_key":11000033,"name":{"en":"K-R00033"}}
-{"_key":12000001,"name":{"en":"ADR01"}}
-{"_key":12000002,"name":{"en":"ADR02"}}
-{"_key":12000003,"name":{"en":"ADR03"}}
-{"_key":12000004,"name":{"en":"ADR04"}}
-{"_key":12000005,"name":{"en":"ADR05"}}
-{"_key":14000001,"name":{"en":"VR-01"}}
-{"_key":14000002,"name":{"en":"VR-02"}}
-{"_key":14000003,"name":{"en":"VR-03"}}
-{"_key":14000004,"name":{"en":"VR-04"}}
-{"_key":14000005,"name":{"en":"VR-05"}}
-{"_key":19000001,"name":{"en":"GPMR-01"}}
+{"_key":11000001,"name":{"en":"A-R00001"},"wormholeClassID":1}
+{"_key":11000002,"name":{"en":"A-R00002"},"wormholeClassID":1}
+{"_key":11000003,"name":{"en":"A-R00003"},"wormholeClassID":1}
+{"_key":11000004,"name":{"en":"B-R00004"},"wormholeClassID":2}
+{"_key":11000005,"name":{"en":"B-R00005"},"wormholeClassID":2}
+{"_key":11000006,"name":{"en":"B-R00006"},"wormholeClassID":2}
+{"_key":11000007,"name":{"en":"B-R00007"},"wormholeClassID":2}
+{"_key":11000008,"name":{"en":"B-R00008"},"wormholeClassID":2}
+{"_key":11000009,"name":{"en":"C-R00009"},"wormholeClassID":3}
+{"_key":11000010,"name":{"en":"C-R00010"},"wormholeClassID":3}
+{"_key":11000011,"name":{"en":"C-R00011"},"wormholeClassID":3}
+{"_key":11000012,"name":{"en":"C-R00012"},"wormholeClassID":3}
+{"_key":11000013,"name":{"en":"C-R00013"},"wormholeClassID":3}
+{"_key":11000014,"name":{"en":"C-R00014"},"wormholeClassID":3}
+{"_key":11000015,"name":{"en":"C-R00015"},"wormholeClassID":3}
+{"_key":11000016,"name":{"en":"D-R00016"},"wormholeClassID":4}
+{"_key":11000017,"name":{"en":"D-R00017"},"wormholeClassID":4}
+{"_key":11000018,"name":{"en":"D-R00018"},"wormholeClassID":4}
+{"_key":11000019,"name":{"en":"D-R00019"},"wormholeClassID":4}
+{"_key":11000020,"name":{"en":"D-R00020"},"wormholeClassID":4}
+{"_key":11000021,"name":{"en":"D-R00021"},"wormholeClassID":4}
+{"_key":11000022,"name":{"en":"D-R00022"},"wormholeClassID":4}
+{"_key":11000023,"name":{"en":"D-R00023"},"wormholeClassID":4}
+{"_key":11000024,"name":{"en":"E-R00024"},"wormholeClassID":5}
+{"_key":11000025,"name":{"en":"E-R00025"},"wormholeClassID":5}
+{"_key":11000026,"name":{"en":"E-R00026"},"wormholeClassID":5}
+{"_key":11000027,"name":{"en":"E-R00027"},"wormholeClassID":5}
+{"_key":11000028,"name":{"en":"E-R00028"},"wormholeClassID":5}
+{"_key":11000029,"name":{"en":"E-R00029"},"wormholeClassID":5}
+{"_key":11000030,"name":{"en":"F-R00030"},"wormholeClassID":6}
+{"_key":11000031,"name":{"en":"G-R00031"},"wormholeClassID":12}
+{"_key":11000032,"name":{"en":"H-R00032"},"wormholeClassID":13}
+{"_key":11000033,"name":{"en":"K-R00033"},"wormholeClassID":1}
+{"_key":12000001,"name":{"en":"ADR01"},"wormholeClassID":19}
+{"_key":12000002,"name":{"en":"ADR02"},"wormholeClassID":20}
+{"_key":12000003,"name":{"en":"ADR03"},"wormholeClassID":21}
+{"_key":12000004,"name":{"en":"ADR04"},"wormholeClassID":22}
+{"_key":12000005,"name":{"en":"ADR05"},"wormholeClassID":23}
+{"_key":14000001,"name":{"en":"VR-01"},"wormholeClassID":19}
+{"_key":14000002,"name":{"en":"VR-02"},"wormholeClassID":19}
+{"_key":14000003,"name":{"en":"VR-03"},"wormholeClassID":19}
+{"_key":14000004,"name":{"en":"VR-04"},"wormholeClassID":19}
+{"_key":14000005,"name":{"en":"VR-05"},"wormholeClassID":19}
+{"_key":19000001,"name":{"en":"GPMR-01"},"wormholeClassID":7}
