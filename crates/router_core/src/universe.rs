@@ -211,8 +211,10 @@ impl Universe {
             let region = regions.get(&s.region_id).cloned().unwrap_or_default();
             let npc = s.faction_id.is_some() || npc_regions.contains(&s.region_id) || npc_constellations.contains(&s.constellation_id);
             let sov_null = band(s.security) == Band::Null && !WORMHOLE_REGIONS.contains(&s.region_id) && !npc;
-            let wormhole_class =
-                s.wormhole_class.or_else(|| constellation_class.get(&s.constellation_id).copied()).or_else(|| region_class.get(&s.region_id).copied());
+            let wormhole_class = s
+                .wormhole_class
+                .or_else(|| constellation_class.get(&s.constellation_id).copied())
+                .or_else(|| region_class.get(&s.region_id).copied());
             let node = graph.add_node(System {
                 id: s.id,
                 name: s.name.en,

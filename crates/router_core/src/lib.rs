@@ -23,4 +23,5 @@ pub mod startup;
 pub mod test_support;
 pub mod universe;
 pub mod wormhole;
+pub mod wormhole_space;
 pub mod wormhole_types;

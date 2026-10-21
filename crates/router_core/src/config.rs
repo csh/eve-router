@@ -5,6 +5,7 @@ use crate::esi::client::Affiliation;
 use crate::route::{Mode, RouteError};
 use crate::wormhole::Hubs;
 use crate::wormhole::SourceId;
+use crate::wormhole_space::WormholeSpace;
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -327,6 +328,9 @@ pub struct Config {
     pub eve_metro: EveMetroConfig,
     /// The Thera and Turnur switches. Both are on in a file without them.
     pub eve_scout: Hubs,
+    /// The stance (allow, avoid, block) of each class of wormhole space. The default stays out of a file.
+    #[serde(skip_serializing_if = "WormholeSpace::is_default")]
+    pub wormhole_space: WormholeSpace,
     /// The filaments switch: whether a route can use a filament. `None` gives on. One switch covers
     /// all three clades: the SDE shows one Triglavian faction only (Triglavian Collective,
     /// `500026`), and the clade corporations share it. A file from before the rename has the
@@ -523,6 +527,7 @@ mod tests {
                 ..Default::default()
             },
             eve_scout: Hubs { thera: false, turnur: true },
+            wormhole_space: WormholeSpace::default(),
             filaments: Some(true),
             theme: None,
             compact: false,

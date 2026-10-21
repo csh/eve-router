@@ -80,6 +80,7 @@ pub fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
         top: 3,
         wormholes: true,
         hubs: Default::default(),
+        space: Default::default(),
         bridges: true,
         rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| hulls().find(h).unwrap()), max_cap: None },
         filaments: false,

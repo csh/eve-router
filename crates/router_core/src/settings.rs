@@ -5,6 +5,7 @@ use crate::config::{self, AvoidName, Config, ConfigError};
 use crate::route::{DEFAULT_CAP_WEIGHT, DEFAULT_UNKNOWN_SIG_PENALTY, JUMP, Mode, PENALTY, RouteError, Router, RouterOptions};
 use crate::universe::Universe;
 use crate::wormhole;
+use crate::wormhole_space::WormholeSpace;
 use petgraph::graph::NodeIndex;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -62,6 +63,9 @@ pub const MAX_TOP: usize = 10;
 
 /// The sentence that follows a "No route" error while a "Never" entry could cause it.
 pub const NO_ROUTE_HINT: &str = "Your avoid list might be in the way.";
+
+/// The sentence that follows a "No route" error while a class of wormhole space is blocked.
+pub const NO_ROUTE_SPACE_HINT: &str = "Your wormhole space settings might be in the way.";
 
 /// One entry of the avoid list.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -168,6 +172,8 @@ pub struct Settings {
     pub wormholes: bool,
     /// The Thera and Turnur switches.
     pub hubs: wormhole::Hubs,
+    /// The stance of each class of wormhole space. It acts like the avoid list, but stays apart from it.
+    pub space: WormholeSpace,
     pub bridges: bool,
     pub rules: BridgeRules,
     pub costs: RouteCosts,
@@ -216,6 +222,7 @@ impl Settings {
             top: cfg.top.unwrap_or(5).clamp(1, MAX_TOP),
             wormholes: cfg.wormholes.unwrap_or(true),
             hubs: cfg.eve_scout,
+            space: cfg.wormhole_space,
             bridges: cfg.bridges.unwrap_or(true),
             rules: BridgeRules { capital, hull, max_cap: cfg.max_cap_tj },
             costs: RouteCosts::from_config(cfg),
@@ -243,9 +250,11 @@ impl Settings {
             now: now + self.min_life * 60,
         };
         let mut router = Router::new(uni, options);
-        if !self.avoid.is_empty() {
-            router.set_danger(self.avoid.danger(uni));
-            router.set_never(self.avoid.never(uni));
+        if !self.avoid.is_empty() || !self.space.is_default() {
+            let (danger, never) = (self.avoid.danger(uni), self.avoid.never(uni));
+            let (space_danger, space_never) = (self.space.danger(uni), self.space.never(uni));
+            router.set_danger(danger.iter().zip(&space_danger).map(|(&a, &b)| a.max(b)).collect());
+            router.set_never(never.iter().zip(&space_never).map(|(&a, &b)| a || b).collect());
         }
         router
     }
@@ -278,6 +287,7 @@ impl Settings {
         cfg.cap_weight = Some(self.costs.cap_weight);
         cfg.unknown_sig_penalty = Some(self.costs.unknown_sig_penalty);
         cfg.eve_scout = self.hubs;
+        cfg.wormhole_space = self.space;
         cfg.filaments = Some(self.filaments);
         cfg.favourites = Some(self.favourites.iter().map(|&n| uni.name(n).to_string()).collect());
         cfg.avoid_systems = self.avoid.systems.iter().map(|e| AvoidName::new(uni.name(e.item), e.never)).collect();
@@ -285,10 +295,19 @@ impl Settings {
     }
 
     /// The text of a route error. A "No route" error gets a hint while a "Never" entry is on the
-    /// avoid list, because only such an entry can block every route.
+    /// avoid list, or a class of wormhole space is blocked, because only such a rule can block every route.
     pub fn explain(&self, error: &RouteError) -> String {
         let never = self.avoid.systems.iter().any(|e| e.never) || self.avoid.regions.iter().any(|e| e.never);
-        if never && matches!(error, RouteError::NoRoute { .. }) { format!("{error}. {NO_ROUTE_HINT}") } else { error.to_string() }
+        let mut text = error.to_string();
+        if matches!(error, RouteError::NoRoute { .. }) {
+            if never {
+                text = format!("{text}. {NO_ROUTE_HINT}");
+            }
+            if self.space.blocks() {
+                text = format!("{text}{} {NO_ROUTE_SPACE_HINT}", if never { "" } else { "." });
+            }
+        }
+        text
     }
 
     /// The waypoints in the order to route them.
@@ -604,6 +623,32 @@ mod tests {
         assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_HINT}"));
         // Another error stays as it is.
         assert_eq!(s.explain(&RouteError::TooFewSystems), "Give two or more systems");
+    }
+
+    #[test]
+    fn a_blocked_class_gets_its_own_hint_and_a_stance_is_stored() {
+        use crate::wormhole_space::{Group, Stance};
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let error = RouteError::NoRoute { from: "Jita".into(), to: "Perimeter".into() };
+        let text = error.to_string();
+        // Avoid does not block a route, so it gets no hint.
+        s.space.set(Group::Class(3), Stance::Avoid);
+        assert_eq!(s.explain(&error), text);
+        s.space.set(Group::Class(3), Stance::Block);
+        assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_SPACE_HINT}"));
+        // Both hints in one text, with one full stop between the error and the first hint.
+        let perimeter = uni.exact("Perimeter").unwrap();
+        s.avoid.add_system(perimeter);
+        s.avoid.set_system_never(perimeter, true);
+        assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_HINT} {NO_ROUTE_SPACE_HINT}"));
+        // The stance goes to the config and comes back.
+        let mut cfg = Config::default();
+        s.store(&uni, &mut cfg);
+        assert_eq!(cfg.wormhole_space.c3, Stance::Block);
+        let hulls = crate::test_support::hulls();
+        let (back, _) = Settings::from_config(&cfg, &uni, hulls);
+        assert_eq!(back.space, s.space);
     }
 
     #[test]
