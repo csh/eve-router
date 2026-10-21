@@ -173,7 +173,8 @@ pub struct Settings {
     pub wormholes: bool,
     /// The Thera and Turnur switches.
     pub hubs: wormhole::Hubs,
-    /// The stance of each class of wormhole space. It acts like the avoid list, but stays apart from it.
+    /// The stance of each class of wormhole space, of the Drifter systems and of Pochven. It acts like
+    /// the avoid list, but stays apart from it.
     pub space: WormholeSpace,
     pub bridges: bool,
     pub rules: BridgeRules,
@@ -236,6 +237,11 @@ impl Settings {
         (settings, warnings)
     }
 
+    /// True if Pochven is blocked. A filament jump ends in Pochven, so the filaments have no use then.
+    pub fn pochven_blocked(&self) -> bool {
+        self.space.pochven == crate::wormhole_space::Stance::Block
+    }
+
     /// A router for the settings. `now` (Unix seconds) and `min_life` set which wormholes are usable.
     pub fn router<'a>(&self, uni: &'a Universe, now: u64) -> Router<'a> {
         let bridges = self.bridges && self.rules.blocked_reason().is_none();
@@ -296,10 +302,11 @@ impl Settings {
     }
 
     /// The text of a route error. A "No route" error gets a hint while a "Never" entry is on the
-    /// avoid list, or a class of wormhole space is blocked, because only such a rule can block every route.
+    /// avoid list, or a group of the space settings is blocked, because only such a rule can block every route.
+    /// A blocked wormhole group counts only while wormholes are on.
     pub fn explain(&self, error: &RouteError) -> String {
         let never = self.avoid.systems.iter().any(|e| e.never) || self.avoid.regions.iter().any(|e| e.never);
-        match (error, self.space.blocks(), never) {
+        match (error, self.space.blocks(self.wormholes), never) {
             (RouteError::NoRoute { .. }, true, _) => format!("{error}. {NO_ROUTE_STRICT_HINT}"),
             (RouteError::NoRoute { .. }, false, true) => format!("{error}. {NO_ROUTE_HINT}"),
             _ => error.to_string(),
@@ -638,6 +645,15 @@ mod tests {
         s.avoid.add_system(perimeter);
         s.avoid.set_system_never(perimeter, true);
         assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_STRICT_HINT}"));
+        // With wormholes off, a blocked wormhole class has no effect, so it gives no hint. Pochven still does.
+        s.avoid.set_system_never(perimeter, false);
+        s.wormholes = false;
+        assert_eq!(s.explain(&error), text);
+        s.space.set(Group::Pochven, Stance::Block);
+        assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_STRICT_HINT}"));
+        s.wormholes = true;
+        s.space.set(Group::Pochven, Stance::Allow);
+        s.avoid.set_system_never(perimeter, true);
         // The stance goes to the config and comes back.
         let mut cfg = Config::default();
         s.store(&uni, &mut cfg);

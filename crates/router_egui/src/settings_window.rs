@@ -20,6 +20,7 @@ use router_core::sources::{
     nexum::{self, MapInfo},
 };
 use router_core::universe::display_sec;
+use router_core::wormhole_space::{Group, Stance};
 use std::time::{Duration, Instant};
 
 pub enum Popup {
@@ -439,9 +440,10 @@ pub enum Page {
     #[default]
     Favourites,
     Theme,
-    Wormholes,
-    /// Filaments and EVE Metro: the two features almost all about travel via Pochven.
-    Pochven,
+    /// The Nexum source: the URL, the key and the maps.
+    Nexum,
+    /// The EVE Metro wormhole map. It needs the client ID and the API key, so the list hides it without them.
+    EveMetro,
     Ansiblex,
     /// The routing overlay: a window above the game. It works on Windows only.
     #[cfg(windows)]
@@ -454,16 +456,16 @@ pub enum Page {
 impl Page {
     #[cfg(windows)]
     pub const ALL: [Page; 8] =
-        [Page::Favourites, Page::Theme, Page::Wormholes, Page::Pochven, Page::Ansiblex, Page::Overlay, Page::Engine, Page::Updates];
+        [Page::Favourites, Page::Theme, Page::Nexum, Page::EveMetro, Page::Ansiblex, Page::Overlay, Page::Engine, Page::Updates];
     #[cfg(not(windows))]
-    pub const ALL: [Page; 7] = [Page::Favourites, Page::Theme, Page::Wormholes, Page::Pochven, Page::Ansiblex, Page::Engine, Page::Updates];
+    pub const ALL: [Page; 7] = [Page::Favourites, Page::Theme, Page::Nexum, Page::EveMetro, Page::Ansiblex, Page::Engine, Page::Updates];
 
     pub fn label(self) -> &'static str {
         match self {
             Page::Favourites => "Favourites",
             Page::Theme => "Theme",
-            Page::Wormholes => "Wormholes",
-            Page::Pochven => "Pochven",
+            Page::Nexum => "Nexum",
+            Page::EveMetro => "EVE Metro",
             Page::Ansiblex => "Ansiblex",
             #[cfg(windows)]
             Page::Overlay => "Overlay",
@@ -471,6 +473,27 @@ impl Page {
             Page::Updates => "Updates",
         }
     }
+
+    /// True if the list shows the page. The EVE Metro page needs a client ID and an API key.
+    pub fn visible(self, s: &Session) -> bool {
+        self != Page::EveMetro || eve_metro_available(s)
+    }
+}
+
+/// True if EVE Metro can work: the source needs a logged-in character, so it needs the EVE client
+/// ID, like each SSO feature. The build or the env var gives the API key.
+fn eve_metro_available(s: &Session) -> bool {
+    s.pilots.shows_characters() && s.cfg.eve_metro.key.is_some()
+}
+
+/// The hover text of a control that the Wormholes switch turns off.
+pub const WORMHOLES_OFF: &str = "You must enable wormholes.";
+/// The hover text of a control that a blocked Pochven turns off.
+pub const POCHVEN_OFF: &str = "You must enable travel through Pochven.";
+
+/// The hover text of a disabled control: a route lock wins over `reason`.
+fn disabled_text(locked: bool, reason: &'static str) -> &'static str {
+    if locked { LOCKED } else { reason }
 }
 
 /// A small heading for a group of rows on a page.
@@ -504,6 +527,10 @@ fn settings(
     }
     #[cfg(not(windows))]
     let _ = &overlay;
+    // The client ID gates a page, and the gate can close while the page is open.
+    if !form.page.visible(s) {
+        form.page = Page::default();
+    }
     let body = (ui.ctx().content_rect().height() - 230.0).clamp(240.0, 480.0);
     let list = 140.0;
     let pad = 16.0;
@@ -511,7 +538,7 @@ fn settings(
     ui.horizontal_top(|ui| {
         ui.allocate_ui_with_layout(vec2(list, body), egui::Layout::top_down(egui::Align::Min), |ui| {
             ui.spacing_mut().item_spacing.y = 2.0;
-            for page in Page::ALL {
+            for page in Page::ALL.into_iter().filter(|p| p.visible(s)) {
                 // Muted text that brightens on hover. The open page shows in the accent color.
                 let (rect, response) = ui.allocate_exact_size(vec2(list, 26.0), Sense::click());
                 let color = if form.page == page {
@@ -533,10 +560,10 @@ fn settings(
         ui.painter().line_segment([rect.center_top(), rect.center_bottom()], Stroke::new(1.0, theme::LINE));
         ui.add_space(pad - ui.spacing().item_spacing.x);
         ui.allocate_ui_with_layout(vec2(page_width, body), egui::Layout::top_down(egui::Align::Min), |ui| {
-            // The Ansiblex and Pochven pages have their own scrolling table, so the page itself stays still.
+            // The Ansiblex and EVE Metro pages have their own scrolling table, so the page itself stays still.
             match form.page {
                 Page::Ansiblex => return ansiblex_page(ui, form, s, locked),
-                Page::Pochven => return pochven_page(ui, s, locked, portraits),
+                Page::EveMetro => return eve_metro_page(ui, s, locked, portraits),
                 #[cfg(windows)]
                 Page::Overlay => return overlay_page(ui, s, portraits, overlay),
                 _ => {}
@@ -544,8 +571,8 @@ fn settings(
             ScrollArea::vertical().max_height(body).auto_shrink([false, false]).show(ui, |ui| match form.page {
                 Page::Favourites => favourites_page(ui, form, s),
                 Page::Theme => theme_page(ui, s),
-                Page::Wormholes => action = wormholes_page(ui, form, s, locked, loading),
-                Page::Pochven | Page::Ansiblex => {}
+                Page::Nexum => action = nexum_page(ui, form, s, locked, loading),
+                Page::EveMetro | Page::Ansiblex => {}
                 #[cfg(windows)]
                 Page::Overlay => {}
                 Page::Engine => engine_page(ui, form, s, locked),
@@ -741,7 +768,7 @@ fn updates_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
 /// The width of the label column on the Updates page.
 const UPDATE_LABEL: f32 = 190.0;
 
-fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool, loading: bool) -> Option<Action> {
+fn nexum_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool, loading: bool) -> Option<Action> {
     let mut action = None;
     let field = FIELD;
     group(ui, "Nexum");
@@ -831,49 +858,77 @@ fn wormholes_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked:
     if let Some(a) = maps_list(ui, form, s, locked, loading) {
         action = Some(a);
     }
-    ui.add_space(14.0);
-    group(ui, "EVE Scout");
-    egui::Grid::new("settings-scout").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        // The EVE-Scout hub switches act at route time.
-        let mut changed = false;
-        for (name, on) in [("Allow travel via Thera", &mut s.settings.hubs.thera), ("Allow travel via Turnur", &mut s.settings.hubs.turnur)]
-        {
-            label(ui, name);
-            let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(on, "").changed());
-            changed |= row.inner;
-            row.response.on_disabled_hover_text(LOCKED);
-            ui.end_row();
-        }
-        if changed {
-            s.recompute();
-            s.save();
-        }
-    });
     action
 }
 
-/// The Pochven group of the Pochven page: the filaments switch. It acts at route time, like the
-/// EVE-Scout hub switches. Filament travel needs no
-/// client ID, unlike EVE Metro, so it always shows.
-fn pochven_group(ui: &mut Ui, s: &mut Session, locked: bool) {
-    group(ui, "Pochven");
+/// The Space access group of the Engine page: Allow, Avoid or Block for each class of J-space,
+/// for the Drifter systems and for Pochven. The stances act at route time. While wormholes are
+/// off, the rows of J-space and Drifter have no effect, so they show as disabled.
+fn space_group(ui: &mut Ui, s: &mut Session, locked: bool) {
+    group(ui, "Space access");
     ui.label(
-        RichText::new(
-            "Filaments transport one or more pilots to a random system within Pochven, routing assumes an average number of jumps.",
-        )
-        .color(theme::TEXT_DIM),
+        RichText::new("Avoid uses these systems only when a trip must go through or into them. Block never does.").color(theme::TEXT_DIM),
     );
     ui.add_space(4.0);
-    egui::Grid::new("settings-filaments").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        label(ui, "Allow travel via Filaments");
-        let row = ui.add_enabled_ui(!locked, |ui| ui.app_checkbox(&mut s.settings.filaments, "").changed());
-        row.response.on_disabled_hover_text(LOCKED);
-        if row.inner {
-            s.recompute();
-            s.save();
+    let mut changed = false;
+    egui::Grid::new("settings-space").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        for g in Group::ALL {
+            label(ui, &g.label());
+            let on = s.settings.wormholes || !g.is_wormhole();
+            let row = ui.add_enabled_ui(!locked && on, |ui| {
+                ui.horizontal(|ui| {
+                    let current = s.settings.space.get(g);
+                    for stance in Stance::ALL {
+                        if ui.add(AppButton::new(stance.label()).selected(current == stance)).clicked() && current != stance {
+                            s.settings.space.set(g, stance);
+                            changed = true;
+                        }
+                    }
+                })
+            });
+            row.response.on_disabled_hover_text(disabled_text(locked, WORMHOLES_OFF));
+            ui.end_row();
         }
+    });
+    if changed {
+        s.recompute();
+        s.save();
+    }
+}
+
+/// The Hubs group of the Engine page: the switches for Thera, Turnur and the filaments. They act
+/// at route time. The two hubs are wormhole links, so the Wormholes switch turns them off. A
+/// filament jump ends in Pochven, so a blocked Pochven turns the filaments off.
+fn hubs_group(ui: &mut Ui, s: &mut Session, locked: bool) {
+    group(ui, "Hubs");
+    let mut changed = false;
+    egui::Grid::new("settings-hubs").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+        let wormholes = s.settings.wormholes;
+        for (name, on) in [("Allow travel via Thera", &mut s.settings.hubs.thera), ("Allow travel via Turnur", &mut s.settings.hubs.turnur)]
+        {
+            label(ui, name);
+            let row = ui.add_enabled_ui(!locked && wormholes, |ui| ui.app_checkbox(on, "").changed());
+            changed |= row.inner;
+            row.response.on_disabled_hover_text(disabled_text(locked, WORMHOLES_OFF));
+            ui.end_row();
+        }
+        label(ui, "Allow travel via Filaments");
+        let open = !s.settings.pochven_blocked();
+        let row = ui.add_enabled_ui(!locked && open, |ui| {
+            ui.app_checkbox(&mut s.settings.filaments, "")
+                .on_hover_text(
+                    "Filaments transport one or more pilots to a random system within Pochven, routing assumes an average number of jumps.",
+                )
+                .changed()
+        });
+        changed |= row.inner;
+        row.response.on_disabled_hover_text(disabled_text(locked, POCHVEN_OFF));
         ui.end_row();
     });
+    if changed {
+        s.recompute();
+        s.save();
+    }
 }
 
 /// The Nexum maps, in a table with a checkbox for each. The router reads the maps that are on.
@@ -1149,21 +1204,12 @@ fn character_table(
         });
 }
 
-/// The Pochven page: filament travel and the EVE Metro wormhole map, the two features almost all
-/// about travel via Pochven. Filament travel needs no client ID. The EVE Metro switch
-/// and a table of the linked characters with their portraits follow it. The service checks the
-/// picked character, its corporation and its alliance. Like the Ansiblex page, the page itself
-/// stays still and the table scrolls.
-fn pochven_page(ui: &mut Ui, s: &mut Session, locked: bool, portraits: &mut Portraits) {
+/// The EVE Metro page: the wormhole map of Pochven, the EVE Metro switch and a table of the linked
+/// characters with their portraits. The service checks the picked character, its corporation and
+/// its alliance. Like the Ansiblex page, the page itself stays still and the table scrolls. The
+/// list shows the page only while `eve_metro_available` is true.
+fn eve_metro_page(ui: &mut Ui, s: &mut Session, locked: bool, portraits: &mut Portraits) {
     let dim = |text: &str| RichText::new(text).color(theme::TEXT_DIM);
-    pochven_group(ui, s, locked);
-    ui.add_space(14.0);
-    // The source needs a logged-in character, so it needs the EVE client ID, like each SSO
-    // feature. The build or the env var gives the API key. Without one of them, EVE Metro gives
-    // nothing, so the whole group stays off the page.
-    if !s.pilots.shows_characters() || s.cfg.eve_metro.key.is_none() {
-        return;
-    }
     // The filaments switch does not gate EVE Metro: its wormholes follow the wormholes switch.
     let disabled = locked;
     group(ui, "EVE Metro");
@@ -1386,7 +1432,7 @@ fn zone_text(s: &Session, node: petgraph::graph::NodeIndex) -> Option<(String, S
 fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool) {
     group(ui, "Engine");
     ui.label(
-        RichText::new("Adjust how the routing engine adapts to ansiblex usage and missing wormhole signatures.").color(theme::TEXT_DIM),
+        RichText::new("Adjust how the routing engine handles ansiblex, wormhole signatures and wormhole space.").color(theme::TEXT_DIM),
     );
     ui.add_space(4.0);
     // The icon is part of the text, so the line wraps like the line above it.
@@ -1456,6 +1502,10 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
         .on_disabled_hover_text(LOCKED);
         ui.end_row();
     });
+    ui.add_space(14.0);
+    space_group(ui, s, locked);
+    ui.add_space(14.0);
+    hubs_group(ui, s, locked);
 }
 
 /// A text area for a list of systems. Return true when the window closes.
@@ -1650,7 +1700,7 @@ mod tests {
     }
 
     #[test]
-    fn the_pochven_page_draws_every_state() {
+    fn the_eve_metro_page_draws_every_state() {
         let (mut s, tmp) = session_with_pilots();
         let mut portraits = Portraits::without_download(&[1, 2]);
         // The app registers its fonts and theme first: the page uses the bold font.
@@ -1659,7 +1709,7 @@ mod tests {
         theme::set_font(&ctx);
         let mut draw = |s: &mut Session, locked: bool| {
             // The frame output holds texture changes. A test with no renderer drops them.
-            let mut output = ctx.run_ui(Default::default(), |ui| pochven_page(ui, s, locked, &mut portraits));
+            let mut output = ctx.run_ui(Default::default(), |ui| eve_metro_page(ui, s, locked, &mut portraits));
             output.textures_delta.clear();
         };
         // A character is picked, so its row is selected. The key is set, so the group shows.
@@ -1671,13 +1721,70 @@ mod tests {
         draw(&mut s, true);
         s.pilots = router_core::esi::pilots::Pilots::offline_with_client_id(tmp.path().join("active-route.json"), &[]);
         draw(&mut s, false);
-        // Without a client ID, the EVE Metro part of the page draws only the reason, but the Pochven
-        // switch draws regardless: filament travel needs no client ID.
+        // Without a client ID, the list hides the page. The page function still draws without a fault.
         s.pilots = router_core::esi::pilots::Pilots::offline(tmp.path().join("active-route.json"));
         draw(&mut s, false);
         // Drawing changes no setting.
         assert_eq!(s.cfg.eve_metro.character, Some(99));
         assert!(!s.settings.filaments);
+    }
+
+    #[test]
+    fn the_eve_metro_page_shows_only_with_a_client_id_and_a_key() {
+        let (mut s, tmp) = session_with_pilots();
+        // The client ID is set, the key is not.
+        assert!(!Page::EveMetro.visible(&s));
+        s.cfg.eve_metro.key = Some(ApiKey("metro_test_key".into()));
+        assert!(Page::EveMetro.visible(&s));
+        // No client ID, so no page, whatever the key.
+        s.pilots = router_core::esi::pilots::Pilots::offline(tmp.path().join("active-route.json"));
+        assert!(!Page::EveMetro.visible(&s));
+        assert!(Page::ALL.iter().filter(|&&p| p != Page::EveMetro).all(|p| p.visible(&s)));
+    }
+
+    #[test]
+    fn the_hubs_group_draws_in_every_state_and_changes_nothing() {
+        let (mut s, _tmp) = session_with_pilots();
+        let ctx = egui::Context::default();
+        theme::apply_default(&ctx);
+        theme::set_font(&ctx);
+        let draw = |s: &mut Session, locked: bool| {
+            let mut output = ctx.run_ui(Default::default(), |ui| {
+                space_group(ui, s, locked);
+                hubs_group(ui, s, locked);
+            });
+            output.textures_delta.clear();
+        };
+        s.settings.filaments = true;
+        s.settings.hubs.thera = true;
+        draw(&mut s, false);
+        // Wormholes off turns off the hubs and the wormhole rows. A blocked Pochven turns off the filaments.
+        s.settings.wormholes = false;
+        s.settings.space.set(Group::Pochven, Stance::Block);
+        draw(&mut s, false);
+        draw(&mut s, true);
+        // The saved choices stay.
+        assert!(s.settings.filaments && s.settings.hubs.thera);
+        assert_eq!(s.settings.space.pochven, Stance::Block);
+        assert!(s.settings.pochven_blocked());
+    }
+
+    #[test]
+    fn the_wormhole_space_group_draws_locked_and_open() {
+        let (mut s, _tmp) = session_with_pilots();
+        let ctx = egui::Context::default();
+        theme::apply_default(&ctx);
+        theme::set_font(&ctx);
+        let draw = |s: &mut Session, locked: bool| {
+            let mut output = ctx.run_ui(Default::default(), |ui| space_group(ui, s, locked));
+            output.textures_delta.clear();
+        };
+        s.settings.space.set(Group::Class(5), Stance::Block);
+        s.settings.space.set(Group::Drifter, Stance::Avoid);
+        draw(&mut s, false);
+        draw(&mut s, true);
+        // Drawing changes no stance.
+        assert_eq!((s.settings.space.c5, s.settings.space.drifter), (Stance::Block, Stance::Avoid));
     }
 
     #[test]
@@ -1783,7 +1890,7 @@ mod tests {
     }
 
     #[test]
-    fn the_wormholes_page_warns_about_a_remote_http_url_only() {
+    fn the_nexum_page_warns_about_a_remote_http_url_only() {
         let (mut s, _tmp) = session_with_pilots();
         let ctx = egui::Context::default();
         theme::apply_default(&ctx);
@@ -1795,8 +1902,8 @@ mod tests {
             ("https://nexum.example", false),
         ] {
             s.cfg.nexum.url = Some(url.to_string());
-            let mut form = SettingsForm::new(&s, Page::Wormholes);
-            let mut output = ctx.run_ui(Default::default(), |ui| _ = wormholes_page(ui, &mut form, &mut s, false, false));
+            let mut form = SettingsForm::new(&s, Page::Nexum);
+            let mut output = ctx.run_ui(Default::default(), |ui| _ = nexum_page(ui, &mut form, &mut s, false, false));
             output.textures_delta.clear();
             let shown = drawn_texts(&output).iter().any(|(text, _, _)| text.contains("crosses the network in clear text"));
             assert_eq!(shown, warned, "{url}");

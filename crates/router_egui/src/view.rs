@@ -232,7 +232,7 @@ impl View {
         ui.allocate_ui(vec2(ui.available_width(), list_height), |ui| route_list(ui, s));
     }
 
-    /// Take the result of the Nexum map list fetch, if the thread sent it. The Wormholes page shows
+    /// Take the result of the Nexum map list fetch, if the thread sent it. The Nexum page shows
     /// the list or the error.
     fn poll_maps(&mut self, s: &mut Session) {
         let Some(rx) = &self.maps else { return };
@@ -500,12 +500,21 @@ fn wormholes_toggle(ui: &mut Ui, s: &mut Session) {
 }
 
 fn filaments_toggle(ui: &mut Ui, s: &mut Session) {
-    let button = AppButton::new(format!("Filaments: {}", on_off(s.settings.filaments))).selected(s.settings.filaments);
+    // A filament jump ends in Pochven, so a blocked Pochven turns the toggle off, like a hull that cannot bridge.
+    let blocked = s.settings.pochven_blocked();
+    let state = if blocked { "off (not allowed)" } else { on_off(s.settings.filaments) };
+    let button = AppButton::new(format!("Filaments: {state}")).selected(s.settings.filaments && !blocked);
     let tip = "Allow routes to use a filament into Pochven";
-    if ui.add(button).on_hover_text(tip).clicked() {
+    let response = ui.add_enabled(!blocked, button);
+    if response.clicked() {
         s.settings.filaments = !s.settings.filaments;
         s.recompute();
         s.save();
+    }
+    if blocked {
+        response.on_disabled_hover_text(settings_window::POCHVEN_OFF);
+    } else {
+        response.on_hover_text(tip);
     }
 }
 
