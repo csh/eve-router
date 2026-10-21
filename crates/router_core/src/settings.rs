@@ -64,8 +64,9 @@ pub const MAX_TOP: usize = 10;
 /// The sentence that follows a "No route" error while a "Never" entry could cause it.
 pub const NO_ROUTE_HINT: &str = "Your avoid list might be in the way.";
 
-/// The sentence that follows a "No route" error while a class of wormhole space is blocked.
-pub const NO_ROUTE_SPACE_HINT: &str = "Your wormhole space settings might be in the way.";
+/// The sentence that follows a "No route" error while a class of wormhole space is blocked. Many
+/// settings can cause such an error, so it names none of them.
+pub const NO_ROUTE_STRICT_HINT: &str = "Your settings may be too strict.";
 
 /// One entry of the avoid list.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -298,16 +299,11 @@ impl Settings {
     /// avoid list, or a class of wormhole space is blocked, because only such a rule can block every route.
     pub fn explain(&self, error: &RouteError) -> String {
         let never = self.avoid.systems.iter().any(|e| e.never) || self.avoid.regions.iter().any(|e| e.never);
-        let mut text = error.to_string();
-        if matches!(error, RouteError::NoRoute { .. }) {
-            if never {
-                text = format!("{text}. {NO_ROUTE_HINT}");
-            }
-            if self.space.blocks() {
-                text = format!("{text}{} {NO_ROUTE_SPACE_HINT}", if never { "" } else { "." });
-            }
+        match (error, self.space.blocks(), never) {
+            (RouteError::NoRoute { .. }, true, _) => format!("{error}. {NO_ROUTE_STRICT_HINT}"),
+            (RouteError::NoRoute { .. }, false, true) => format!("{error}. {NO_ROUTE_HINT}"),
+            _ => error.to_string(),
         }
-        text
     }
 
     /// The waypoints in the order to route them.
@@ -626,7 +622,7 @@ mod tests {
     }
 
     #[test]
-    fn a_blocked_class_gets_its_own_hint_and_a_stance_is_stored() {
+    fn a_blocked_class_gets_the_general_hint_and_a_stance_is_stored() {
         use crate::wormhole_space::{Group, Stance};
         let uni = overlay_universe();
         let mut s = settings(&uni, None);
@@ -636,12 +632,12 @@ mod tests {
         s.space.set(Group::Class(3), Stance::Avoid);
         assert_eq!(s.explain(&error), text);
         s.space.set(Group::Class(3), Stance::Block);
-        assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_SPACE_HINT}"));
-        // Both hints in one text, with one full stop between the error and the first hint.
+        assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_STRICT_HINT}"));
+        // A blocked class and a never entry give the one general hint.
         let perimeter = uni.exact("Perimeter").unwrap();
         s.avoid.add_system(perimeter);
         s.avoid.set_system_never(perimeter, true);
-        assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_HINT} {NO_ROUTE_SPACE_HINT}"));
+        assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_STRICT_HINT}"));
         // The stance goes to the config and comes back.
         let mut cfg = Config::default();
         s.store(&uni, &mut cfg);
