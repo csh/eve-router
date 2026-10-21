@@ -391,7 +391,8 @@ pub mod tests {
     fn systems_get_the_wormhole_class_from_the_sde() {
         let uni = universe();
         let class = |name: &str| uni.system(uni.exact(name).unwrap_or_else(|| panic!("{name} is not on the map"))).wormhole_class;
-        // A Drifter system has its own class. Thera takes the class of its region.
+        // These systems have a class of their own in the SDE. The SDE does not say that 14 to 18
+        // are the Drifter systems, so `DRIFTER_SYSTEMS` stays a list of IDs.
         assert_eq!(class("Sentinel MZ"), Some(14));
         assert_eq!(class("Azdaja Redoubt"), Some(18));
         assert_eq!(class("Thera"), Some(12));
@@ -400,9 +401,6 @@ pub mod tests {
         assert_eq!(class("Jita"), Some(7));
         assert_eq!(class("Tama"), Some(8));
         assert_eq!(class("Kuharah"), Some(25));
-        // Exactly five systems carry a Drifter class.
-        let drifters = uni.graph.node_weights().filter(|s| s.wormhole_class.is_some_and(|c| (14..=18).contains(&c))).count();
-        assert_eq!(drifters, 5);
     }
 
     #[test]

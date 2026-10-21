@@ -34,8 +34,9 @@ pub struct SdeSystem {
     /// Set on a few systems that an NPC faction holds. See `SdeRegion::faction_id`.
     #[serde(rename = "factionID", default, skip_serializing_if = "Option::is_none")]
     pub faction_id: Option<u32>,
-    /// The wormhole class. The SDE sets it on the five Drifter systems only. The other systems of
-    /// wormhole space take the class of their constellation, and then of their region.
+    /// The wormhole class. The SDE sets it on six systems only (Thera and the Drifter systems).
+    /// The other systems of wormhole space take the class of their constellation, and then of
+    /// their region.
     #[serde(rename = "wormholeClassID", default, skip_serializing_if = "Option::is_none")]
     pub wormhole_class: Option<u32>,
 }
