@@ -192,6 +192,9 @@ impl Widget for AppStepSlider<'_> {
                 *self.pos = (t * max as f32).round() as u32;
             }
             if response.has_focus() {
+                // Without the filter, egui moves the focus to a neighbor widget on an arrow key.
+                let filter = egui::EventFilter { horizontal_arrows: true, ..Default::default() };
+                ui.memory_mut(|m| m.set_focus_lock_filter(response.id, filter));
                 let (left, right) = ui.input(|i| (i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::ArrowRight)));
                 if left {
                     *self.pos = self.pos.saturating_sub(1);
@@ -333,5 +336,33 @@ mod tests {
         let slider = nodes.iter().find(|n| n.role() == Role::Slider).unwrap();
         assert_eq!(slider.label(), Some("Minimum wormhole lifetime"));
         assert_eq!(slider.value(), Some("4 hours"));
+    }
+
+    #[test]
+    fn the_arrow_keys_move_the_slider_and_keep_the_focus() {
+        let ctx = egui::Context::default();
+        let mut pos = 3;
+        let mut slider_id = None;
+        let mut frame = |ctx: &egui::Context, pos: &mut u32, events: Vec<egui::Event>, focus: bool| {
+            let input = egui::RawInput { events, ..Default::default() };
+            let mut output = ctx.run_ui(input, |ui| {
+                ui.horizontal(|ui| {
+                    let r = ui.add(AppStepSlider::new(pos, 38, "Lifetime", "text"));
+                    slider_id = Some(r.id);
+                    if focus {
+                        r.request_focus();
+                    }
+                    ui.add(AppButton::new("Neighbor"));
+                });
+            });
+            output.textures_delta.clear();
+        };
+        frame(&ctx, &mut pos, vec![], true);
+        frame(&ctx, &mut pos, vec![], false);
+        let key = |key| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers: egui::Modifiers::NONE };
+        frame(&ctx, &mut pos, vec![key(egui::Key::ArrowRight)], false);
+        frame(&ctx, &mut pos, vec![key(egui::Key::ArrowRight)], false);
+        assert_eq!(pos, 5);
+        assert_eq!(ctx.memory(|m| m.focused()), slider_id);
     }
 }
