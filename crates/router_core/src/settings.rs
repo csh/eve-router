@@ -286,6 +286,7 @@ impl Settings {
             HullSource::Manual => None,
         };
         cfg.max_cap_tj = self.rules.max_cap;
+        cfg.min_life_min = Some(self.min_life);
         cfg.mode = Some(self.mode);
         cfg.optimize = self.optimize;
         cfg.top = Some(self.top);
@@ -776,7 +777,9 @@ mod tests {
         let mut s = settings(&uni, Some("black-ops"));
         s.favourites = vec![uni.exact("Jita").unwrap()];
         s.rules.max_cap = Some(36.5);
+        s.min_life = 240;
         let mut cfg = Config { min_life_min: Some(30), ..Config::default() };
+        cfg.nexum.url = Some("https://nexum.example".into());
         s.store(&uni, &mut cfg);
         assert_eq!(cfg.capital.as_deref(), Some("JK-Q77"));
         assert_eq!(cfg.hull.as_deref(), Some("Black Ops"));
@@ -784,8 +787,9 @@ mod tests {
         assert_eq!(cfg.mode, Some(Mode::Shortest));
         assert_eq!(cfg.top, Some(3));
         assert_eq!(cfg.favourites, Some(vec!["Jita".to_string()]));
+        assert_eq!(cfg.min_life_min, Some(240));
         // A field that the settings do not hold stays.
-        assert_eq!(cfg.min_life_min, Some(30));
+        assert_eq!(cfg.nexum.url.as_deref(), Some("https://nexum.example"));
     }
 
     #[test]

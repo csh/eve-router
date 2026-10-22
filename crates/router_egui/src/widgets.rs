@@ -136,6 +136,92 @@ impl Widget for AppCheckbox<'_> {
     }
 }
 
+/// A slider over whole positions, in the style of the sliders of the game: a slim dark inset track
+/// and a square handle that is taller than the track. It has no number box. The caller shows the value. A click or a
+/// drag on the track sets the position, and the arrow keys move it by one while it has focus.
+pub struct AppStepSlider<'a> {
+    pos: &'a mut u32,
+    max: u32,
+    width: f32,
+    text: String,
+}
+
+/// The height of the handle of a step slider, and of the space that it takes.
+const SLIDER_HEIGHT: f32 = 14.0;
+/// The height of the track of a step slider.
+const SLIDER_TRACK: f32 = 6.0;
+/// The width of the handle of a step slider.
+const SLIDER_HANDLE: f32 = 8.0;
+
+impl<'a> AppStepSlider<'a> {
+    /// A slider over the positions `0..=max`. `text` is the value as the user reads it.
+    pub fn new(pos: &'a mut u32, max: u32, text: impl Into<String>) -> Self {
+        AppStepSlider { pos, max, width: 200.0, text: text.into() }
+    }
+}
+
+impl Widget for AppStepSlider<'_> {
+    fn ui(self, ui: &mut Ui) -> Response {
+        let (rect, mut response) = ui.allocate_exact_size(vec2(self.width, SLIDER_HEIGHT), Sense::click_and_drag());
+        let enabled = ui.is_enabled();
+        let max = self.max.max(1);
+        // The centre of the handle runs from half a handle in from each end of the track.
+        let run = (rect.width() - SLIDER_HANDLE).max(1.0);
+        let x_of = |pos: u32| rect.left() + SLIDER_HANDLE / 2.0 + run * pos.min(max) as f32 / max as f32;
+        let before = *self.pos;
+        if enabled {
+            if let Some(p) = response.interact_pointer_pos() {
+                let t = ((p.x - rect.left() - SLIDER_HANDLE / 2.0) / run).clamp(0.0, 1.0);
+                *self.pos = (t * max as f32).round() as u32;
+            }
+            if response.has_focus() {
+                let (left, right) = ui.input(|i| (i.key_pressed(egui::Key::ArrowLeft), i.key_pressed(egui::Key::ArrowRight)));
+                if left {
+                    *self.pos = self.pos.saturating_sub(1);
+                }
+                if right {
+                    *self.pos = (*self.pos + 1).min(self.max);
+                }
+            }
+        }
+        if *self.pos != before {
+            response.mark_changed();
+        }
+        let value = *self.pos;
+        response.widget_info(|| WidgetInfo::slider(enabled, value as f64, &self.text));
+
+        if ui.is_rect_visible(rect) {
+            let accent = theme::accent(ui);
+            let active = enabled && (response.hovered() || response.dragged() || response.has_focus());
+            let line = match (enabled, active) {
+                (false, _) => theme::LINE,
+                (_, true) => theme::accent_light(ui),
+                _ => theme::accent_line(ui),
+            };
+            let painter = ui.painter();
+            let track = egui::Rect::from_center_size(rect.center(), vec2(rect.width(), SLIDER_TRACK));
+            painter.rect(track, 0.0, Color32::from_rgb(0x05, 0x05, 0x05), Stroke::new(1.0, line), StrokeKind::Inside);
+            let x = x_of(value);
+            let handle = egui::Rect::from_center_size(egui::pos2(x, rect.center().y), vec2(SLIDER_HANDLE, SLIDER_HEIGHT));
+            let (fill, edge) = if !enabled {
+                (theme::LINE, theme::LINE)
+            } else if response.dragged() {
+                (Color32::from_rgb(0xEA, 0xEA, 0xEA), Color32::WHITE)
+            } else if active {
+                (theme::accent_mid(ui), theme::accent_light(ui))
+            } else {
+                (theme::accent_dark(ui), accent)
+            };
+            if active {
+                // The same stand-in for a glow as on the buttons.
+                painter.rect_stroke(handle.expand(1.0), 0.0, Stroke::new(2.0, accent.gamma_multiply(0.3)), StrokeKind::Inside);
+            }
+            painter.rect(handle, 0.0, fill, Stroke::new(1.0, edge), StrokeKind::Inside);
+        }
+        response
+    }
+}
+
 /// The label of a button: `icon`, then `text`. An empty text gives the icon alone. The icon keeps
 /// its own font face, so a filled icon can stand next to the text.
 pub fn icon_label(ui: &Ui, icon: RichText, text: &str) -> WidgetText {

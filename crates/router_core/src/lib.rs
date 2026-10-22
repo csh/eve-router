@@ -7,6 +7,7 @@ pub mod config_migrate;
 pub mod error;
 pub mod esi;
 pub mod labels;
+pub mod life_scale;
 pub mod log;
 pub mod nexum_key;
 pub mod overlay;

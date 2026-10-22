@@ -7,13 +7,14 @@ use crate::pilots_view::{Portraits, pilot_portrait};
 use crate::search::SearchBox;
 use crate::theme;
 use crate::view::View;
-use crate::widgets::{AppButton, UiExt};
+use crate::widgets::{AppButton, AppStepSlider, UiExt};
 use egui::{Button, Color32, Frame, Id, Key, Margin, Modal, RichText, ScrollArea, Sense, Stroke, TextEdit, Ui, vec2};
 use egui_phosphor_icons::icons;
 use router_core::ansiblex::HullClass;
 use router_core::config::{self, ApiKey};
 use router_core::esi::pilots::{PilotRow, PilotView};
 use router_core::labels::ship_text;
+use router_core::life_scale;
 use router_core::settings::{HullSource, RouteCosts, parse_max_cap};
 use router_core::sources::{
     self,
@@ -1498,6 +1499,24 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
                 if ui.add(drag).on_hover_text("A wormhole with no known signature costs this much extra, for the scan").changed() {
                     s.apply_later(Instant::now());
                 }
+            })
+        })
+        .response
+        .on_disabled_hover_text(LOCKED);
+        ui.end_row();
+        label(ui, "Minimum wormhole lifetime");
+        ui.add_enabled_ui(!locked, |ui| {
+            // The slider moves over positions, not minutes. See `life_scale`. A value that is
+            // not on the scale shows at the nearest position and stays until the slider moves.
+            let mut pos = life_scale::pos_of(s.settings.min_life);
+            ui.horizontal(|ui| {
+                let text = life_scale::label(life_scale::life_at(pos));
+                let slider = AppStepSlider::new(&mut pos, life_scale::MAX_POS, text);
+                if ui.add(slider).on_hover_text("A wormhole that collapses sooner than this is not used.").changed() {
+                    s.settings.min_life = life_scale::life_at(pos);
+                    s.apply_later(Instant::now());
+                }
+                ui.label(RichText::new(life_scale::label(life_scale::life_at(pos))).color(theme::TEXT));
             })
         })
         .response
