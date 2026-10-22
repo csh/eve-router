@@ -633,15 +633,15 @@ mod tests {
 
     #[test]
     fn a_blocked_class_gets_the_general_hint_and_a_stance_is_stored() {
-        use crate::wormhole_space::{Group, Stance};
+        use crate::wormhole_space::{Group, Stance, WormholeClass};
         let uni = overlay_universe();
         let mut s = settings(&uni, None);
         let error = RouteError::NoRoute { from: "Jita".into(), to: "Perimeter".into() };
         let text = error.to_string();
         // Avoid does not block a route, so it gets no hint.
-        s.space.set(Group::Class(3), Stance::Avoid);
+        s.space.set(Group::Class(WormholeClass::C3), Stance::Avoid);
         assert_eq!(s.explain(&error), text);
-        s.space.set(Group::Class(3), Stance::Block);
+        s.space.set(Group::Class(WormholeClass::C3), Stance::Block);
         assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_STRICT_HINT}"));
         // A blocked class and a never entry give the one general hint.
         let perimeter = uni.exact("Perimeter").unwrap();

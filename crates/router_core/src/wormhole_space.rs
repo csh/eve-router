@@ -105,11 +105,50 @@ pub mod switch {
 /// The class that the SDE gives to the systems of Pochven.
 const POCHVEN_CLASS: u32 = 25;
 
+/// A class of J-space with a stance. The class comes from the `wormholeClassID` of the SDE. A new
+/// class of space needs a new variant here, a field in `WormholeSpace` and an entry in `Group::ALL`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WormholeClass {
+    C1,
+    C2,
+    C3,
+    C4,
+    C5,
+    C6,
+}
+
+impl WormholeClass {
+    /// The class for a `wormholeClassID`, or `None` for an ID that is not a class with a stance.
+    pub fn from_id(id: u32) -> Option<WormholeClass> {
+        match id {
+            1 => Some(WormholeClass::C1),
+            2 => Some(WormholeClass::C2),
+            3 => Some(WormholeClass::C3),
+            4 => Some(WormholeClass::C4),
+            5 => Some(WormholeClass::C5),
+            6 => Some(WormholeClass::C6),
+            _ => None,
+        }
+    }
+
+    /// The number of the class, from 1 to 6.
+    pub fn number(self) -> u8 {
+        match self {
+            WormholeClass::C1 => 1,
+            WormholeClass::C2 => 2,
+            WormholeClass::C3 => 3,
+            WormholeClass::C4 => 4,
+            WormholeClass::C5 => 5,
+            WormholeClass::C6 => 6,
+        }
+    }
+}
+
 /// A group of systems with one stance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Group {
-    /// A class of J-space from 1 to 6. The class comes from the `wormholeClassID` of the SDE.
-    Class(u8),
+    /// A class of J-space.
+    Class(WormholeClass),
     /// The five Drifter systems, by system ID. The SDE does not mark them, so `DRIFTER_SYSTEMS` lists them.
     Drifter,
     /// The systems of Pochven. The SDE gives them the class 25.
@@ -119,12 +158,12 @@ pub enum Group {
 impl Group {
     /// The groups in the order of the settings page.
     pub const ALL: [Group; 8] = [
-        Group::Class(1),
-        Group::Class(2),
-        Group::Class(3),
-        Group::Class(4),
-        Group::Class(5),
-        Group::Class(6),
+        Group::Class(WormholeClass::C1),
+        Group::Class(WormholeClass::C2),
+        Group::Class(WormholeClass::C3),
+        Group::Class(WormholeClass::C4),
+        Group::Class(WormholeClass::C5),
+        Group::Class(WormholeClass::C6),
         Group::Drifter,
         Group::Pochven,
     ];
@@ -136,7 +175,7 @@ impl Group {
 
     pub fn label(self) -> String {
         match self {
-            Group::Class(c) => format!("Class {c}"),
+            Group::Class(c) => format!("Class {}", c.number()),
             Group::Drifter => "Drifter".to_string(),
             Group::Pochven => "Pochven".to_string(),
         }
@@ -168,13 +207,12 @@ impl WormholeSpace {
 
     fn slot_ref(&self, group: Group) -> &Stance {
         match group {
-            Group::Class(1) => &self.c1,
-            Group::Class(2) => &self.c2,
-            Group::Class(3) => &self.c3,
-            Group::Class(4) => &self.c4,
-            Group::Class(5) => &self.c5,
-            Group::Class(6) => &self.c6,
-            Group::Class(_) => &Stance::Allow,
+            Group::Class(WormholeClass::C1) => &self.c1,
+            Group::Class(WormholeClass::C2) => &self.c2,
+            Group::Class(WormholeClass::C3) => &self.c3,
+            Group::Class(WormholeClass::C4) => &self.c4,
+            Group::Class(WormholeClass::C5) => &self.c5,
+            Group::Class(WormholeClass::C6) => &self.c6,
             Group::Drifter => &self.drifter,
             Group::Pochven => &self.pochven,
         }
@@ -182,13 +220,12 @@ impl WormholeSpace {
 
     fn slot(&mut self, group: Group) -> &mut Stance {
         match group {
-            Group::Class(1) => &mut self.c1,
-            Group::Class(2) => &mut self.c2,
-            Group::Class(3) => &mut self.c3,
-            Group::Class(4) => &mut self.c4,
-            Group::Class(5) => &mut self.c5,
-            Group::Class(6) => &mut self.c6,
-            Group::Class(_) => panic!("only the classes 1 to 6 have a stance"),
+            Group::Class(WormholeClass::C1) => &mut self.c1,
+            Group::Class(WormholeClass::C2) => &mut self.c2,
+            Group::Class(WormholeClass::C3) => &mut self.c3,
+            Group::Class(WormholeClass::C4) => &mut self.c4,
+            Group::Class(WormholeClass::C5) => &mut self.c5,
+            Group::Class(WormholeClass::C6) => &mut self.c6,
             Group::Drifter => &mut self.drifter,
             Group::Pochven => &mut self.pochven,
         }
@@ -211,9 +248,9 @@ impl WormholeSpace {
             return self.drifter;
         }
         match system.wormhole_class {
-            Some(c @ 1..=6) => self.get(Group::Class(c as u8)),
             Some(POCHVEN_CLASS) => self.pochven,
-            _ => Stance::Allow,
+            Some(id) => WormholeClass::from_id(id).map_or(Stance::Allow, |c| self.get(Group::Class(c))),
+            None => Stance::Allow,
         }
     }
 
@@ -232,6 +269,17 @@ impl WormholeSpace {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_classes_1_to_6_have_a_stance() {
+        for id in 1..=6 {
+            assert_eq!(WormholeClass::from_id(id).map(|c| u32::from(c.number())), Some(id));
+        }
+        // 0 is no class, 7 to 18 are the special classes, and 25 is Pochven, which has its own group.
+        for id in [0, 7, 12, 18, 25, 99] {
+            assert_eq!(WormholeClass::from_id(id), None);
+        }
+    }
     use crate::test_support::universe;
 
     fn system(name: &str) -> &'static System {
@@ -251,8 +299,8 @@ mod tests {
     #[test]
     fn a_class_stance_acts_on_the_systems_of_that_class_only() {
         let mut space = WormholeSpace::default();
-        space.set(Group::Class(1), Stance::Block);
-        space.set(Group::Class(2), Stance::Avoid);
+        space.set(Group::Class(WormholeClass::C1), Stance::Block);
+        space.set(Group::Class(WormholeClass::C2), Stance::Avoid);
         assert!(space.blocks(true) && !space.is_default());
         // J105443 is class 1. Find a class 2 system by the class itself.
         assert_eq!(space.stance(system("J105443")), Stance::Block);
@@ -281,10 +329,10 @@ mod tests {
         let uni = universe();
         let node = uni.exact("J105443").unwrap();
         let mut space = WormholeSpace::default();
-        space.set(Group::Class(1), Stance::Avoid);
+        space.set(Group::Class(WormholeClass::C1), Stance::Avoid);
         assert_eq!(space.danger(uni)[node.index()], PENALTY);
         assert!(!space.never(uni)[node.index()]);
-        space.set(Group::Class(1), Stance::Block);
+        space.set(Group::Class(WormholeClass::C1), Stance::Block);
         assert!(space.never(uni)[node.index()]);
     }
 
@@ -299,14 +347,14 @@ mod tests {
         let mut s = settings(&uni, None);
         let found = |s: &crate::settings::Settings| s.router(&uni, FIXTURE_TIME).routes(&[jita, c1], 1);
         assert_eq!(found(&s).unwrap()[0].path.nodes.len(), 2);
-        s.space.set(Group::Class(1), Stance::Avoid);
+        s.space.set(Group::Class(WormholeClass::C1), Stance::Avoid);
         let routes = found(&s).unwrap();
         assert_eq!((routes[0].path.nodes.len(), routes[0].avoided), (2, 1));
-        s.space.set(Group::Class(1), Stance::Block);
+        s.space.set(Group::Class(WormholeClass::C1), Stance::Block);
         assert!(found(&s).is_err());
         // Another class stance leaves the hole open.
-        s.space.set(Group::Class(1), Stance::Allow);
-        s.space.set(Group::Class(2), Stance::Block);
+        s.space.set(Group::Class(WormholeClass::C1), Stance::Allow);
+        s.space.set(Group::Class(WormholeClass::C2), Stance::Block);
         assert!(found(&s).is_ok());
     }
 
@@ -362,7 +410,7 @@ mod tests {
         assert!(found(&s).is_err());
         // A blocked class of wormhole space leaves the filament alone.
         s.space.set(Group::Pochven, Stance::Allow);
-        s.space.set(Group::Class(1), Stance::Block);
+        s.space.set(Group::Class(WormholeClass::C1), Stance::Block);
         assert!(found(&s).is_ok());
     }
 
@@ -370,7 +418,7 @@ mod tests {
     #[test]
     fn a_wormhole_group_blocks_only_while_wormholes_are_on() {
         let mut space = WormholeSpace::default();
-        space.set(Group::Class(4), Stance::Block);
+        space.set(Group::Class(WormholeClass::C4), Stance::Block);
         space.set(Group::Drifter, Stance::Block);
         assert!(space.blocks(true) && !space.blocks(false));
         space.set(Group::Pochven, Stance::Block);

@@ -1805,7 +1805,7 @@ mod tests {
             let mut output = ctx.run_ui(Default::default(), |ui| space_group(ui, s, locked));
             output.textures_delta.clear();
         };
-        s.settings.space.set(Group::Class(5), Stance::Block);
+        s.settings.space.set(Group::Class(router_core::wormhole_space::WormholeClass::C5), Stance::Block);
         s.settings.space.set(Group::Drifter, Stance::Avoid);
         draw(&mut s, false);
         draw(&mut s, true);
