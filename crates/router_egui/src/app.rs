@@ -1489,6 +1489,8 @@ mod tests {
     fn a_never_destination_says_the_avoid_list_is_in_the_way() {
         let (mut s, _tmp) = session();
         let _ = std::fs::remove_file(&s.cfg_path);
+        // The test settings block the filaments, and a blocked switch gives the general hint.
+        s.settings.filaments = router_core::wormhole_space::Stance::Allow;
         s.add_list("Jita, Perimeter");
         let perimeter = *s.waypoints.last().unwrap();
         s.toggle_avoid_system(perimeter);

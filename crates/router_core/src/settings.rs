@@ -64,7 +64,8 @@ pub const MAX_TOP: usize = 10;
 /// The sentence that follows a "No route" error while a "Never" entry could cause it.
 pub const NO_ROUTE_HINT: &str = "Your avoid list might be in the way.";
 
-/// The sentence that follows a "No route" error while a class of wormhole space is blocked. Many
+/// The sentence that follows a "No route" error while a class of wormhole space, a hub or the
+/// filaments are blocked. Many
 /// settings can cause such an error, so it names none of them.
 pub const NO_ROUTE_STRICT_HINT: &str = "Your settings may be too strict.";
 
@@ -302,12 +303,19 @@ impl Settings {
         cfg.avoid_regions = self.avoid.regions.iter().map(|e| AvoidName::new(&e.item, e.never)).collect();
     }
 
+    /// True if a switch with a stance of Block could cause a "No route" error: a blocked group of
+    /// the space settings, a blocked hub or blocked filaments. A blocked wormhole group and a
+    /// blocked hub count only while wormholes are on.
+    fn blocks_a_route(&self) -> bool {
+        let hub_blocked = self.hubs.thera == Stance::Block || self.hubs.turnur == Stance::Block;
+        self.space.blocks(self.wormholes) || self.filaments == Stance::Block || (self.wormholes && hub_blocked)
+    }
+
     /// The text of a route error. A "No route" error gets a hint while a "Never" entry is on the
-    /// avoid list, or a group of the space settings is blocked, because only such a rule can block every route.
-    /// A blocked wormhole group counts only while wormholes are on.
+    /// avoid list, or a switch is blocked, because only such a rule can block every route.
     pub fn explain(&self, error: &RouteError) -> String {
         let never = self.avoid.systems.iter().any(|e| e.never) || self.avoid.regions.iter().any(|e| e.never);
-        match (error, self.space.blocks(self.wormholes), never) {
+        match (error, self.blocks_a_route(), never) {
             (RouteError::NoRoute { .. }, true, _) => format!("{error}. {NO_ROUTE_STRICT_HINT}"),
             (RouteError::NoRoute { .. }, false, true) => format!("{error}. {NO_ROUTE_HINT}"),
             _ => error.to_string(),
@@ -617,6 +625,8 @@ mod tests {
     fn a_no_route_error_points_at_a_never_entry() {
         let uni = overlay_universe();
         let mut s = settings(&uni, None);
+        // The test settings block the filaments, and a blocked switch gives the general hint.
+        s.filaments = crate::wormhole_space::Stance::Allow;
         let error = RouteError::NoRoute { from: "Jita".into(), to: "Perimeter".into() };
         let text = error.to_string();
         assert_eq!(text, "No route from Jita to Perimeter");
@@ -632,10 +642,40 @@ mod tests {
     }
 
     #[test]
+    fn a_blocked_hub_or_blocked_filaments_get_the_general_hint() {
+        use crate::wormhole_space::Stance;
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        let error = RouteError::NoRoute { from: "Jita".into(), to: "Perimeter".into() };
+        let text = error.to_string();
+        // Avoid does not block a route, so it gets no hint.
+        s.hubs.thera = Stance::Avoid;
+        s.filaments = Stance::Avoid;
+        assert_eq!(s.explain(&error), text);
+        s.hubs.thera = Stance::Block;
+        assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_STRICT_HINT}"));
+        // A hub is a wormhole link, so it counts only while wormholes are on.
+        s.wormholes = false;
+        assert_eq!(s.explain(&error), text);
+        s.wormholes = true;
+        s.hubs.thera = Stance::Allow;
+        s.hubs.turnur = Stance::Block;
+        assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_STRICT_HINT}"));
+        s.hubs.turnur = Stance::Allow;
+        assert_eq!(s.explain(&error), text);
+        // The filaments do not need wormholes.
+        s.filaments = Stance::Block;
+        s.wormholes = false;
+        assert_eq!(s.explain(&error), format!("{text}. {NO_ROUTE_STRICT_HINT}"));
+    }
+
+    #[test]
     fn a_blocked_class_gets_the_general_hint_and_a_stance_is_stored() {
         use crate::wormhole_space::{Group, Stance, WormholeClass};
         let uni = overlay_universe();
         let mut s = settings(&uni, None);
+        // The test settings block the filaments, and a blocked switch gives the general hint.
+        s.filaments = crate::wormhole_space::Stance::Allow;
         let error = RouteError::NoRoute { from: "Jita".into(), to: "Perimeter".into() };
         let text = error.to_string();
         // Avoid does not block a route, so it gets no hint.
@@ -683,6 +723,8 @@ mod tests {
     fn a_choke_point_blocks_a_route_in_never_mode_and_not_in_prefer_mode() {
         let uni = overlay_universe();
         let mut s = settings(&uni, None);
+        // The test settings block the filaments, and a blocked switch gives the general hint.
+        s.filaments = crate::wormhole_space::Stance::Allow;
         let nodes = resolve_all(&uni, &["New Eden".into(), "Dead End".into()]).unwrap();
         let point = uni.exact("Central Point").unwrap();
         let routes = |s: &Settings| s.router(&uni, FIXTURE_TIME).routes(&nodes, 3);
