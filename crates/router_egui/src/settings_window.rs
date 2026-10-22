@@ -532,7 +532,8 @@ fn settings(
     if !form.page.visible(s) {
         form.page = Page::default();
     }
-    let body = (ui.ctx().content_rect().height() - 230.0).clamp(240.0, 480.0);
+    // The page takes the height that the window gives, down to a floor that all pages share.
+    let body = (ui.ctx().content_rect().height() - 230.0).max(MIN_BODY);
     let list = 140.0;
     let pad = 16.0;
     let page_width = (ui.available_width() - list - pad - 28.0).max(200.0);
@@ -597,6 +598,12 @@ fn settings(
 }
 
 const FIELD: f32 = 300.0;
+/// The least height of the body of the Settings window, for each page.
+const MIN_BODY: f32 = 240.0;
+/// The least width of a column in the grids of the Engine page, so that their controls start at one place.
+const LABEL_COL: f32 = 200.0;
+/// The width of one stance button, so that the buttons of the rows line up in columns.
+const STANCE_BUTTON: f32 = 64.0;
 
 fn favourites_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session) {
     let field = FIELD;
@@ -873,7 +880,7 @@ fn space_group(ui: &mut Ui, s: &mut Session, locked: bool) {
     let mut changed = false;
     let wormholes = s.settings.wormholes;
     let pochven_blocked = s.settings.pochven_blocked();
-    egui::Grid::new("settings-space").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+    egui::Grid::new("settings-space").num_columns(2).min_col_width(LABEL_COL).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         // Pochven, the filaments and the Drifter systems come first.
         if let Some(stance) = stance_row(ui, "Pochven", s.settings.space.pochven, true, locked, WORMHOLES_OFF, "") {
             s.settings.space.set(Group::Pochven, stance);
@@ -925,7 +932,9 @@ fn stance_buttons(ui: &mut Ui, current: Stance) -> Option<Stance> {
     ui.horizontal(|ui| {
         let mut picked = None;
         for stance in Stance::ALL {
-            if ui.add(AppButton::new(stance.label()).selected(current == stance)).clicked() && current != stance {
+            if ui.add(AppButton::new(stance.label()).selected(current == stance).min_size(vec2(STANCE_BUTTON, 0.0))).clicked()
+                && current != stance
+            {
                 picked = Some(stance);
             }
         }
@@ -1443,7 +1452,7 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
         "If you do not record wormhole signatures in Nexum and instead rely on bookmarks, set the signature cost to 1 to prevent detours.";
     ui.label(RichText::new(format!("{} {note}", icons::WARNING.as_str())).color(theme::WARN));
     ui.add_space(14.0);
-    egui::Grid::new("settings-engine").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+    egui::Grid::new("settings-engine").num_columns(2).min_col_width(LABEL_COL).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         // The max TJ for one bridge jump.
         label(ui, "Max TJ per bridge jump");
         ui.add_enabled_ui(!locked, |ui| {
