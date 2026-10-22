@@ -502,14 +502,14 @@ fn wormholes_toggle(ui: &mut Ui, s: &mut Session) {
 
 fn filaments_toggle(ui: &mut Ui, s: &mut Session) {
     // A filament jump ends in Pochven, so a blocked Pochven turns the toggle off, like a hull that cannot bridge.
-    // A click turns the stance: Allow, Avoid, Block, then Allow.
+    // A click turns the filaments on or off. The button shows Avoid, which the Engine page sets, and a click then turns off.
     let blocked = s.settings.pochven_blocked();
     let state = if blocked { "off (not allowed)" } else { s.settings.filaments.state() };
     let button = AppButton::new(format!("Filaments: {state}")).selected(s.settings.filaments != Stance::Block && !blocked);
-    let tip = "Allow routes to use a filament into Pochven. A click turns on, avoid and off. Avoid uses a filament only when a trip has no other way.";
+    let tip = "Allow routes to use a filament into Pochven. A click turns it on or off. The Engine page can also set Avoid, which uses a filament only when a trip has no other way.";
     let response = ui.add_enabled(!blocked, button);
     if response.clicked() {
-        s.settings.filaments = s.settings.filaments.next();
+        s.settings.filaments = s.settings.filaments.toggled();
         s.recompute();
         s.save();
     }

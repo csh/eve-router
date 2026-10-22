@@ -39,12 +39,11 @@ impl Stance {
         }
     }
 
-    /// The next stance of a switch that a click turns: Allow, Avoid, Block, then Allow.
-    pub fn next(self) -> Stance {
+    /// The stance that a click on an on and off switch gives: Block turns on, any other stance turns off.
+    pub fn toggled(self) -> Stance {
         match self {
-            Stance::Allow => Stance::Avoid,
-            Stance::Avoid => Stance::Block,
             Stance::Block => Stance::Allow,
+            Stance::Allow | Stance::Avoid => Stance::Block,
         }
     }
 }
@@ -399,8 +398,8 @@ mod tests {
     }
 
     #[test]
-    fn a_click_turns_the_stance_in_a_ring() {
-        assert_eq!(Stance::Allow.next().next().next(), Stance::Allow);
+    fn a_click_turns_a_stance_on_or_off() {
+        assert_eq!(Stance::ALL.map(Stance::toggled), [Stance::Block, Stance::Block, Stance::Allow]);
         assert_eq!(Stance::ALL.map(Stance::state), ["on", "avoid", "off"]);
     }
 
