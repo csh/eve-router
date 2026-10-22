@@ -792,6 +792,27 @@ mod tests {
         assert_eq!(cfg.nexum.url.as_deref(), Some("https://nexum.example"));
     }
 
+    /// A wormhole with 45 minutes left is usable at a minimum life of 30 minutes, and not at 60.
+    #[test]
+    fn min_life_sets_which_wormholes_a_route_uses() {
+        use crate::test_support::{hole, universe};
+        use crate::wormhole::{Expiry, Wormhole};
+        let base = universe();
+        let (jita_id, far_id) = (base.system(base.exact("Jita").unwrap()).id, base.system(base.exact("D-3GIQ").unwrap()).id);
+        let mut uni = base.clone();
+        let ends_in_45 = Wormhole { expiry: Some(Expiry { at: FIXTURE_TIME + 45 * 60 }), ..hole(jita_id, far_id) };
+        uni.add_wormholes(&[ends_in_45]);
+        let (jita, far) = (uni.exact("Jita").unwrap(), uni.exact("D-3GIQ").unwrap());
+        let mut s = settings(&uni, None);
+        // No signature cost: the test is about the life of the hole, not its price.
+        s.costs.unknown_sig_penalty = 0.0;
+        let wormholes = |s: &Settings| s.router(&uni, FIXTURE_TIME).routes(&[jita, far], 1).unwrap().remove(0).wormholes;
+        s.min_life = 30;
+        assert_eq!(wormholes(&s), 1);
+        s.min_life = 60;
+        assert_eq!(wormholes(&s), 0);
+    }
+
     #[test]
     fn split_keeps_spaces_in_names() {
         assert_eq!(split_systems("Jita > New Caldari, Amarr"), vec!["Jita", "New Caldari", "Amarr"]);
