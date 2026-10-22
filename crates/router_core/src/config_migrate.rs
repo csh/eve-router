@@ -273,6 +273,19 @@ mod tests {
         assert_eq!(parse(r#"{"pochven": true}"#).unwrap().filaments, Some(Stance::Allow));
     }
 
+    /// The fixtures of the releases leave out the fields that the app writes only when they are set.
+    /// A file with all of them must still go through the chain: `pochven: false` shows it, because
+    /// only `ConfigV1` reads that key.
+    #[test]
+    fn a_file_of_0_4_0_with_every_optional_field_still_uses_the_chain() {
+        let extra = r#""pochven": false, "compact": true, "theme": "amarr", "routing_overlay": {},"#;
+        let text = V0_4_0.replacen("{", &format!("{{ {extra}"), 1).replace(r#""pochven": true,"#, "");
+        let cfg = parse(&text).unwrap();
+        assert_eq!(cfg.filaments, Some(Stance::Block));
+        assert!(cfg.compact);
+        assert_eq!(cfg.nexum.key, Some(ApiKey("nxm_key".into())));
+    }
+
     /// An old shape reads an unknown theme name as Caldari, like `Config`, and still moves the key.
     #[test]
     fn an_unknown_theme_in_an_old_file_becomes_caldari() {
