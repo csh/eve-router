@@ -22,12 +22,13 @@ pub struct AppButton {
     text: WidgetText,
     kind: Kind,
     selected: bool,
+    radio: bool,
     min_size: Vec2,
 }
 
 impl AppButton {
     pub fn new(text: impl Into<WidgetText>) -> Self {
-        AppButton { text: text.into(), kind: Kind::Secondary, selected: false, min_size: Vec2::ZERO }
+        AppButton { text: text.into(), kind: Kind::Secondary, selected: false, radio: false, min_size: Vec2::ZERO }
     }
 
     /// The main action of a view.
@@ -39,6 +40,14 @@ impl AppButton {
     /// Show the button as on, with the selection color.
     pub fn selected(mut self, selected: bool) -> Self {
         self.selected = selected;
+        self
+    }
+
+    /// The button is one choice of a group. A screen reader reads it as a radio button, and says
+    /// whether it is the chosen one. The color shows the choice too.
+    pub fn choice(mut self, chosen: bool) -> Self {
+        self.selected = chosen;
+        self.radio = true;
         self
     }
 
@@ -55,7 +64,13 @@ impl Widget for AppButton {
         let size = (galley.size() + padding * 2.0).max(self.min_size).max(vec2(0.0, ui.spacing().interact_size.y));
         let (rect, response) = ui.allocate_exact_size(size, Sense::click());
         let enabled = ui.is_enabled();
-        response.widget_info(|| WidgetInfo::labeled(WidgetType::Button, enabled, galley.text()));
+        response.widget_info(|| {
+            if self.radio {
+                WidgetInfo::selected(WidgetType::RadioButton, enabled, self.selected, galley.text())
+            } else {
+                WidgetInfo::labeled(WidgetType::Button, enabled, galley.text())
+            }
+        });
 
         if ui.is_rect_visible(rect) {
             let accent = theme::accent(ui);
@@ -144,6 +159,7 @@ pub struct AppStepSlider<'a> {
     max: u32,
     width: f32,
     text: String,
+    name: String,
 }
 
 /// The height of the handle of a step slider, and of the space that it takes.
@@ -154,9 +170,10 @@ const SLIDER_TRACK: f32 = 6.0;
 const SLIDER_HANDLE: f32 = 8.0;
 
 impl<'a> AppStepSlider<'a> {
-    /// A slider over the positions `0..=max`. `text` is the value as the user reads it.
-    pub fn new(pos: &'a mut u32, max: u32, text: impl Into<String>) -> Self {
-        AppStepSlider { pos, max, width: 200.0, text: text.into() }
+    /// A slider over the positions `0..=max`. `name` is what the slider sets, and `text` is the
+    /// value as the user reads it. A screen reader gets both, because the position alone means nothing.
+    pub fn new(pos: &'a mut u32, max: u32, name: impl Into<String>, text: impl Into<String>) -> Self {
+        AppStepSlider { pos, max, width: 200.0, text: text.into(), name: name.into() }
     }
 }
 
@@ -188,7 +205,10 @@ impl Widget for AppStepSlider<'_> {
             response.mark_changed();
         }
         let value = *self.pos;
-        response.widget_info(|| WidgetInfo::slider(enabled, value as f64, &self.text));
+        response.widget_info(|| WidgetInfo {
+            current_text_value: Some(self.text.clone()),
+            ..WidgetInfo::slider(enabled, f64::from(value), &self.name)
+        });
 
         if ui.is_rect_visible(rect) {
             let accent = theme::accent(ui);
@@ -263,5 +283,55 @@ impl UiExt for Ui {
 
     fn app_checkbox(&mut self, checked: &mut bool, text: impl Into<WidgetText>) -> Response {
         self.add(AppCheckbox { checked, text: text.into() })
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use egui::accesskit::{Role, Toggled};
+
+    /// Run one frame with the widgets of `add` and return the accessibility nodes of it.
+    fn nodes(add: impl FnOnce(&mut Ui)) -> Vec<egui::accesskit::Node> {
+        let ctx = egui::Context::default();
+        ctx.enable_accesskit();
+        let mut add = Some(add);
+        let mut output = ctx.run_ui(egui::RawInput::default(), |ui| {
+            if let Some(add) = add.take() {
+                add(ui);
+            }
+        });
+        output.textures_delta.clear();
+        output.platform_output.accesskit_update.expect("accesskit is on").nodes.into_iter().map(|(_, node)| node).collect()
+    }
+
+    #[test]
+    fn a_choice_button_says_whether_it_is_chosen() {
+        let nodes = nodes(|ui| {
+            ui.add(AppButton::new("Allow").choice(false));
+            ui.add(AppButton::new("Avoid").choice(true));
+        });
+        let radio = |label: &str| nodes.iter().find(|n| n.role() == Role::RadioButton && n.label() == Some(label)).unwrap();
+        assert_eq!(radio("Allow").toggled(), Some(Toggled::False));
+        assert_eq!(radio("Avoid").toggled(), Some(Toggled::True));
+    }
+
+    #[test]
+    fn a_plain_button_is_a_button() {
+        let nodes = nodes(|ui| {
+            ui.add(AppButton::new("Save").selected(true));
+        });
+        assert!(nodes.iter().any(|n| n.role() == Role::Button && n.label() == Some("Save") && n.toggled().is_none()));
+    }
+
+    #[test]
+    fn the_slider_gives_its_name_and_its_value_as_text() {
+        let mut pos = 3;
+        let nodes = nodes(|ui| {
+            ui.add(AppStepSlider::new(&mut pos, 38, "Minimum wormhole lifetime", "4 hours"));
+        });
+        let slider = nodes.iter().find(|n| n.role() == Role::Slider).unwrap();
+        assert_eq!(slider.label(), Some("Minimum wormhole lifetime"));
+        assert_eq!(slider.value(), Some("4 hours"));
     }
 }

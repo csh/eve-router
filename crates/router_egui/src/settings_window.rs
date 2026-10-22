@@ -929,18 +929,19 @@ fn stance_row(ui: &mut Ui, name: &str, current: Stance, on: bool, locked: bool, 
 
 /// The three buttons of a stance, with the current one marked. Return the stance that a click picked.
 fn stance_buttons(ui: &mut Ui, current: Stance) -> Option<Stance> {
-    ui.horizontal(|ui| {
+    let row = ui.horizontal(|ui| {
         let mut picked = None;
         for stance in Stance::ALL {
-            if ui.add(AppButton::new(stance.label()).selected(current == stance).min_size(vec2(STANCE_BUTTON, 0.0))).clicked()
+            if ui.add(AppButton::new(stance.label()).choice(current == stance).min_size(vec2(STANCE_BUTTON, 0.0))).clicked()
                 && current != stance
             {
                 picked = Some(stance);
             }
         }
         picked
-    })
-    .inner
+    });
+    row.response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::RadioGroup, ui.is_enabled(), "Stance"));
+    row.inner
 }
 
 /// The Nexum maps, in a table with a checkbox for each. The router reads the maps that are on.
@@ -1520,7 +1521,7 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
             let mut pos = life_scale::pos_of(s.settings.min_life);
             ui.horizontal(|ui| {
                 let text = life_scale::label(life_scale::life_at(pos));
-                let slider = AppStepSlider::new(&mut pos, life_scale::MAX_POS, text);
+                let slider = AppStepSlider::new(&mut pos, life_scale::MAX_POS, "Minimum wormhole lifetime", text);
                 if ui.add(slider).on_hover_text("A wormhole that collapses sooner than this is not used.").changed() {
                     s.settings.min_life = life_scale::life_at(pos);
                     s.apply_later(Instant::now());
