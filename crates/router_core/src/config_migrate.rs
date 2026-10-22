@@ -85,7 +85,7 @@ struct ConfigV1 {
     eve_scout: HubsV1,
     /// Whether a route can enter Pochven. 0.4.0 turned it off for a file without the key.
     pochven: bool,
-    #[serde(deserialize_with = "lenient_theme")]
+    #[serde(deserialize_with = "crate::config::lenient_theme")]
     theme: Option<FactionTheme>,
     compact: bool,
     check_for_updates: Option<bool>,
@@ -116,17 +116,12 @@ struct ConfigV2 {
     eve_metro: EveMetroConfig,
     eve_scout: HubsV1,
     filaments: Option<bool>,
-    #[serde(deserialize_with = "lenient_theme")]
+    #[serde(deserialize_with = "crate::config::lenient_theme")]
     theme: Option<FactionTheme>,
     compact: bool,
     check_for_updates: Option<bool>,
     auto_update: bool,
     routing_overlay: RoutingOverlayConfig,
-}
-
-/// The same rule as `Config`: an unknown theme name loads as no theme.
-fn lenient_theme<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<FactionTheme>, D::Error> {
-    Ok(Option::<String>::deserialize(deserializer)?.and_then(|name| FactionTheme::parse(&name)))
 }
 
 impl From<ConfigV1> for ConfigV2 {
@@ -276,6 +271,15 @@ mod tests {
         let off = parse(&V0_4_0.replace(r#""pochven": true"#, r#""pochven": false"#)).unwrap();
         assert_eq!(off.filaments, Some(Stance::Block));
         assert_eq!(parse(r#"{"pochven": true}"#).unwrap().filaments, Some(Stance::Allow));
+    }
+
+    /// An old shape reads an unknown theme name as Caldari, like `Config`, and still moves the key.
+    #[test]
+    fn an_unknown_theme_in_an_old_file_becomes_caldari() {
+        use crate::config::FactionTheme;
+        let cfg = parse(r#"{"theme": "sansha", "nexum": {"key": "nxm_key"}}"#).unwrap();
+        assert_eq!(cfg.theme, Some(FactionTheme::Caldari));
+        assert_eq!(cfg.nexum.key, Some(ApiKey("nxm_key".into())));
     }
 
     /// Both old files read the hub switches as Allow and Block, and a file with no hubs as Allow.

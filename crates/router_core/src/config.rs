@@ -358,7 +358,7 @@ pub struct Config {
     /// key `pochven`. `config_migrate` reads that file.
     #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::wormhole_space::switch::option")]
     pub filaments: Option<Stance>,
-    /// The Photon UI faction theme. A name that is not known loads as no theme.
+    /// The Photon UI faction theme. A name that is not known loads as Caldari.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_theme")]
     pub theme: Option<FactionTheme>,
     /// Compact UI layout with tighter row heights and padding.
@@ -412,9 +412,10 @@ impl FactionTheme {
 }
 
 /// An old or edited file can hold a theme name that this version does not know. The file still
-/// loads, and the app uses the default theme.
-fn lenient_theme<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<FactionTheme>, D::Error> {
-    Ok(Option::<String>::deserialize(deserializer)?.and_then(|name| FactionTheme::parse(&name)))
+/// loads, and the theme is Caldari, the default. A missing or null theme stays `None`. Each shape
+/// of the config file in `config_migrate` uses this function.
+pub(crate) fn lenient_theme<'de, D: serde::Deserializer<'de>>(deserializer: D) -> Result<Option<FactionTheme>, D::Error> {
+    Ok(Option::<String>::deserialize(deserializer)?.map(|name| FactionTheme::parse(&name).unwrap_or_default()))
 }
 
 /// Why a value of the config or of a settings field is not valid.
@@ -628,8 +629,9 @@ mod tests {
         let load = |json: &str| serde_json::from_str::<Config>(json).unwrap().theme;
         assert_eq!(load(r#"{"theme": "amarr"}"#), Some(FactionTheme::Amarr));
         assert_eq!(load(r#"{"theme": " Minmatar "}"#), Some(FactionTheme::Minmatar));
-        // A name that is not known gives the default theme, and the file still loads.
-        assert_eq!(load(r#"{"theme": "sansha"}"#), None);
+        // A name that is not known gives Caldari, and the file still loads.
+        assert_eq!(load(r#"{"theme": "sansha"}"#), Some(FactionTheme::Caldari));
+        assert_eq!(load(r#"{"theme": null}"#), None);
         assert_eq!(load(r#"{}"#), None);
         let cfg = Config { theme: Some(FactionTheme::Gallente), ..Config::default() };
         assert!(serde_json::to_string(&cfg).unwrap().contains(r#""theme":"gallente""#));
