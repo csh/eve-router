@@ -697,7 +697,13 @@ mod tests {
         let (url, _) = serve_routes(HashMap::from([("/api/v1/maps/m1".to_string(), map)]));
         // One hour: a snapshot in this test comes from the message, not from the interval.
         let (setup, _tmp) = setup(format!("{url}/scout"), Duration::from_secs(3600));
-        let cfg = NexumConfig { url: Some(url), key: Some(ApiKey("nxm_test".into())), map_ids: vec!["m1".into()], keep_unsigned: true };
+        let cfg = NexumConfig {
+            url: Some(url),
+            key: Some(ApiKey("nxm_test".into())),
+            map_ids: vec!["m1".into()],
+            keep_unsigned: true,
+            ..Default::default()
+        };
         // A fresh cache of the same map, with no wormholes. A normal start uses it.
         let cached = SourceData {
             source: SourceId::Nexum,
@@ -862,8 +868,13 @@ mod tests {
         let (url, _) = serve_routes(HashMap::new());
         let (setup, _tmp) = setup(format!("{url}/scout"), INTERVAL);
         let mut worker = Worker::new(setup);
-        worker.setup.nexum =
-            NexumConfig { url: Some(url.clone()), key: Some(ApiKey("nxm_test".into())), map_ids: vec!["m1".into()], keep_unsigned: true };
+        worker.setup.nexum = NexumConfig {
+            url: Some(url.clone()),
+            key: Some(ApiKey("nxm_test".into())),
+            map_ids: vec!["m1".into()],
+            keep_unsigned: true,
+            ..Default::default()
+        };
         let kept = |map: &str| SourceData {
             source: SourceId::Nexum,
             fetched_at: FIXTURE_TIME,

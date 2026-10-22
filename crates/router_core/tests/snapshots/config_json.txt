@@ -28,7 +28,6 @@
   ],
   "nexum": {
     "url": "https://nexum.example",
-    "key": "nxm_key",
     "map_ids": [
       "m1"
     ],

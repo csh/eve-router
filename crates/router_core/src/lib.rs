@@ -3,10 +3,12 @@
 
 pub mod ansiblex;
 pub mod config;
+pub mod config_migrate;
 pub mod error;
 pub mod esi;
 pub mod labels;
 pub mod log;
+pub mod nexum_key;
 pub mod overlay;
 pub mod refresh;
 pub mod route;

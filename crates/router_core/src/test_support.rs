@@ -6,6 +6,7 @@ use crate::settings::{HullSource, Settings};
 use crate::sources::nexum;
 use crate::universe::Universe;
 use crate::wormhole::{self, SourceData, SourceId, Wormhole};
+use crate::wormhole_space::Stance;
 use crate::{overlay, sde, wormhole_types};
 use std::collections::HashMap;
 use std::fs;
@@ -83,7 +84,7 @@ pub fn settings(uni: &Universe, hull: Option<&str>) -> Settings {
         space: Default::default(),
         bridges: true,
         rules: BridgeRules { capital: uni.exact("JK-Q77"), hull: hull.map(|h| hulls().find(h).unwrap()), max_cap: None },
-        filaments: false,
+        filaments: Stance::Block,
         hull_source: HullSource::Manual,
         min_life: 0,
         costs: Default::default(),

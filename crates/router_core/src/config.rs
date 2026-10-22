@@ -5,7 +5,7 @@ use crate::esi::client::Affiliation;
 use crate::route::{Mode, RouteError};
 use crate::wormhole::Hubs;
 use crate::wormhole::SourceId;
-use crate::wormhole_space::WormholeSpace;
+use crate::wormhole_space::{Stance, WormholeSpace};
 use serde::{Deserialize, Serialize};
 use std::collections::BTreeMap;
 use std::fmt;
@@ -145,18 +145,38 @@ impl AvoidName {
     }
 }
 
-#[derive(Serialize, Deserialize, Default, Clone, Debug, PartialEq, Eq)]
+#[derive(Deserialize, Default, Clone, Debug, PartialEq, Eq)]
 #[serde(from = "NexumFile")]
 pub struct NexumConfig {
     /// For example "https://nexum.example".
     pub url: Option<String>,
-    /// A key with the `read` scope is enough.
+    /// A key with the `read` scope is enough. The key lives in the OS keyring
+    /// (`nexum_key::KEYRING_SERVICE`). The file holds it only while `key_in_file` is true.
     pub key: Option<ApiKey>,
+    /// True while the key is in the file: the file came from a version before the keyring, and the
+    /// router has not moved the key yet, or the keyring is not available. `save` then writes the
+    /// key, so no save loses it. The router sets this to false after the key is in the keyring.
+    pub key_in_file: bool,
     /// The maps that the router reads. The router joins their wormholes.
     pub map_ids: Vec<String>,
     /// Keep a connection that has no known signature at either end. A file without this value
     /// skips these connections, because their data is the least reliable.
     pub keep_unsigned: bool,
+}
+
+impl Serialize for NexumConfig {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        #[derive(Serialize)]
+        struct Out<'a> {
+            url: &'a Option<String>,
+            #[serde(skip_serializing_if = "Option::is_none")]
+            key: Option<&'a ApiKey>,
+            map_ids: &'a [String],
+            keep_unsigned: bool,
+        }
+        let key = self.key.as_ref().filter(|_| self.key_in_file);
+        Out { url: &self.url, key, map_ids: &self.map_ids, keep_unsigned: self.keep_unsigned }.serialize(serializer)
+    }
 }
 
 /// The Nexum part of the config file. An old file has one `map_id`, a new file has `map_ids`.
@@ -178,7 +198,8 @@ impl From<NexumFile> for NexumConfig {
         {
             map_ids.insert(0, id);
         }
-        NexumConfig { url: file.url, key: file.key, map_ids, keep_unsigned: file.keep_unsigned }
+        let key_in_file = file.key.is_some();
+        NexumConfig { url: file.url, key: file.key, key_in_file, map_ids, keep_unsigned: file.keep_unsigned }
     }
 }
 
@@ -331,12 +352,12 @@ pub struct Config {
     /// The stance (allow, avoid, block) of each class of wormhole space. The default stays out of a file.
     #[serde(skip_serializing_if = "WormholeSpace::is_default")]
     pub wormhole_space: WormholeSpace,
-    /// The filaments switch: whether a route can use a filament. `None` gives on. One switch covers
+    /// The filaments stance: whether a route can use a filament. `None` gives Allow. One stance covers
     /// all three clades: the SDE shows one Triglavian faction only (Triglavian Collective,
     /// `500026`), and the clade corporations share it. A file from before the rename has the
-    /// key `pochven`.
-    #[serde(alias = "pochven", skip_serializing_if = "Option::is_none")]
-    pub filaments: Option<bool>,
+    /// key `pochven`. `config_migrate` reads that file.
+    #[serde(default, skip_serializing_if = "Option::is_none", with = "crate::wormhole_space::switch::option")]
+    pub filaments: Option<Stance>,
     /// The Photon UI faction theme. A name that is not known loads as no theme.
     #[serde(default, skip_serializing_if = "Option::is_none", deserialize_with = "lenient_theme")]
     pub theme: Option<FactionTheme>,
@@ -441,10 +462,11 @@ pub fn url_warning(text: &str) -> Option<&'static str> {
 }
 
 impl Config {
-    /// Read the file. A missing file gives the default config.
+    /// Read the file. A missing file gives the default config. A file of an older version moves to
+    /// the current shape (`config_migrate`).
     pub fn load(path: &Path) -> Result<Config, FileError> {
         match fs::read_to_string(path) {
-            Ok(text) => serde_json::from_str(&text).map_err(FileError::json(path)),
+            Ok(text) => crate::config_migrate::parse(&text).map_err(FileError::json(path)),
             Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(Config::default()),
             Err(e) => Err(FileError::Io { path: path.to_path_buf(), source: e }),
         }
@@ -467,11 +489,11 @@ impl Config {
     }
 
     /// Write the file through a temporary file and a rename, so a crash never leaves half a file.
-    /// Create its directory first if necessary. The file holds the Nexum key, so only the owner can
+    /// Create its directory first if necessary. A file that still holds the Nexum key (`key_in_file`) is private: only the owner can
     /// read it on Unix. The temporary file gets that mode before it holds a key.
     pub fn save(&self, path: &Path) -> Result<(), FileError> {
         let text = serde_json::to_string_pretty(self).map_err(FileError::json(path))?;
-        let private = self.nexum.key.is_some();
+        let private = self.nexum.key_in_file && self.nexum.key.is_some();
         write_atomic_with(path, &path.with_extension("json.part"), &(text + "\n"), private)
     }
 }
@@ -517,6 +539,7 @@ mod tests {
             nexum: NexumConfig {
                 url: Some("https://nexum.example".into()),
                 key: Some(ApiKey("nxm_key".into())),
+                key_in_file: false,
                 map_ids: vec!["m1".into()],
                 keep_unsigned: true,
             },
@@ -526,9 +549,9 @@ mod tests {
                 character: Some(2112345678),
                 ..Default::default()
             },
-            eve_scout: Hubs { thera: false, turnur: true },
+            eve_scout: Hubs { thera: Stance::Block, turnur: Stance::Allow },
             wormhole_space: WormholeSpace::default(),
-            filaments: Some(true),
+            filaments: Some(Stance::Allow),
             theme: None,
             compact: false,
             check_for_updates: Some(false),
@@ -710,6 +733,8 @@ mod tests {
         assert_eq!(serde_json::from_str::<NexumConfig>("{}").unwrap(), NexumConfig::default());
     }
 
+    /// A key that the file holds (`key_in_file`) is written in full. Only Debug masks it. A key that
+    /// the keyring holds never reaches the file.
     #[test]
     fn nexum_settings_round_trip() {
         let tmp = tempfile::tempdir().unwrap();
@@ -719,8 +744,11 @@ mod tests {
         cfg.nexum.url = Some("https://nexum.example".into());
         cfg.nexum.key = Some(ApiKey("nxm_secret".into()));
         cfg.save(&path).unwrap();
+        assert!(!fs::read_to_string(&path).unwrap().contains("nxm_secret"));
+        assert_eq!(Config::load(&path).unwrap().nexum.key, None);
+        cfg.nexum.key_in_file = true;
+        cfg.save(&path).unwrap();
         let text = fs::read_to_string(&path).unwrap();
-        // The file holds the full key. Only Debug masks it.
         assert!(text.contains("\"key\": \"nxm_secret\""), "{text}");
         assert_eq!(Config::load(&path).unwrap().nexum, cfg.nexum);
         #[cfg(unix)]
@@ -845,10 +873,27 @@ mod tests {
     }
 
     #[test]
-    fn hub_switches_default_on() {
-        // An old file has no "eve_scout" object. A file can set one switch only.
-        assert_eq!(serde_json::from_str::<Config>("{}").unwrap().eve_scout, Hubs { thera: true, turnur: true });
+    fn hub_stances_default_to_allow() {
+        // An old file has no "eve_scout" object. A file can set one hub only.
+        assert_eq!(serde_json::from_str::<Config>("{}").unwrap().eve_scout, Hubs::default());
         let cfg: Config = serde_json::from_str(r#"{"eve_scout": {"thera": false}}"#).unwrap();
-        assert_eq!(cfg.eve_scout, Hubs { thera: false, turnur: true });
+        assert_eq!(cfg.eve_scout, Hubs { thera: Stance::Block, turnur: Stance::Allow });
+    }
+
+    /// An old file holds `true` and `false`. A new file writes those two for Allow and Block, so an
+    /// old version reads it, and writes the word "avoid" for Avoid.
+    #[test]
+    fn hub_and_filament_stances_read_old_switches_and_write_them_back() {
+        let cfg: Config = serde_json::from_str(r#"{"eve_scout": {"thera": "avoid", "turnur": false}, "filaments": "avoid"}"#).unwrap();
+        assert_eq!(cfg.eve_scout, Hubs { thera: Stance::Avoid, turnur: Stance::Block });
+        assert_eq!(cfg.filaments, Some(Stance::Avoid));
+        let text = serde_json::to_string(&cfg).unwrap();
+        assert!(
+            text.contains(r#""thera":"avoid""#) && text.contains(r#""turnur":false"#) && text.contains(r#""filaments":"avoid""#),
+            "{text}"
+        );
+        let old: Config = serde_json::from_str(r#"{"eve_scout": {"thera": true}, "filaments": false}"#).unwrap();
+        assert_eq!((old.eve_scout.thera, old.filaments), (Stance::Allow, Some(Stance::Block)));
+        assert_eq!(serde_json::from_str::<Config>("{}").unwrap().filaments, None);
     }
 }

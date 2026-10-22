@@ -273,7 +273,13 @@ mod tests {
     const MAPS: &str = r#"{"maps":[{"id":"m1","name":"Home","isCorpMap":false},{"id":"m2","name":"Scanning"}]}"#;
 
     fn nexum(url: &str) -> NexumConfig {
-        NexumConfig { url: Some(url.into()), key: Some(ApiKey("nxm_test".into())), map_ids: vec!["m1".into()], keep_unsigned: true }
+        NexumConfig {
+            url: Some(url.into()),
+            key: Some(ApiKey("nxm_test".into())),
+            map_ids: vec!["m1".into()],
+            keep_unsigned: true,
+            ..Default::default()
+        }
     }
 
     #[test]

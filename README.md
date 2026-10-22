@@ -20,7 +20,7 @@ With this in mind, some of the code will inevitably be dogshit, however I am car
 - Calculate the top-n routes through any number of midpoints with similar navigation options as ingame: shortest, prefer highsec and less secure.
 - Wormhole connections from a Nexum map, fetched at startup. The router uses the wormhole size, mass status and expiry. This needs a hosted Nexum instance and an API key. Without them, the router uses only the EVE-Scout wormholes.
 - The signature of each wormhole jump, for example `Wormhole · Sig. ABC · XL`.
-- Thera and Turnur wormholes from the public [EVE-Scout](https://www.eve-scout.com/) feed, fetched at startup. Each hub has its own switch.
+- Thera and Turnur wormholes from the public [EVE-Scout](https://www.eve-scout.com/) feed, fetched at startup. Each hub has its own stance.
 - right-click a step in the route table to avoid its system or its region. The Avoid button lists the entries and removes them. Each entry is "Prefer" (a route crosses it only if no other route exists, or the other routes are much longer) or "Never".
 - `F5` or the Refresh button fetches the wormholes at once, with at least 15 seconds between two fetches. The Log button opens a window with one row for each fetch and its result.
 
@@ -51,8 +51,9 @@ The window loads the map and shows the route summaries. Use "Copy route" to copy
 - Alliance capital for usage with Ansiblex network.
 - Capacitor usage limit per jump bridge taken.
 - Favourite systems list.
-- Nexum URL, API key and map. Nexum is optional, but it needs a hosted instance and an API key. The key needs only the `read` scope. The router sends GET requests only. A change loads the new map at once.
-- EVE-Scout: a Thera switch and a Turnur switch. Both are on by default. A change applies at once.
+- Nexum URL, API key and map. Nexum is optional, but it needs a hosted instance and an API key. The key needs only the `read` scope. The router sends GET requests only. A change loads the new map at once. The key lives in the OS keyring (service `com.smrkn.eve-router.nexum`), not in `eve-router.json`. A key in the file of an older version moves to the keyring at the first start. Without a keyring, a new key stays in memory until the app closes, and a key from an old file stays in the file.
+- Engine page, Space access: Allow, Avoid or Block for each class of J-space from 1 to 6, for the Drifter systems and for Pochven. Avoid uses the systems only when a trip must go through or into them. Block never does. While wormholes are off, the J-space and Drifter rows have no effect.
+- Engine page, Hubs: Allow, Avoid or Block for Thera, Turnur and the filaments. All three are on Allow by default. A change applies at once. Avoid uses the hub wormholes, or a filament, only when a trip has no other way. A blocked Pochven turns the filaments off.
 
 Config files are stored in `com.smrkn.eve-router` under the platform config directory, whilst SDE files are located in the platform data directory. 
 See the [`dirs`](https://crates.io/crates/dirs) crate for platform specific paths.
@@ -67,22 +68,22 @@ While the router runs, it gets both sources again each 5 minutes and builds a ne
 
 #### Signatures
 
-A route step shows the first three letters of the signature in the system that the jump leaves. EVE-Scout gives both signatures. For Nexum, the router gets the signatures of each system at a wormhole end, with 8 requests at a time. A connection uses the signature that a scout linked to it. Else it uses the one wormhole signature whose "leads to" text is the name of the other system. When two connections join the same systems, or two signatures lead to the same name, the router shows no signature.
+A route step shows the first three letters of the signature in the system that the jump leaves. EVE-Scout gives both signatures. For Nexum, the router gets the signatures of each system at a wormhole end, with 8 requests at a time. A connection uses the signature that a scout linked to it. Else it uses the one wormhole signature whose "leads to" text is the name of the other system. When two connections join the same systems, or two signatures lead to the same name, the router shows no signature. When several connections link the same signature row, only the connection with a wormhole type (for example K162) keeps the signature. If none or more than one has a type, none keeps it.
 
-The Thera and Turnur switches act on each wormhole with an end in that hub, from Nexum or EVE-Scout. The gates into Turnur stay open. In `eve-router.json`:
+The Thera and Turnur stances act on each wormhole with an end in that hub, from Nexum or EVE-Scout. The gates into Turnur stay open. A file of an older version holds `true` and `false`, and they read as Allow and Block. In `eve-router.json`, a hub is `true` for Allow, `false` for Block and `"avoid"` for Avoid:
 
 ```json
-"eve_scout": { "thera": true, "turnur": false }
+"eve_scout": { "thera": true, "turnur": "avoid" }
 ```
 
-The Shortcuts box shows the count of systems with a wormhole to each hub. A count shows in gray when its switch is off.
+The Shortcuts box shows the count of systems with a wormhole to each hub. A count shows in gray when its stance is Block.
 
 The router does not use a wormhole when:
 
 - its mass status is critical,
 - its expiry time is past,
 - the hull mass is more than the per-jump limit of the wormhole,
-- its end is in Thera or Turnur, and the switch of that hub is off.
+- its end is in Thera or Turnur, and the stance of that hub is Block.
 
 The size check uses the hull mass from the SDE. Fitted modules, for example plates and propulsion modules, add mass. The check does not know about them. A wormhole of a known type uses the per-jump limit of that type. A K162 or a wormhole with no type uses the lowest limit of its size class. For EVE-Scout, the size class comes from the ship size of the entry. If you set no hull, the router does no size check.
 

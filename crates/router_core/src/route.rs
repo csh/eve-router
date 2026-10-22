@@ -3,6 +3,7 @@
 use crate::ansiblex::{BridgeRules, Hull};
 use crate::universe::{Band, Link, Universe, band};
 use crate::wormhole::{Hubs, Wormhole};
+use crate::wormhole_space::Stance;
 use petgraph::algo::{astar, dijkstra};
 use petgraph::graph::{EdgeIndex, EdgeReference, NodeIndex};
 use petgraph::visit::{EdgeFiltered, EdgeRef};
@@ -177,7 +178,7 @@ fn reuse_cost(reuse: &[u64], edge: EdgeIndex) -> u64 {
 pub struct RouterOptions {
     pub mode: Mode,
     pub wormholes: bool,
-    /// Switches the wormholes of each hub (Thera, Turnur) on and off.
+    /// The stance for the wormholes of each hub (Thera, Turnur).
     pub hubs: Hubs,
     pub bridges: bool,
     pub rules: BridgeRules,
@@ -185,9 +186,10 @@ pub struct RouterOptions {
     pub cap_weight: u32,
     /// The extra cost of a wormhole with no known signature at its departure system, in milli-jumps.
     pub unknown_sig_penalty: u32,
-    /// Whether a route can use a filament. A filament is the only way into Pochven from outside
-    /// that the game gives, so with this off a route reaches Pochven only by a wormhole.
-    pub filaments: bool,
+    /// The stance for the filaments. A filament is the only way into Pochven from outside that the
+    /// game gives, so with Block a route reaches Pochven only by a wormhole. Avoid uses a filament
+    /// only when no other way exists.
+    pub filaments: Stance,
     /// Unix seconds. It sets which wormholes are expired.
     pub now: u64,
 }
@@ -202,7 +204,7 @@ impl Default for RouterOptions {
             rules: BridgeRules::default(),
             cap_weight: DEFAULT_CAP_WEIGHT,
             unknown_sig_penalty: DEFAULT_UNKNOWN_SIG_PENALTY,
-            filaments: false,
+            filaments: Stance::Block,
             now: 0,
         }
     }
@@ -236,6 +238,8 @@ pub struct Router<'a> {
     never: Vec<bool>,
     /// The cost that an edge adds to the cost of a jump into its target, by `EdgeIndex`.
     edge_extra: Vec<u64>,
+    /// True for an edge that a stance avoids, by `EdgeIndex`. Its extra cost includes `PENALTY`.
+    edge_avoid: Vec<bool>,
 }
 
 /// A Yen candidate path: the cost, the nodes and the edges, cheapest first.
@@ -256,7 +260,7 @@ impl Bans {
 impl<'a> Router<'a> {
     /// Calculate the node costs and the edge permissions one time, in parallel.
     /// Each search then reads them instead of calculating them again.
-    #[tracing::instrument(level = "info", skip_all, fields(mode = ?options.mode, wormholes = options.wormholes, bridges = options.bridges, filaments = options.filaments))]
+    #[tracing::instrument(level = "info", skip_all, fields(mode = ?options.mode, wormholes = options.wormholes, bridges = options.bridges, filaments = ?options.filaments))]
     pub fn new(uni: &'a Universe, options: RouterOptions) -> Self {
         let RouterOptions { mode, wormholes, hubs, bridges, rules, cap_weight, unknown_sig_penalty, filaments, now } = options;
         let graph = &uni.graph;
@@ -289,14 +293,25 @@ impl<'a> Router<'a> {
                     Link::Stargate => true,
                     // The filaments switch gates the filament links only. A wormhole with an end in
                     // Pochven (the EVE Metro map) follows the wormholes switch like any other.
-                    Link::Wormhole(w) => wormholes && wormhole_hull_ok && hubs.allows(w) && w.usable(now, hull_kg),
+                    Link::Wormhole(w) => wormholes && wormhole_hull_ok && hubs.stance(w) != Stance::Block && w.usable(now, hull_kg),
                     Link::JumpBridge => bridges && rules.allowed(uni, e.target()),
-                    Link::Filament(_) => filaments && filament_hull_ok,
+                    Link::Filament(_) => filaments != Stance::Block && filament_hull_ok,
                 }
             })
             .collect();
+        // A stance of Avoid on a hub or on the filaments adds `PENALTY` to the links that it covers. Only
+        // the activation edge of a filament carries it, so a filament jump counts one time.
+        let edge_avoid: Vec<bool> = graph
+            .raw_edges()
+            .par_iter()
+            .map(|e| match &e.weight {
+                Link::Wormhole(w) => wormholes && hubs.stance(w) == Stance::Avoid,
+                Link::Filament(f) => filaments == Stance::Avoid && f.expected_jumps.is_none(),
+                _ => false,
+            })
+            .collect();
         // A bridge jump with a hull costs more as it uses more of the gate capacitor.
-        let edge_extra = graph
+        let edge_extra: Vec<u64> = graph
             .raw_edges()
             .par_iter()
             .map(|e| match e.weight {
@@ -315,8 +330,10 @@ impl<'a> Router<'a> {
                 _ => 0,
             })
             .collect();
+        let edge_extra =
+            edge_extra.into_iter().zip(&edge_avoid).map(|(extra, &avoid)| if avoid { extra + PENALTY } else { extra }).collect();
         let node_danger = vec![0; graph.node_count()];
-        Router { uni, rules, node_cost, node_danger, edge_ok, never: Vec::new(), edge_extra }
+        Router { uni, rules, node_cost, node_danger, edge_ok, never: Vec::new(), edge_extra, edge_avoid }
     }
 
     fn link_allowed(&self, e: EdgeReference<'_, Link>) -> bool {
@@ -671,7 +688,14 @@ impl<'a> Router<'a> {
             stops: Vec::new(),
             path,
         };
-        route.avoided = route.path.nodes[1..].iter().filter(|n| self.node_danger[n.index()] >= PENALTY).count();
+        // A step counts one time, whether its system or its link is avoided.
+        route.avoided = route
+            .path
+            .edges
+            .iter()
+            .zip(&route.path.nodes[1..])
+            .filter(|(e, n)| self.node_danger[n.index()] >= PENALTY || self.edge_avoid[e.index()])
+            .count();
         let mut tj = Some(0.0);
         let mut cap_pct = Some(0.0);
         for &e in &route.path.edges {
@@ -821,9 +845,9 @@ mod tests {
     fn thera_off_blocks_thera_wormholes() {
         let on = Hubs::default();
         assert_eq!(hub_jumps(on, None, "Ashab", "Pator", 0), 2);
-        assert!(hub_jumps(Hubs { thera: false, ..on }, None, "Ashab", "Pator", 0) > 2);
+        assert!(hub_jumps(Hubs { thera: Stance::Block, ..on }, None, "Ashab", "Pator", 0) > 2);
         // The Turnur switch does not act on Thera.
-        assert_eq!(hub_jumps(Hubs { turnur: false, ..on }, None, "Ashab", "Pator", 0), 2);
+        assert_eq!(hub_jumps(Hubs { turnur: Stance::Block, ..on }, None, "Ashab", "Pator", 0), 2);
     }
 
     #[test]
@@ -831,7 +855,50 @@ mod tests {
         let on = Hubs::default();
         assert_eq!(hub_jumps(on, None, "Turnur", "Oursulaert", 0), 1);
         // The wormhole is off, but the gates into Turnur stay, so a longer route exists.
-        assert!(hub_jumps(Hubs { turnur: false, ..on }, None, "Turnur", "Oursulaert", 0) > 1);
+        assert!(hub_jumps(Hubs { turnur: Stance::Block, ..on }, None, "Turnur", "Oursulaert", 0) > 1);
+    }
+
+    /// Avoid on a hub adds a penalty to its wormholes. A route with another way takes it and counts
+    /// no avoided system. A route that ends in the hub has no other way, so it crosses and counts one.
+    #[test]
+    fn avoid_on_a_hub_keeps_its_wormholes_as_the_last_way() {
+        let uni = holes_universe();
+        let hubs = Hubs { thera: Stance::Avoid, ..Hubs::default() };
+        let router = |hubs| Router::new(&uni, RouterOptions { hubs, bridges: false, ..Default::default() });
+        let (ashab, pator, thera) = (uni.exact("Ashab").unwrap(), uni.exact("Pator").unwrap(), uni.by_id[&THERA]);
+        // Ashab to Pator has a gate route, longer than the two wormhole jumps.
+        let routes = router(hubs).routes(&[ashab, pator], 1).unwrap();
+        assert!(routes[0].jumps > 2 && routes[0].avoided == 0);
+        // Ashab to Thera has no gate route. Avoid crosses and counts one. Block finds no route.
+        let routes = router(hubs).routes(&[ashab, thera], 1).unwrap();
+        assert_eq!((routes[0].jumps, routes[0].avoided), (1, 1));
+        let block = Hubs { thera: Stance::Block, ..Hubs::default() };
+        assert!(router(block).routes(&[ashab, thera], 1).is_err());
+        // Allow gives the short route and no avoided system.
+        let routes = router(Hubs::default()).routes(&[ashab, pator], 1).unwrap();
+        assert_eq!((routes[0].jumps, routes[0].avoided), (2, 0));
+    }
+
+    /// Avoid on the filaments counts one avoided system for a filament trip, and a Metro wormhole
+    /// into Pochven wins over it.
+    #[test]
+    fn avoid_on_the_filaments_prefers_a_wormhole_into_pochven() {
+        use petgraph::visit::EdgeRef;
+        let base = universe();
+        let perun = base.filament_hub(crate::universe::Clade::Perun).unwrap();
+        let pochven_id = base.system(base.graph.edges(perun).next().unwrap().target()).id;
+        let jita_id = base.system(node("Jita")).id;
+        let options = |filaments| RouterOptions { filaments, unknown_sig_penalty: 0, ..Default::default() };
+        // No wormhole: Avoid still uses the filament, as the last way, and counts one.
+        let target = base.by_id[&pochven_id];
+        let routes = Router::new(base, options(Stance::Avoid)).routes(&[node("Jita"), target], 1).unwrap();
+        assert_eq!((routes[0].jumps, routes[0].avoided), (2, 1));
+        // A wormhole from Jita into Pochven: Avoid takes it, with no avoided system.
+        let mut uni = base.clone();
+        uni.add_wormholes(&[hole(jita_id, pochven_id)]);
+        let (jita, target) = (uni.exact("Jita").unwrap(), uni.by_id[&pochven_id]);
+        let routes = Router::new(&uni, options(Stance::Avoid)).routes(&[jita, target], 1).unwrap();
+        assert_eq!((routes[0].wormholes, routes[0].avoided), (1, 0));
     }
 
     fn node(name: &str) -> NodeIndex {
@@ -1207,7 +1274,7 @@ mod tests {
         use petgraph::visit::EdgeRef;
         let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
         let target = uni.graph.edges(perun).next().unwrap().target();
-        let filaments = true;
+        let filaments = Stance::Allow;
         let r = Router::new(uni, RouterOptions { filaments, ..Default::default() });
         let route = r.routes(&[node("Jita"), target], 1).unwrap().remove(0);
         // Two filament edges: the activation, and the jump from the hub into the clade.
@@ -1222,7 +1289,7 @@ mod tests {
         use petgraph::visit::EdgeRef;
         let perun = uni.filament_hub(crate::universe::Clade::Perun).unwrap();
         let target = uni.graph.edges(perun).next().unwrap().target();
-        let filaments = true;
+        let filaments = Stance::Allow;
         // A Titan is on the banned list. No hull set still allows the filament.
         let banned = RouterOptions {
             filaments,
@@ -1254,7 +1321,7 @@ mod tests {
         let (jita, target) = (uni.exact("Jita").unwrap(), uni.by_id[&pochven_id]);
 
         // No signature penalty: the test proves the wormhole is usable, not that it beats a filament.
-        for filaments in [false, true] {
+        for filaments in [Stance::Block, Stance::Allow] {
             let options = RouterOptions { filaments, unknown_sig_penalty: 0, ..Default::default() };
             let route = Router::new(&uni, options).routes(&[jita, target], 1).unwrap().remove(0);
             assert_eq!(route.jumps, 1);
@@ -1283,14 +1350,14 @@ mod tests {
         let (jita, far) = (uni.exact("Jita").unwrap(), uni.exact("D-3GIQ").unwrap());
 
         // No signature penalty: the test proves the route exists, not that it is the cheapest.
-        let options = RouterOptions { filaments: false, unknown_sig_penalty: 0, ..Default::default() };
+        let options = RouterOptions { filaments: Stance::Block, unknown_sig_penalty: 0, ..Default::default() };
         let route = Router::new(&uni, options).routes(&[jita, far], 1).unwrap().remove(0);
         // In by a wormhole, across by the stargate, out by a wormhole.
         assert_eq!(route.jumps, 3);
         assert_eq!(route.wormholes, 2);
         assert!(!route.path.edges.iter().any(|&e| matches!(uni.graph[e], Link::Filament(_))));
         // The wormholes switch still gates the same route.
-        let no_wormholes = RouterOptions { wormholes: false, filaments: false, ..Default::default() };
+        let no_wormholes = RouterOptions { wormholes: false, filaments: Stance::Block, ..Default::default() };
         let direct = Router::new(&uni, no_wormholes).routes(&[jita, far], 1).unwrap().remove(0);
         assert!(direct.jumps > 3);
     }

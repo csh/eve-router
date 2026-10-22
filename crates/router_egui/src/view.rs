@@ -20,6 +20,7 @@ use router_core::sources::FetchError;
 use router_core::sources::nexum::MapInfo;
 use router_core::universe::{Link, display_sec};
 use router_core::wormhole::{ClosedHole, SourceId, age_text};
+use router_core::wormhole_space::Stance;
 use std::sync::mpsc::Receiver;
 use std::time::{Duration, Instant};
 
@@ -501,13 +502,14 @@ fn wormholes_toggle(ui: &mut Ui, s: &mut Session) {
 
 fn filaments_toggle(ui: &mut Ui, s: &mut Session) {
     // A filament jump ends in Pochven, so a blocked Pochven turns the toggle off, like a hull that cannot bridge.
+    // A click turns the stance: Allow, Avoid, Block, then Allow.
     let blocked = s.settings.pochven_blocked();
-    let state = if blocked { "off (not allowed)" } else { on_off(s.settings.filaments) };
-    let button = AppButton::new(format!("Filaments: {state}")).selected(s.settings.filaments && !blocked);
-    let tip = "Allow routes to use a filament into Pochven";
+    let state = if blocked { "off (not allowed)" } else { s.settings.filaments.state() };
+    let button = AppButton::new(format!("Filaments: {state}")).selected(s.settings.filaments != Stance::Block && !blocked);
+    let tip = "Allow routes to use a filament into Pochven. A click turns on, avoid and off. Avoid uses a filament only when a trip has no other way.";
     let response = ui.add_enabled(!blocked, button);
     if response.clicked() {
-        s.settings.filaments = !s.settings.filaments;
+        s.settings.filaments = s.settings.filaments.next();
         s.recompute();
         s.save();
     }
@@ -841,8 +843,8 @@ fn connections_panel(ui: &mut Ui, s: &Session) -> bool {
             for (label, count, on) in [
                 ("Nexum", sc.nexum, true),
                 ("EVE Metro", sc.metro, true),
-                ("Thera", sc.thera, settings.hubs.thera),
-                ("Turnur", sc.turnur, settings.hubs.turnur),
+                ("Thera", sc.thera, settings.hubs.thera != Stance::Block),
+                ("Turnur", sc.turnur, settings.hubs.turnur != Stance::Block),
             ] {
                 if count > 0 {
                     row(ui, label, count, settings.wormholes && on);

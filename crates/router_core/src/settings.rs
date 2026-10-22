@@ -5,7 +5,7 @@ use crate::config::{self, AvoidName, Config, ConfigError};
 use crate::route::{DEFAULT_CAP_WEIGHT, DEFAULT_UNKNOWN_SIG_PENALTY, JUMP, Mode, PENALTY, RouteError, Router, RouterOptions};
 use crate::universe::Universe;
 use crate::wormhole;
-use crate::wormhole_space::WormholeSpace;
+use crate::wormhole_space::{Stance, WormholeSpace};
 use petgraph::graph::NodeIndex;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -179,8 +179,8 @@ pub struct Settings {
     pub bridges: bool,
     pub rules: BridgeRules,
     pub costs: RouteCosts,
-    /// Whether a route can use a filament.
-    pub filaments: bool,
+    /// The stance for the filaments.
+    pub filaments: Stance,
     /// With `Pilot`, `follow` sets `rules.hull`.
     pub hull_source: HullSource,
     /// The minimum time (minutes) that a wormhole must have left. The router skips other wormholes.
@@ -228,7 +228,7 @@ impl Settings {
             bridges: cfg.bridges.unwrap_or(true),
             rules: BridgeRules { capital, hull, max_cap: cfg.max_cap_tj },
             costs: RouteCosts::from_config(cfg),
-            filaments: cfg.filaments.unwrap_or(true),
+            filaments: cfg.filaments.unwrap_or(Stance::Allow),
             hull_source: cfg.pilot.map_or(HullSource::Manual, HullSource::Pilot),
             min_life: cfg.min_life_min.unwrap_or(config::DEFAULT_MIN_LIFE_MIN),
             favourites,
@@ -239,7 +239,7 @@ impl Settings {
 
     /// True if Pochven is blocked. A filament jump ends in Pochven, so the filaments have no use then.
     pub fn pochven_blocked(&self) -> bool {
-        self.space.pochven == crate::wormhole_space::Stance::Block
+        self.space.pochven == Stance::Block
     }
 
     /// A router for the settings. `now` (Unix seconds) and `min_life` set which wormholes are usable.
@@ -515,20 +515,22 @@ mod tests {
     fn filaments_default_to_on_and_the_choice_round_trips() {
         let uni = overlay_universe();
         let mut s = settings(&uni, None);
-        assert!(Settings::from_config(&Config::default(), &uni, hulls()).0.filaments);
+        assert_eq!(Settings::from_config(&Config::default(), &uni, hulls()).0.filaments, Stance::Allow);
         assert!(!serde_json::to_string(&Config::default()).unwrap().contains("filaments"));
-        s.filaments = false;
-        let mut cfg = Config::default();
-        s.store(&uni, &mut cfg);
-        assert!(!Settings::from_config(&cfg, &uni, hulls()).0.filaments);
+        for stance in [Stance::Block, Stance::Avoid] {
+            s.filaments = stance;
+            let mut cfg = Config::default();
+            s.store(&uni, &mut cfg);
+            assert_eq!(Settings::from_config(&cfg, &uni, hulls()).0.filaments, stance);
+        }
     }
 
     /// A file from before the rename keeps its choice: the old key is `pochven`.
     #[test]
     fn the_old_pochven_key_sets_the_filaments_switch() {
         let uni = overlay_universe();
-        let cfg: Config = serde_json::from_str(r#"{"pochven": false}"#).unwrap();
-        assert!(!Settings::from_config(&cfg, &uni, hulls()).0.filaments);
+        let cfg = crate::config_migrate::parse(r#"{"pochven": false}"#).unwrap();
+        assert_eq!(Settings::from_config(&cfg, &uni, hulls()).0.filaments, Stance::Block);
     }
 
     #[test]

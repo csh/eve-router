@@ -1,0 +1,48 @@
+{
+  "capital": "JK-Q77",
+  "hull": "black-ops",
+  "pilot": 2112345678,
+  "max_cap_tj": 36.5,
+  "min_life_min": 30,
+  "favourites": [
+    "Jita"
+  ],
+  "mode": "prefer-highsec",
+  "optimize": true,
+  "top": 3,
+  "wormholes": false,
+  "bridges": true,
+  "cap_weight": 0.6,
+  "unknown_sig_penalty": 4.0,
+  "avoid_systems": [
+    {
+      "name": "Rens",
+      "never": true
+    }
+  ],
+  "avoid_regions": [
+    {
+      "name": "Lonetrek",
+      "never": false
+    }
+  ],
+  "nexum": {
+    "url": "https://nexum.example",
+    "key": "nxm_key",
+    "map_ids": [
+      "m1"
+    ],
+    "keep_unsigned": true
+  },
+  "eve_metro": {
+    "enabled": true,
+    "character": 2112345678
+  },
+  "eve_scout": {
+    "thera": false,
+    "turnur": true
+  },
+  "pochven": true,
+  "check_for_updates": false,
+  "auto_update": true
+}

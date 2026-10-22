@@ -323,13 +323,19 @@ fn expiry(c: &NexumConnection, ends: [u32; 2], types: &WormholeTypes, fetched_at
     earlier(base, status)
 }
 
+/// The signature row of a connection in the system `from`, when a scout linked it.
+fn linked_row<'a>(link: Option<&str>, from: &str, sigs: &'a SystemSigs) -> Option<&'a NexumSig> {
+    let link = link?;
+    sigs.get(from)?.iter().find(|s| s.id == link)
+}
+
 /// The signature of a connection in the system `from`. A linked signature row comes first.
 /// Else, the one wormhole signature in `from` whose `whLeadsTo` is the name of `to`.
 /// `single` is false when more connections join the same two systems: one name match
 /// cannot then tell which connection the signature belongs to.
 fn end_sig(link: Option<&str>, from: &str, to: Option<&str>, sigs: &SystemSigs, single: bool) -> Option<String> {
     let list = sigs.get(from)?;
-    if let Some(sig) = link.and_then(|link| list.iter().find(|s| s.id == link)) {
+    if let Some(sig) = linked_row(link, from, sigs) {
         return sig.sig_id.clone();
     }
     let to = to.filter(|_| single)?.trim();
@@ -372,7 +378,9 @@ pub fn convert(
         }
     }
 
-    let mut holes = Vec::new();
+    let mut holes: Vec<Wormhole> = Vec::new();
+    // The connections that link one signature row: the hole and its end.
+    let mut claims: HashMap<(&str, &str), Vec<(usize, u32)>> = HashMap::new();
     for c in map.connections.iter().filter(|c| c.connection_type == ConnectionType::Standard) {
         if c.broken {
             report.broken += 1;
@@ -406,6 +414,12 @@ pub fn convert(
         let single = pair_count.get(&(x.min(y), x.max(y))) == Some(&1);
         let source_sig = end_sig(c.source_signature_id.as_deref(), x, names.get(y).copied(), sigs, single);
         let target_sig = end_sig(c.target_signature_id.as_deref(), y, names.get(x).copied(), sigs, single);
+        // Note each end that a linked row gives, to find a row that more connections link.
+        for (link, system, eve_id) in [(c.source_signature_id.as_deref(), x, a), (c.target_signature_id.as_deref(), y, b)] {
+            if let Some(row) = linked_row(link, system, sigs) {
+                claims.entry((system, row.id.as_str())).or_default().push((holes.len(), eve_id));
+            }
+        }
         holes.push(Wormhole {
             size,
             max_jump_kg,
@@ -415,7 +429,23 @@ pub fn convert(
             ..Wormhole::new(a, b, source_sig, target_sig, SourceId::Nexum)
         });
     }
+    resolve_shared_rows(&mut holes, claims);
     (SourceData { source: SourceId::Nexum, fetched_at, origin: None, name: map.name.clone(), holes }, report)
+}
+
+/// A signature row leads to one wormhole only, so when more connections link the same row, at most
+/// one of them is right. The one with a wormhole type (for example K162) keeps the signature. If
+/// no connection or more than one has a type, none keeps it: the router shows no signature, not a
+/// wrong one.
+fn resolve_shared_rows(holes: &mut [Wormhole], claims: HashMap<(&str, &str), Vec<(usize, u32)>>) {
+    for claimants in claims.into_values().filter(|c| c.len() > 1) {
+        let typed: Vec<usize> = claimants.iter().filter(|(i, _)| holes[*i].wh_type.is_some()).map(|(i, _)| *i).collect();
+        let winner = if let [only] = typed.as_slice() { Some(*only) } else { None };
+        for (i, eve_id) in claimants.into_iter().filter(|(i, _)| Some(*i) != winner) {
+            let hole = &mut holes[i];
+            if hole.a == eve_id { hole.sig_a = None } else { hole.sig_b = None }
+        }
+    }
 }
 
 /// The wormhole data of the Nexum source, for the startup and the sidebar.
@@ -650,6 +680,64 @@ mod tests {
         assert_eq!(pairs, [(None, None), (None, None)]);
     }
 
+    /// Sentinel MZ (31000001) with three connections that link one signature row, as the Nexum map
+    /// of the Scanning Project did. Access has a K162. Crielere and Onatoh have no type. `created`
+    /// is the creation time of the two old connections, in seconds before `FETCHED`.
+    fn shared_row_map(created_ago: u64, extra_type: Option<&str>) -> (NexumMap, SystemSigs) {
+        let iso = |ago: u64| chrono::DateTime::from_timestamp((FETCHED - ago) as i64, 0).unwrap().to_rfc3339();
+        let old = |id: &str, kind: Option<&str>| {
+            serde_json::json!({
+                "sourceId": "s-sentinel", "targetId": id, "connectionType": "standard", "type": kind,
+                "timeStatus": "lessThan24h", "lifetimeExpiresAt": iso(0).replace("12:00:00", "23:00:00"),
+                "createdAt": iso(created_ago), "sourceSignatureId": "row-cth"
+            })
+        };
+        let map = serde_json::json!({
+            "systems": [
+                {"id": "s-sentinel", "eveSystemId": 31000001, "name": "Sentinel MZ"},
+                {"id": "s-access", "eveSystemId": 30005266, "name": "Access"},
+                {"id": "s-crielere", "eveSystemId": 30002691, "name": "Crielere"},
+                {"id": "s-onatoh", "eveSystemId": 30002811, "name": "Onatoh"}
+            ],
+            "connections": [
+                {"sourceId": "s-sentinel", "targetId": "s-access", "connectionType": "standard", "type": "K162",
+                 "timeStatus": "fresh", "createdAt": iso(3600), "sourceSignatureId": "row-cth"},
+                old("s-crielere", extra_type),
+                old("s-onatoh", None)
+            ]
+        });
+        let sigs = serde_json::json!({"s-sentinel": [{"id": "row-cth", "sigId": "CTH-048", "sigType": "wormhole", "whLeadsTo": "Access"}]});
+        (serde_json::from_value(map).unwrap(), serde_json::from_value(sigs).unwrap())
+    }
+
+    fn sentinel_holes(map: &NexumMap, sigs: &SystemSigs) -> Vec<(u32, Option<String>)> {
+        let (data, _) = convert(map, sigs, |_| true, &types(), FETCHED);
+        let mut holes: Vec<_> = data.holes.iter().map(|h| (h.a.min(h.b), h.sig_at(31000001))).collect();
+        holes.sort();
+        holes
+    }
+
+    /// Two live connections link one row. The one with a wormhole type keeps the signature.
+    #[test]
+    fn the_typed_connection_keeps_a_shared_signature() {
+        // Access is the only one with a type.
+        let (map, sigs) = shared_row_map(3600, None);
+        let holes = sentinel_holes(&map, &sigs);
+        assert_eq!(holes, [(30002691, None), (30002811, None), (30005266, Some("CTH".to_string()))]);
+    }
+
+    /// With two typed connections, or none, the converter cannot tell. No connection keeps it.
+    #[test]
+    fn no_typed_winner_means_no_signature() {
+        let (map, sigs) = shared_row_map(3600, Some("K162"));
+        let holes = sentinel_holes(&map, &sigs);
+        assert!(holes.iter().all(|(_, sig)| sig.is_none()), "{holes:?}");
+        let (mut map, sigs) = shared_row_map(3600, None);
+        map.connections[0].wh_type = None;
+        let holes = sentinel_holes(&map, &sigs);
+        assert!(holes.iter().all(|(_, sig)| sig.is_none()), "{holes:?}");
+    }
+
     #[test]
     fn empty_type_is_no_type() {
         // The API gives an empty text for a type that a scout did not set.
@@ -819,7 +907,13 @@ mod tests {
     use std::time::Duration;
 
     fn cfg(url: &str) -> NexumConfig {
-        NexumConfig { url: Some(url.into()), key: Some(ApiKey("nxm_test".into())), map_ids: vec!["m1".into()], keep_unsigned: true }
+        NexumConfig {
+            url: Some(url.into()),
+            key: Some(ApiKey("nxm_test".into())),
+            map_ids: vec!["m1".into()],
+            keep_unsigned: true,
+            ..Default::default()
+        }
     }
 
     /// The map URL of `cfg("http://127.0.0.1:9")`.

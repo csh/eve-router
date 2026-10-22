@@ -1,6 +1,7 @@
 //! The shared wormhole record. Each source converts its data to this record.
 //! The router reads only this record, never the raw format of a source.
 
+use crate::wormhole_space::Stance;
 use crate::wormhole_types::WhCode;
 use chrono::{DateTime, Local, TimeZone};
 use serde::{Deserialize, Serialize};
@@ -182,26 +183,37 @@ pub const THERA: u32 = 31000005;
 /// Turnur, the wormhole hub in lowsec. It has stargates.
 pub const TURNUR: u32 = 30002086;
 
-/// The switches of the wormhole hubs. Each hub has a different risk, so each has its own switch.
-/// A switch acts on each wormhole with an end in the hub, from all sources. Gates stay open.
+/// The stances of the wormhole hubs. Each hub has a different risk, so each has its own stance.
+/// A stance acts on each wormhole with an end in the hub, from all sources. Gates stay open.
+/// A file of an old version holds `true` or `false` for a hub, and they read as Allow and Block.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct Hubs {
-    pub thera: bool,
-    pub turnur: bool,
+    #[serde(with = "crate::wormhole_space::switch")]
+    pub thera: Stance,
+    #[serde(with = "crate::wormhole_space::switch")]
+    pub turnur: Stance,
 }
 
 impl Default for Hubs {
     fn default() -> Self {
-        Hubs { thera: true, turnur: true }
+        Hubs { thera: Stance::Allow, turnur: Stance::Allow }
     }
 }
 
 impl Hubs {
-    /// False if the wormhole has an end in a hub that is off.
-    pub fn allows(self, w: &Wormhole) -> bool {
+    /// The stance for a wormhole: the strictest stance of the hubs at its two ends.
+    pub fn stance(self, w: &Wormhole) -> Stance {
         let ends_in = |id| w.a == id || w.b == id;
-        (self.thera || !ends_in(THERA)) && (self.turnur || !ends_in(TURNUR))
+        let at = |id, stance| if ends_in(id) { stance } else { Stance::Allow };
+        let (thera, turnur) = (at(THERA, self.thera), at(TURNUR, self.turnur));
+        if thera == Stance::Block || turnur == Stance::Block {
+            Stance::Block
+        } else if thera == Stance::Avoid || turnur == Stance::Avoid {
+            Stance::Avoid
+        } else {
+            Stance::Allow
+        }
     }
 }
 
@@ -435,17 +447,23 @@ pub mod tests {
     use crate::test_support::hole;
 
     #[test]
-    fn hubs_allow_by_end() {
+    fn hubs_give_a_stance_by_end() {
+        use Stance::{Allow, Avoid, Block};
         let all = Hubs::default();
-        assert_eq!(all, Hubs { thera: true, turnur: true });
-        let no_thera = Hubs { thera: false, ..all };
-        let no_turnur = Hubs { turnur: false, ..all };
+        assert_eq!(all, Hubs { thera: Allow, turnur: Allow });
+        let no_thera = Hubs { thera: Block, ..all };
+        let no_turnur = Hubs { turnur: Block, ..all };
         // Jita to Thera, Turnur to Thera, and Jita to Amarr.
         let (to_thera, both, other) = (hole(30000142, THERA), hole(TURNUR, THERA), hole(30000142, 30002187));
-        assert!(all.allows(&to_thera) && all.allows(&both));
-        assert!(!no_thera.allows(&to_thera) && !no_thera.allows(&both));
-        assert!(no_turnur.allows(&to_thera) && !no_turnur.allows(&both));
-        assert!(no_thera.allows(&other) && no_turnur.allows(&other));
+        assert!(all.stance(&to_thera) == Allow && all.stance(&both) == Allow);
+        assert!(no_thera.stance(&to_thera) == Block && no_thera.stance(&both) == Block);
+        assert!(no_turnur.stance(&to_thera) == Allow && no_turnur.stance(&both) == Block);
+        assert!(no_thera.stance(&other) == Allow && no_turnur.stance(&other) == Allow);
+        // The strictest stance of the two ends wins: Block over Avoid over Allow.
+        let avoid_thera = Hubs { thera: Avoid, ..all };
+        assert_eq!((avoid_thera.stance(&to_thera), avoid_thera.stance(&other)), (Avoid, Allow));
+        assert_eq!(Hubs { thera: Avoid, turnur: Block }.stance(&both), Block);
+        assert_eq!(Hubs { thera: Block, turnur: Avoid }.stance(&both), Block);
     }
 
     /// A wormhole between Jita and Amarr with the signature letters at each end.

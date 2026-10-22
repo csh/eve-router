@@ -29,6 +29,77 @@ impl Stance {
             Stance::Block => "Block",
         }
     }
+
+    /// The word of a switch that shows the stance, for example "Filaments: avoid".
+    pub fn state(self) -> &'static str {
+        match self {
+            Stance::Allow => "on",
+            Stance::Avoid => "avoid",
+            Stance::Block => "off",
+        }
+    }
+
+    /// The next stance of a switch that a click turns: Allow, Avoid, Block, then Allow.
+    pub fn next(self) -> Stance {
+        match self {
+            Stance::Allow => Stance::Avoid,
+            Stance::Avoid => Stance::Block,
+            Stance::Block => Stance::Allow,
+        }
+    }
+}
+
+/// The file form of a stance that used to be a switch. An old file holds `true` or `false`. Both
+/// read as Allow and Block. A new file writes `true` and `false` for those two, so an old version
+/// still reads it, and the word "avoid" for Avoid. Use it with `#[serde(with = "...::switch")]`.
+pub mod switch {
+    use super::Stance;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    #[derive(Serialize, Deserialize)]
+    #[serde(untagged)]
+    enum File {
+        Switch(bool),
+        Word(Stance),
+    }
+
+    fn to_file(stance: Stance) -> File {
+        match stance {
+            Stance::Allow => File::Switch(true),
+            Stance::Block => File::Switch(false),
+            Stance::Avoid => File::Word(Stance::Avoid),
+        }
+    }
+
+    fn from_file(file: File) -> Stance {
+        match file {
+            File::Switch(true) => Stance::Allow,
+            File::Switch(false) => Stance::Block,
+            File::Word(stance) => stance,
+        }
+    }
+
+    pub fn serialize<S: Serializer>(stance: &Stance, ser: S) -> Result<S::Ok, S::Error> {
+        to_file(*stance).serialize(ser)
+    }
+
+    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Stance, D::Error> {
+        File::deserialize(de).map(from_file)
+    }
+
+    /// The same for an `Option` field: `None` stays a missing value.
+    pub mod option {
+        use super::{File, Stance, from_file, to_file};
+        use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+        pub fn serialize<S: Serializer>(stance: &Option<Stance>, ser: S) -> Result<S::Ok, S::Error> {
+            stance.map(to_file).serialize(ser)
+        }
+
+        pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<Option<Stance>, D::Error> {
+            Ok(Option::<File>::deserialize(de)?.map(from_file))
+        }
+    }
 }
 
 /// The class that the SDE gives to the systems of Pochven.
@@ -282,7 +353,7 @@ mod tests {
         let target = uni.graph.edges(hub).next().unwrap().target();
         let jita = uni.exact("Jita").unwrap();
         let mut s = settings(uni, None);
-        s.filaments = true;
+        s.filaments = Stance::Allow;
         let found = |s: &crate::settings::Settings| s.router(uni, FIXTURE_TIME).routes(&[jita, target], 1);
         assert!(found(&s).is_ok());
         s.space.set(Group::Pochven, Stance::Avoid);
@@ -304,6 +375,33 @@ mod tests {
         assert!(space.blocks(true) && !space.blocks(false));
         space.set(Group::Pochven, Stance::Block);
         assert!(space.blocks(false));
+    }
+
+    /// A switch of an old file reads as Allow or Block. A new file keeps `true` and `false`.
+    #[test]
+    fn a_switch_file_form_reads_old_and_new_text() {
+        #[derive(Debug, PartialEq, Serialize, Deserialize)]
+        struct Holder {
+            #[serde(with = "switch")]
+            hub: Stance,
+            #[serde(default, with = "switch::option", skip_serializing_if = "Option::is_none")]
+            maybe: Option<Stance>,
+        }
+        let read = |text: &str| serde_json::from_str::<Holder>(text).unwrap();
+        assert_eq!(read(r#"{"hub": true}"#), Holder { hub: Stance::Allow, maybe: None });
+        assert_eq!(read(r#"{"hub": false, "maybe": true}"#), Holder { hub: Stance::Block, maybe: Some(Stance::Allow) });
+        assert_eq!(read(r#"{"hub": "avoid", "maybe": "block"}"#), Holder { hub: Stance::Avoid, maybe: Some(Stance::Block) });
+        assert!(serde_json::from_str::<Holder>(r#"{"hub": 3}"#).is_err());
+        let text = |hub, maybe| serde_json::to_string(&Holder { hub, maybe }).unwrap();
+        assert_eq!(text(Stance::Allow, None), r#"{"hub":true}"#);
+        assert_eq!(text(Stance::Block, Some(Stance::Allow)), r#"{"hub":false,"maybe":true}"#);
+        assert_eq!(text(Stance::Avoid, Some(Stance::Avoid)), r#"{"hub":"avoid","maybe":"avoid"}"#);
+    }
+
+    #[test]
+    fn a_click_turns_the_stance_in_a_ring() {
+        assert_eq!(Stance::Allow.next().next().next(), Stance::Allow);
+        assert_eq!(Stance::ALL.map(Stance::state), ["on", "avoid", "off"]);
     }
 
     #[test]

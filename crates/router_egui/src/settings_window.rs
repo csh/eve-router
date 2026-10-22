@@ -811,9 +811,8 @@ fn nexum_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: boo
                 if let Some(key) = &s.cfg.nexum.key {
                     ui.label(RichText::new(key.masked()).color(theme::TEXT));
                     if ui.app_button("Clear").clicked() {
-                        s.cfg.nexum.key = None;
                         form.maps_stale(s);
-                        s.nexum_saved();
+                        s.set_nexum_key(None);
                     }
                 } else {
                     ui.add(
@@ -823,10 +822,10 @@ fn nexum_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: boo
                             .desired_width(field),
                     );
                     if ui.add_enabled(!form.key.trim().is_empty(), AppButton::new("Save").primary()).clicked() {
-                        s.cfg.nexum.key = Some(ApiKey(form.key.trim().to_string()));
+                        let key = ApiKey(form.key.trim().to_string());
                         form.key.clear();
                         form.maps_stale(s);
-                        s.nexum_saved();
+                        s.set_nexum_key(Some(key));
                         form.saved = Some((Saved::Key, Instant::now()));
                     }
                 }
@@ -871,23 +870,35 @@ fn space_group(ui: &mut Ui, s: &mut Session, locked: bool) {
     );
     ui.add_space(4.0);
     let mut changed = false;
+    let wormholes = s.settings.wormholes;
+    let pochven_blocked = s.settings.pochven_blocked();
     egui::Grid::new("settings-space").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        for g in Group::ALL {
-            label(ui, &g.label());
-            let on = s.settings.wormholes || !g.is_wormhole();
-            let row = ui.add_enabled_ui(!locked && on, |ui| {
-                ui.horizontal(|ui| {
-                    let current = s.settings.space.get(g);
-                    for stance in Stance::ALL {
-                        if ui.add(AppButton::new(stance.label()).selected(current == stance)).clicked() && current != stance {
-                            s.settings.space.set(g, stance);
-                            changed = true;
-                        }
-                    }
-                })
-            });
-            row.response.on_disabled_hover_text(disabled_text(locked, WORMHOLES_OFF));
-            ui.end_row();
+        // Pochven, the filaments and the Drifter systems come first.
+        if let Some(stance) = stance_row(ui, "Pochven", s.settings.space.pochven, true, locked, WORMHOLES_OFF, "") {
+            s.settings.space.set(Group::Pochven, stance);
+            changed = true;
+        }
+        let hint = "Filaments transport one or more pilots to a random system within Pochven, routing assumes an average number of jumps.";
+        if let Some(stance) = stance_row(ui, "Filaments", s.settings.filaments, !pochven_blocked, locked, POCHVEN_OFF, hint) {
+            s.settings.filaments = stance;
+            changed = true;
+        }
+        if let Some(stance) = stance_row(ui, "Drifter", s.settings.space.get(Group::Drifter), wormholes, locked, WORMHOLES_OFF, "") {
+            s.settings.space.set(Group::Drifter, stance);
+            changed = true;
+        }
+        // The hubs: a stance for Thera and Turnur. A hub stance covers the wormholes with an end in the hub.
+        for (name, stance) in [("Thera", &mut s.settings.hubs.thera), ("Turnur", &mut s.settings.hubs.turnur)] {
+            if let Some(picked) = stance_row(ui, name, *stance, wormholes, locked, WORMHOLES_OFF, "") {
+                *stance = picked;
+                changed = true;
+            }
+        }
+        for g in Group::ALL.into_iter().filter(|g| matches!(g, Group::Class(_))) {
+            if let Some(stance) = stance_row(ui, &g.label(), s.settings.space.get(g), wormholes, locked, WORMHOLES_OFF, "") {
+                s.settings.space.set(g, stance);
+                changed = true;
+            }
         }
     });
     if changed {
@@ -896,39 +907,30 @@ fn space_group(ui: &mut Ui, s: &mut Session, locked: bool) {
     }
 }
 
-/// The Hubs group of the Engine page: the switches for Thera, Turnur and the filaments. They act
-/// at route time. The two hubs are wormhole links, so the Wormholes switch turns them off. A
-/// filament jump ends in Pochven, so a blocked Pochven turns the filaments off.
-fn hubs_group(ui: &mut Ui, s: &mut Session, locked: bool) {
-    group(ui, "Hubs");
-    let mut changed = false;
-    egui::Grid::new("settings-hubs").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
-        let wormholes = s.settings.wormholes;
-        for (name, on) in [("Allow travel via Thera", &mut s.settings.hubs.thera), ("Allow travel via Turnur", &mut s.settings.hubs.turnur)]
-        {
-            label(ui, name);
-            let row = ui.add_enabled_ui(!locked && wormholes, |ui| ui.app_checkbox(on, "").changed());
-            changed |= row.inner;
-            row.response.on_disabled_hover_text(disabled_text(locked, WORMHOLES_OFF));
-            ui.end_row();
-        }
-        label(ui, "Allow travel via Filaments");
-        let open = !s.settings.pochven_blocked();
-        let row = ui.add_enabled_ui(!locked && open, |ui| {
-            ui.app_checkbox(&mut s.settings.filaments, "")
-                .on_hover_text(
-                    "Filaments transport one or more pilots to a random system within Pochven, routing assumes an average number of jumps.",
-                )
-                .changed()
-        });
-        changed |= row.inner;
-        row.response.on_disabled_hover_text(disabled_text(locked, POCHVEN_OFF));
-        ui.end_row();
-    });
-    if changed {
-        s.recompute();
-        s.save();
+/// One row of the Space access group: a name, then the stance buttons. Return the stance that a click picked.
+fn stance_row(ui: &mut Ui, name: &str, current: Stance, on: bool, locked: bool, off: &'static str, hint: &str) -> Option<Stance> {
+    let text = ui.label(RichText::new(name).color(theme::TEXT_DIM));
+    if !hint.is_empty() {
+        text.on_hover_text(hint);
     }
+    let row = ui.add_enabled_ui(!locked && on, |ui| stance_buttons(ui, current));
+    row.response.on_disabled_hover_text(disabled_text(locked, off));
+    ui.end_row();
+    row.inner
+}
+
+/// The three buttons of a stance, with the current one marked. Return the stance that a click picked.
+fn stance_buttons(ui: &mut Ui, current: Stance) -> Option<Stance> {
+    ui.horizontal(|ui| {
+        let mut picked = None;
+        for stance in Stance::ALL {
+            if ui.add(AppButton::new(stance.label()).selected(current == stance)).clicked() && current != stance {
+                picked = Some(stance);
+            }
+        }
+        picked
+    })
+    .inner
 }
 
 /// The Nexum maps, in a table with a checkbox for each. The router reads the maps that are on.
@@ -1504,8 +1506,6 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
     });
     ui.add_space(14.0);
     space_group(ui, s, locked);
-    ui.add_space(14.0);
-    hubs_group(ui, s, locked);
 }
 
 /// A text area for a list of systems. Return true when the window closes.
@@ -1726,7 +1726,7 @@ mod tests {
         draw(&mut s, false);
         // Drawing changes no setting.
         assert_eq!(s.cfg.eve_metro.character, Some(99));
-        assert!(!s.settings.filaments);
+        assert_eq!(s.settings.filaments, Stance::Block);
     }
 
     #[test]
@@ -1743,20 +1743,17 @@ mod tests {
     }
 
     #[test]
-    fn the_hubs_group_draws_in_every_state_and_changes_nothing() {
+    fn the_hubs_and_filaments_draw_in_space_access_in_every_state() {
         let (mut s, _tmp) = session_with_pilots();
         let ctx = egui::Context::default();
         theme::apply_default(&ctx);
         theme::set_font(&ctx);
         let draw = |s: &mut Session, locked: bool| {
-            let mut output = ctx.run_ui(Default::default(), |ui| {
-                space_group(ui, s, locked);
-                hubs_group(ui, s, locked);
-            });
+            let mut output = ctx.run_ui(Default::default(), |ui| space_group(ui, s, locked));
             output.textures_delta.clear();
         };
-        s.settings.filaments = true;
-        s.settings.hubs.thera = true;
+        s.settings.filaments = Stance::Avoid;
+        s.settings.hubs.thera = Stance::Avoid;
         draw(&mut s, false);
         // Wormholes off turns off the hubs and the wormhole rows. A blocked Pochven turns off the filaments.
         s.settings.wormholes = false;
@@ -1764,7 +1761,7 @@ mod tests {
         draw(&mut s, false);
         draw(&mut s, true);
         // The saved choices stay.
-        assert!(s.settings.filaments && s.settings.hubs.thera);
+        assert_eq!((s.settings.filaments, s.settings.hubs.thera), (Stance::Avoid, Stance::Avoid));
         assert_eq!(s.settings.space.pochven, Stance::Block);
         assert!(s.settings.pochven_blocked());
     }

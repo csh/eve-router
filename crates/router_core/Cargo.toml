@@ -23,6 +23,7 @@ dirs = "7.0.0"
 flate2 = "1.1.10"
 httpdate = "1.0.3"
 keyring = "4.2.0"
+magic_migrate = "2.0.0"
 oauth2 = { version = "5.0.0", default-features = false }
 petgraph.workspace = true
 rayon.workspace = true

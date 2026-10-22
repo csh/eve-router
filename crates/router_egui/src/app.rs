@@ -5,7 +5,7 @@ use crate::notice::{Level, Notice};
 use crate::theme;
 use crate::view::View;
 use petgraph::graph::NodeIndex;
-use router_core::config::{AppPaths, Config, EveMetroConfig};
+use router_core::config::{ApiKey, AppPaths, Config, EveMetroConfig};
 use router_core::error::FileError;
 use router_core::esi::client::Affiliation;
 use router_core::esi::pilots::Pilots;
@@ -13,6 +13,7 @@ use router_core::esi::store::{Keyring, StoreError, TokenStore};
 use router_core::esi::{self, active::active_path};
 use router_core::labels::Shortcuts;
 use router_core::log::{self, LogEntry, LogEntryKind, LogOp};
+use router_core::nexum_key::{self, KeyStore, KeyringKey};
 use router_core::overlay::{self, OverlayReport, Pair};
 use router_core::refresh::{self, Refresher, RouteChange, Setup, Snapshot, kept_route, route_change};
 use router_core::route::{Route, Stop};
@@ -165,6 +166,11 @@ fn keyring() -> Result<Box<dyn TokenStore>, StoreError> {
     Keyring::open().map(|keyring| Box::new(keyring) as Box<dyn TokenStore>)
 }
 
+/// The OS keyring as the Nexum key store, or the reason why there is none.
+fn key_keyring() -> Result<Box<dyn KeyStore>, StoreError> {
+    KeyringKey::open().map(|keyring| Box::new(keyring) as Box<dyn KeyStore>)
+}
+
 /// True if the env var is "1".
 fn env_flag(name: &str) -> bool {
     std::env::var(name).as_deref() == Ok("1")
@@ -237,11 +243,14 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     // A damaged config file moves aside, and the start goes on with the defaults.
     let (mut cfg, damaged) = Config::load_recovering(&paths.config)?;
     // The EVE Metro key comes from the build or the env var, never from the file.
-    cfg.eve_metro.key = evemetro::api_key().map(router_core::config::ApiKey);
+    cfg.eve_metro.key = evemetro::api_key().map(ApiKey);
     let mut warnings = Vec::new();
     if let Some(bad) = damaged {
         warnings.push(format!("The config file was damaged. It is now {}, and the defaults are in use.", bad.display()));
     }
+    // The Nexum key lives in the keyring. A key in an old file moves there now.
+    let key_store = key_keyring();
+    warnings.extend(nexum_key::unlock(&mut cfg, &paths.config, key_store.as_deref()));
     // Each step wakes the window, so the splash screen shows it.
     let progress = |step| {
         let _ = tx.send(LoadMsg::Progress(step));
@@ -301,6 +310,7 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     session.bridges = pairs;
     session.log = log;
     session.refresher = Some(refresher);
+    session.key_store = key_store.ok();
     for line in startup_lines {
         session.notify(Level::Info, line);
     }
@@ -325,6 +335,8 @@ pub struct Session {
     pub settings: Settings,
     pub cfg: Config,
     cfg_path: PathBuf,
+    /// The keyring for the Nexum key. `None` without a keyring: the key then stays in memory.
+    key_store: Option<Box<dyn KeyStore>>,
     pub shortcuts: Shortcuts,
     /// The wormhole data of each source, from the startup or the last refresh.
     pub wormhole_data: Vec<SourceData>,
@@ -379,6 +391,7 @@ impl Session {
             settings,
             cfg,
             cfg_path: cfg_path.clone(),
+            key_store: None,
             shortcuts,
             wormhole_data: Vec::new(),
             bridges: Vec::new(),
@@ -817,6 +830,29 @@ impl Session {
         if let Err(e) = self.write_config() {
             self.notify(Level::Error, e.to_string());
         }
+    }
+
+    /// Set or clear the Nexum key, and save. The keyring holds the key. Without a keyring the key
+    /// stays in memory and goes at exit. The file never holds a key that the user enters.
+    pub fn set_nexum_key(&mut self, key: Option<ApiKey>) {
+        self.cfg.nexum.key = key.clone();
+        self.cfg.nexum.key_in_file = false;
+        let result = match (&self.key_store, &key) {
+            (Some(store), Some(key)) => store.set(key),
+            (Some(store), None) => store.delete(),
+            (None, _) => Ok(()),
+        };
+        match result {
+            Err(e) => self.notify(
+                Level::Warning,
+                format!("The Nexum key is not in the system keyring ({e}). It stays in memory until the app closes."),
+            ),
+            Ok(()) if self.key_store.is_none() && key.is_some() => {
+                self.notify(Level::Warning, "No system keyring. The Nexum key stays in memory until the app closes.");
+            }
+            Ok(()) => {}
+        }
+        self.nexum_saved();
     }
 
     /// Save the config after a change to a Nexum value. The refresh worker loads the new map at once.
