@@ -6,8 +6,9 @@ use crate::universe::{System, Universe};
 use crate::wormhole_types::DRIFTER_SYSTEMS;
 use serde::{Deserialize, Serialize};
 
-/// What a route does with a group of systems.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+/// What a route does with a group of systems. The order runs from mild to strict, so `max` of two
+/// stances is the strictest.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Stance {
     /// The route uses the systems like any other system.

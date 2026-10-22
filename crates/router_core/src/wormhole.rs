@@ -206,14 +206,7 @@ impl Hubs {
     pub fn stance(self, w: &Wormhole) -> Stance {
         let ends_in = |id| w.a == id || w.b == id;
         let at = |id, stance| if ends_in(id) { stance } else { Stance::Allow };
-        let (thera, turnur) = (at(THERA, self.thera), at(TURNUR, self.turnur));
-        if thera == Stance::Block || turnur == Stance::Block {
-            Stance::Block
-        } else if thera == Stance::Avoid || turnur == Stance::Avoid {
-            Stance::Avoid
-        } else {
-            Stance::Allow
-        }
+        at(THERA, self.thera).max(at(TURNUR, self.turnur))
     }
 }
 

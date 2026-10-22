@@ -1,7 +1,7 @@
 //! The modal windows: the settings, the Pilot picker, the Nexum map list and the messages.
 
 use crate::app::Session;
-use crate::app_update::Manual;
+use crate::app_update::{Manual, Progress};
 use crate::overlay::Overlay;
 use crate::pilots_view::{Portraits, pilot_portrait};
 use crate::search::SearchBox;
@@ -718,7 +718,7 @@ fn updates_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
             Manual::Current => _ = ui.label(dim("None. You have the latest version.")),
             Manual::Found(available) => _ = ui.label(RichText::new(&available.version).family(theme::bold()).color(theme::accent(ui))),
             Manual::Installing { progress, .. } => {
-                let text = progress.as_ref().map_or_else(|| "Installing the update…".to_string(), |p| p.text());
+                let text = progress.as_ref().map_or_else(|| "Installing the update…".to_string(), Progress::text);
                 ui.horizontal(|ui| {
                     ui.add(egui::Spinner::new());
                     ui.label(dim(&text));
@@ -744,7 +744,7 @@ fn updates_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
                     form.update.start_install(ui.ctx());
                 }
             }
-            Manual::Installing { progress, .. } => match progress.as_ref().and_then(|p| p.fraction()) {
+            Manual::Installing { progress, .. } => match progress.as_ref().and_then(Progress::fraction) {
                 Some(fraction) => _ = ui.add(egui::ProgressBar::new(fraction).fill(theme::accent(ui)).desired_width(240.0)),
                 None => _ = ui.label(""),
             },

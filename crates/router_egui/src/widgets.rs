@@ -189,6 +189,7 @@ impl Widget for AppStepSlider<'_> {
         if enabled {
             if let Some(p) = response.interact_pointer_pos() {
                 let t = ((p.x - rect.left() - SLIDER_HANDLE / 2.0) / run).clamp(0.0, 1.0);
+                // `t` is in 0..=1, so the product is in 0..=max and the cast cannot lose a value.
                 *self.pos = (t * max as f32).round() as u32;
             }
             if response.has_focus() {
@@ -363,6 +364,6 @@ mod tests {
         frame(&ctx, &mut pos, vec![key(egui::Key::ArrowRight)], false);
         frame(&ctx, &mut pos, vec![key(egui::Key::ArrowRight)], false);
         assert_eq!(pos, 5);
-        assert_eq!(ctx.memory(|m| m.focused()), slider_id);
+        assert_eq!(ctx.memory(egui::Memory::focused), slider_id);
     }
 }

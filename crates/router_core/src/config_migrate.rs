@@ -36,7 +36,7 @@ pub fn parse(text: &str) -> Result<Config, serde_json::Error> {
 
 /// `magic_migrate` gives each step the text. A text that is not JSON becomes `null`, which no
 /// struct accepts, so the chain ends with `None` and `parse` reports the real error.
-fn deserializer<'de>(input: &'de str) -> impl serde::de::Deserializer<'de> {
+fn deserializer(input: &str) -> impl serde::de::Deserializer<'_> {
     serde_json::from_str::<serde_json::Value>(input).unwrap_or(serde_json::Value::Null)
 }
 
