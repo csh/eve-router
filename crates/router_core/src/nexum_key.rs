@@ -92,6 +92,7 @@ pub fn unlock(cfg: &mut Config, cfg_path: &Path, store: Result<&dyn KeyStore, &S
     match (cfg.nexum.key.clone().filter(|_| cfg.nexum.key_in_file), store) {
         (Some(key), Ok(store)) => match store.set(&key) {
             Ok(()) => {
+                tracing::info!("The Nexum key moved from the config file to the system keyring.");
                 cfg.nexum.key_in_file = false;
                 if let Err(e) = cfg.save(cfg_path) {
                     // The key is in the keyring. The old file still holds it, and the next save removes it.

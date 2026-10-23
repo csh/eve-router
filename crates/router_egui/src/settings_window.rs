@@ -1483,7 +1483,7 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
         .on_disabled_hover_text(LOCKED);
         ui.end_row();
         // The soft costs of a route: the bridge capacitor and the unknown wormhole signature.
-        label(ui, "Bridge capacitor cost");
+        label(ui, "Ansiblex capacitor cost");
         ui.add_enabled_ui(!locked, |ui| {
             // The same kind of slider as the lifetime below. See `cost_scale`.
             let scale = cost_scale::CAP;
@@ -1491,7 +1491,7 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
             ui.horizontal(|ui| {
                 let text = format!("{} per 1% of capacitor used", cost_scale::label(scale.at(pos)));
                 let slider = AppStepSlider::new(&mut pos, scale.max_pos, "Bridge capacitor cost", text.clone()).width(ENGINE_SLIDER);
-                let hover = "Raise this to make routes avoid bridge jumps that use much gate capacitor. At 0.5, a jump that uses 20% counts as 10 extra jumps.";
+                let hover = "Raise this to make routes avoid bridges that would use too much capacitor. At 0.5, a jump that uses 20% counts as 10 extra jumps for route solving.";
                 if ui.add(slider).on_hover_text(hover).changed() {
                     s.settings.costs.cap_weight = scale.at(pos);
                     s.apply_later(Instant::now());
@@ -1509,7 +1509,7 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
             ui.horizontal(|ui| {
                 let text = cost_scale::label(scale.at(pos));
                 let slider = AppStepSlider::new(&mut pos, scale.max_pos, "Unknown signature cost", text.clone()).width(ENGINE_SLIDER);
-                let hover = "A wormhole with no known signature costs this much extra, for the scan";
+                let hover = "A wormhole with no known signature is treated as costing this many extra jumps.";
                 if ui.add(slider).on_hover_text(hover).changed() {
                     s.settings.costs.unknown_sig_penalty = scale.at(pos);
                     s.apply_later(Instant::now());
