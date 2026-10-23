@@ -4,6 +4,7 @@
 pub mod ansiblex;
 pub mod config;
 pub mod config_migrate;
+pub mod cost_scale;
 pub mod error;
 pub mod esi;
 pub mod labels;

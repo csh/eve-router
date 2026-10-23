@@ -175,6 +175,12 @@ impl<'a> AppStepSlider<'a> {
     pub fn new(pos: &'a mut u32, max: u32, name: impl Into<String>, text: impl Into<String>) -> Self {
         AppStepSlider { pos, max, width: 200.0, text: text.into(), name: name.into() }
     }
+
+    /// The width of the track and the handle, in points. The default is 200.
+    pub fn width(mut self, width: f32) -> Self {
+        self.width = width;
+        self
+    }
 }
 
 impl Widget for AppStepSlider<'_> {

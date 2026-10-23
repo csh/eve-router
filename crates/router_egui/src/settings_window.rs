@@ -12,10 +12,11 @@ use egui::{Button, Color32, Frame, Id, Key, Margin, Modal, RichText, ScrollArea,
 use egui_phosphor_icons::icons;
 use router_core::ansiblex::HullClass;
 use router_core::config::{self, ApiKey};
+use router_core::cost_scale;
 use router_core::esi::pilots::{PilotRow, PilotView};
 use router_core::labels::ship_text;
 use router_core::life_scale;
-use router_core::settings::{HullSource, RouteCosts, parse_max_cap};
+use router_core::settings::{HullSource, parse_max_cap};
 use router_core::sources::{
     self,
     nexum::{self, MapInfo},
@@ -519,7 +520,7 @@ fn settings(
     overlay: &mut Overlay,
 ) -> Option<Action> {
     let mut action = None;
-    ui.set_width(crate::theme::modal_width(ui, 720.0));
+    ui.set_width(crate::theme::modal_width(ui, 760.0));
     title(ui, "Settings");
     // While a route is active, only the pages that do not change a route can change.
     let locked = s.pilots.active.is_some();
@@ -602,6 +603,9 @@ const FIELD: f32 = 300.0;
 const MIN_BODY: f32 = 240.0;
 /// The least width of a column in the grids of the Engine page, so that their controls start at one place.
 const LABEL_COL: f32 = 200.0;
+/// The width of the sliders on the Engine page. The longest value text, "0.6 jumps per 1% of
+/// capacitor used", has to fit in the space that is left of them.
+const ENGINE_SLIDER: f32 = 120.0;
 /// The width of one stance button, so that the buttons of the rows line up in columns.
 const STANCE_BUTTON: f32 = 64.0;
 
@@ -1481,34 +1485,36 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
         // The soft costs of a route: the bridge capacitor and the unknown wormhole signature.
         label(ui, "Bridge capacitor cost");
         ui.add_enabled_ui(!locked, |ui| {
-            let drag = egui::DragValue::new(&mut s.settings.costs.cap_weight)
-                .speed(0.05)
-                .range(0.0..=RouteCosts::MAX)
-                .max_decimals(2)
-                .suffix(" jumps per 1% of a gate");
-            if ui
-                .add(drag)
-                .on_hover_text("Raise this to make routes avoid bridge jumps that use much gate capacitor. At 0.5, a jump that uses 20% counts as 10 extra jumps.")
-                .changed()
-            {
-                s.apply_later(Instant::now());
-            }
+            // The same kind of slider as the lifetime below. See `cost_scale`.
+            let scale = cost_scale::CAP;
+            let mut pos = scale.pos_of(s.settings.costs.cap_weight);
+            ui.horizontal(|ui| {
+                let text = format!("{} per 1% of capacitor used", cost_scale::label(scale.at(pos)));
+                let slider = AppStepSlider::new(&mut pos, scale.max_pos, "Bridge capacitor cost", text.clone()).width(ENGINE_SLIDER);
+                let hover = "Raise this to make routes avoid bridge jumps that use much gate capacitor. At 0.5, a jump that uses 20% counts as 10 extra jumps.";
+                if ui.add(slider).on_hover_text(hover).changed() {
+                    s.settings.costs.cap_weight = scale.at(pos);
+                    s.apply_later(Instant::now());
+                }
+                ui.label(RichText::new(text).color(theme::TEXT)).on_hover_text(hover);
+            })
         })
         .response
         .on_disabled_hover_text(LOCKED);
         ui.end_row();
         label(ui, "Unknown signature cost");
         ui.add_enabled_ui(!locked, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                let costs = &mut s.settings.costs;
-                let drag = egui::DragValue::new(&mut costs.unknown_sig_penalty)
-                    .speed(0.1)
-                    .range(0.0..=RouteCosts::MAX)
-                    .max_decimals(1)
-                    .suffix(" jumps");
-                if ui.add(drag).on_hover_text("A wormhole with no known signature costs this much extra, for the scan").changed() {
+            let scale = cost_scale::SIGNATURE;
+            let mut pos = scale.pos_of(s.settings.costs.unknown_sig_penalty);
+            ui.horizontal(|ui| {
+                let text = cost_scale::label(scale.at(pos));
+                let slider = AppStepSlider::new(&mut pos, scale.max_pos, "Unknown signature cost", text.clone()).width(ENGINE_SLIDER);
+                let hover = "A wormhole with no known signature costs this much extra, for the scan";
+                if ui.add(slider).on_hover_text(hover).changed() {
+                    s.settings.costs.unknown_sig_penalty = scale.at(pos);
                     s.apply_later(Instant::now());
                 }
+                ui.label(RichText::new(text).color(theme::TEXT)).on_hover_text(hover);
             })
         })
         .response
@@ -1521,12 +1527,13 @@ fn engine_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bo
             let mut pos = life_scale::pos_of(s.settings.min_life);
             ui.horizontal(|ui| {
                 let text = life_scale::label(life_scale::life_at(pos));
-                let slider = AppStepSlider::new(&mut pos, life_scale::MAX_POS, "Minimum wormhole lifetime", text);
-                if ui.add(slider).on_hover_text("A wormhole that collapses sooner than this is not used.").changed() {
+                let slider = AppStepSlider::new(&mut pos, life_scale::MAX_POS, "Minimum wormhole lifetime", text).width(ENGINE_SLIDER);
+                let hover = "A wormhole that collapses sooner than this is not used.";
+                if ui.add(slider).on_hover_text(hover).changed() {
                     s.settings.min_life = life_scale::life_at(pos);
                     s.apply_later(Instant::now());
                 }
-                ui.label(RichText::new(life_scale::label(life_scale::life_at(pos))).color(theme::TEXT));
+                ui.label(RichText::new(life_scale::label(life_scale::life_at(pos))).color(theme::TEXT)).on_hover_text(hover);
             })
         })
         .response
