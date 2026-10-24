@@ -35,7 +35,7 @@ pub fn route_pitch(compact: bool) -> f32 {
 
 /// The height that a panel adds around its content: the header strip, the margins and the lines.
 pub fn panel_chrome(compact: bool) -> f32 {
-    if compact { 30.0 } else { 46.0 }
+    if compact { 34.0 } else { 50.0 }
 }
 
 /// The most rows that the route list shows before it scrolls.
@@ -58,12 +58,16 @@ const GAP: f32 = 8.0;
 const SIDEBAR: f32 = 280.0;
 
 /// The height of the route list panel for `routes` routes. `spare` is the height that is left
-/// when the planner and the route table have their share. The list shows at least one row and a
-/// half, so a scroll bar is a sign that more routes follow.
+/// when the planner and the route table have their share. Up to `LIST_ROWS` routes always fit
+/// without a scroll bar. With more routes, the list shows at least one row and a half, so a
+/// scroll bar is a sign that more routes follow.
 fn route_list_height(routes: usize, spare: f32, compact: bool) -> f32 {
     let pitch = route_pitch(compact);
     let chrome = panel_chrome(compact);
     let full = routes.clamp(1, LIST_ROWS) as f32 * pitch + chrome;
+    if routes <= LIST_ROWS {
+        return full;
+    }
     spare.clamp(full.min(pitch * 1.5 + chrome), full)
 }
 
@@ -1131,7 +1135,9 @@ mod tests {
         assert_eq!(route_list_height(2, 500.0, false), 2.0 * route_pitch(false) + panel_chrome(false));
         // A long list stops at the rows that fit without a scroll.
         assert_eq!(route_list_height(9, 900.0, false), LIST_ROWS as f32 * route_pitch(false) + panel_chrome(false));
-        // Little room: one row and a half, so the table keeps its height.
+        // Three routes or fewer: all rows show, even with little room.
+        assert_eq!(route_list_height(3, 40.0, false), 3.0 * route_pitch(false) + panel_chrome(false));
+        // Little room and more than three routes: one row and a half, so the table keeps its height.
         assert_eq!(route_list_height(5, 40.0, false), 1.5 * route_pitch(false) + panel_chrome(false));
         // No routes: the empty text fits.
         assert_eq!(route_list_height(0, 500.0, false), route_pitch(false) + panel_chrome(false));

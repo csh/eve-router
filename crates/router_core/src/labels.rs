@@ -225,10 +225,10 @@ pub fn route_notes(route: &Route) -> Vec<String> {
         let s = if route.bridges == 1 { "" } else { "s" };
         parts.push(format!("{} jump bridge{s}", route.bridges));
     }
-    if let Some(tj) = route.bridge_tj {
+    if let Some(tj) = route.bridge_tj.filter(|&tj| tj > 0.0) {
         parts.push(format!("{tj} TJ"));
     }
-    if let Some(pct) = route.bridge_cap_pct {
+    if let Some(pct) = route.bridge_cap_pct.filter(|&pct| pct > 0.0) {
         parts.push(format!("{pct:.1}% capacitor used"));
     }
     if route.unknown_sigs > 0 {
