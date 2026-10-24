@@ -348,9 +348,10 @@ impl LinkView {
             }
             LinkView::Filament { clade, expected_jumps } => match expected_jumps {
                 // The hub-to-system edge: the average travel from a random landing system of the clade.
-                Some(avg) => format!("Filament · {} · ~{} jumps (avg)", clade.label(), avg.round() as i64),
+                // The text does not say "Filament", so the pilot does not read a second activation.
+                Some(avg) => format!("~{} jumps (avg)", avg.round() as i64),
                 // The activation edge: the system to the virtual hub of the clade.
-                None => format!("Filament · {} · activate", clade.label()),
+                None => format!("Filament · {}", clade.label()),
             },
         }
     }

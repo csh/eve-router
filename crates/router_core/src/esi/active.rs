@@ -542,7 +542,7 @@ mod tests {
         assert_eq!(r.steps.len(), route.path.nodes.len() - 1);
         assert_eq!(r.manual_hops(), 1);
         assert_eq!(r.steps[1].hop, Hop::Filament);
-        assert!(r.steps[1].label(FIXTURE_TIME).starts_with("Filament"), "{}", r.steps[1].label(FIXTURE_TIME));
+        assert!(r.steps[1].label(FIXTURE_TIME).starts_with("~"), "{}", r.steps[1].label(FIXTURE_TIME));
 
         // ESI can only ever report the real landing system, never the hub. The filament step is
         // also the last one, so the pilot has arrived, not merely progressed.
