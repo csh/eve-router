@@ -3,7 +3,7 @@
 //! does not call ESI or SSO itself.
 //!
 //! Poll intervals (`Intervals::default`):
-//! - location: 5 s for the active pilot, 30 s for the others,
+//! - location: 5 s for the active pilot and for each online pilot, 30 s for an offline pilot,
 //! - ship: 30 s,
 //! - online: 60 s,
 //! - affiliation (corporation and alliance): 30 min.
@@ -332,7 +332,10 @@ impl<A: Api, W: Fn()> Worker<A, W> {
     fn poll_one(&mut self, id: u64, kind: Kind, now: Instant) {
         let Some(token) = self.access_token(id) else { return };
         let base = match kind {
-            Kind::Location if self.active == Some(id) => self.intervals.active_location,
+            // An online pilot can move, so it gets the short interval. An unknown state counts as online.
+            Kind::Location if self.active == Some(id) || self.pilots.get(&id).is_some_and(|p| p.online != Some(false)) => {
+                self.intervals.active_location
+            }
             Kind::Location => self.intervals.location,
             Kind::Ship => self.intervals.ship,
             Kind::Online => self.intervals.online,
@@ -756,6 +759,16 @@ mod tests {
         wait_calls(&fake, |calls| calls.iter().filter(|c| *c == "location 1").count() >= 3);
         let seen = tracker.events.try_iter().filter(|e| matches!(e, Event::Seen { .. })).count();
         assert_eq!(seen, 0);
+    }
+
+    #[test]
+    fn an_online_pilot_that_is_not_active_gets_the_short_location_interval() {
+        let fake = Fake::default();
+        let _tracker = start(&fake);
+        std::thread::sleep(SETTLE);
+        // The long interval of 200 ms gives 3 polls in this time. The short one of 20 ms gives about 20.
+        let polls = fake.0.lock().unwrap().calls.iter().filter(|c| *c == "location 1").count();
+        assert!(polls > 6, "{polls} polls");
     }
 
     #[test]
