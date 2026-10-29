@@ -1054,7 +1054,7 @@ fn destination(s: &Session, route: &ActiveRoute) -> String {
 
 /// A modal question. The result is the index of the clicked button. A button with `true` is the
 /// primary one.
-fn question(ui: &mut Ui, id: &str, title: &str, text: &str, buttons: &[(&str, bool)]) -> Option<usize> {
+pub(crate) fn question(ui: &mut Ui, id: &str, title: &str, text: &str, buttons: &[(&str, bool)]) -> Option<usize> {
     let mut clicked = None;
     Modal::new(Id::new(id)).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
         ui.set_width(crate::theme::modal_width(ui, 440.0));

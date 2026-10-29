@@ -272,7 +272,6 @@ impl View {
         self.pilots.clear_remove();
         self.pilots.poll_login(ui.ctx(), s);
         let Some(welcome) = &mut self.welcome else { return };
-        setup_status_bar(ui, s);
         // Both steps draw the footer panel, so the body has the same room. Step 1 draws it invisible.
         // The panel must come before the central panel.
         let footer = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, theme::FOOTER_MARGIN));
@@ -341,7 +340,6 @@ impl View {
             Some(left) => ui.ctx().request_repaint_after(left),
         }
         let Some(wizard) = &mut self.wizard else { return };
-        setup_status_bar(ui, s);
         let footer = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, theme::FOOTER_MARGIN));
         let page = wizard.page();
         let flow = egui::Panel::bottom("wizard-footer").frame(footer).show(ui, |ui| wizard.footer(ui)).inner;
@@ -1122,20 +1120,6 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool) {
     });
 }
 
-/// The status bar during the welcome screen and the wizard. It has no source dots, no Refresh button,
-/// no Log button and no status text, because they only confuse a new pilot. In a dry run it shows the
-/// dry-run note, so the pilot sees that nothing is saved. Else it draws no bar.
-fn setup_status_bar(ui: &mut Ui, s: &Session) {
-    if !s.is_dry_run() {
-        return;
-    }
-    let bar =
-        Frame::new().fill(theme::bar_fill(ui)).inner_margin(Margin::symmetric(12, 6)).stroke(Stroke::new(1.0, theme::header_fill(ui)));
-    egui::Panel::bottom("status-bar").frame(bar).show(ui, |ui| {
-        ui.add(Label::new(RichText::new(crate::app::DRY_RUN_NOTE).color(theme::WARN)).truncate());
-    });
-}
-
 /// The wormhole sources and the age of their data, for example "Nexum 2 min ago" after a dot.
 /// The dot is green for data from the last 15 minutes, else amber. A source with no data is gray.
 /// A rate limited source is amber.
@@ -1416,8 +1400,6 @@ mod tests {
     fn the_wizard_fits_the_smallest_window() {
         use crate::setup_wizard::{FRAME_ROOM, SMALLEST_WINDOW, WizardPage};
         let (mut s, _tmp) = wizard_session(true);
-        // A dry run draws the status bar with the note. This is the worst case that FRAME_ROOM counts.
-        s.set_dry_run();
         let mut view = wizard_view(&s);
         let ctx = crate::test_ui::ctx();
         // The last texts of the body on each page.
@@ -1433,7 +1415,7 @@ mod tests {
             show_frame(&ctx, &mut view, &mut s, vec![]);
             let drawn = show_frame(&ctx, &mut view, &mut s, vec![]);
             let next = if index + 1 == pages.len() { "Finish" } else { "Next" };
-            // The footer sits on the status bar. The page ends at the footer, less the margin of the page.
+            // The footer sits at the bottom of the screen. The page ends at the footer, less the margin of the page.
             let footer = egui::PanelState::load(&ctx, egui::Id::new("wizard-footer")).expect("the footer is drawn").outer_rect;
             let page_end = footer.top() - f32::from(WIZARD_MARGIN);
             for button in ["Back", "Skip", next] {
@@ -1446,7 +1428,7 @@ mod tests {
                 assert!(bottom < back_top && bottom <= page_end, "{page:?}: \"{text}\" ends at {bottom}, the page ends at {page_end}");
             }
             // The room of the frame: the steps row puts the page lower than the top of the screen,
-            // and the footer and the status bar take the bottom. The page tests in setup_wizard.rs use FRAME_ROOM.
+            // and the footer takes the bottom. The page tests in setup_wizard.rs use FRAME_ROOM.
             if *page == WizardPage::Alliance {
                 let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, SMALLEST_WINDOW);
                 let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
@@ -1554,18 +1536,13 @@ mod tests {
     }
 
     #[test]
-    fn the_status_bar_shows_the_dry_run_note() {
-        for dry_run in [true, false] {
-            let (mut s, _tmp) = wizard_session(true);
-            if dry_run {
-                s.set_dry_run();
-            }
-            let mut view = wizard_view(&s);
-            let drawn = show_frame(&crate::test_ui::ctx(), &mut view, &mut s, vec![]);
-            assert_eq!(find(&drawn, crate::app::DRY_RUN_NOTE).is_some(), dry_run);
-            // The bar has no status text in any case. Outside a dry run, the bar is gone.
-            assert!(find(&drawn, Status::Ready.text()).is_none());
-        }
+    fn the_wizard_draws_no_status_bar_in_a_dry_run() {
+        let (mut s, _tmp) = wizard_session(true);
+        s.set_dry_run();
+        let mut view = wizard_view(&s);
+        let drawn = show_frame(&crate::test_ui::ctx(), &mut view, &mut s, vec![]);
+        assert!(find(&drawn, crate::app::DRY_RUN_NOTE).is_none());
+        assert!(find(&drawn, Status::Ready.text()).is_none());
     }
 
     /// Review focus: a Settings window would keep its old state after Finish, so it never opens
@@ -2012,9 +1989,8 @@ mod tests {
         assert_eq!(wizard_pages(&view), [Essentials, Alliance, Nexum]);
     }
 
-    /// Assert that a settled frame of the setup shows no status dots. In a dry run the bar shows
-    /// the note and nothing else. Else no bar is drawn. `welcome` is true on the welcome screen,
-    /// where "Nexum" is not the name of a wizard page either.
+    /// Assert that a settled frame of the setup shows no status dots, no dry-run note and no bar.
+    /// `welcome` is true on the welcome screen, where "Nexum" is not the name of a wizard page either.
     fn assert_no_status_dots(run: &mut Run, view: &mut View, s: &mut Session, welcome: bool, what: &str) {
         let drawn = run.settled(view, s);
         let mut absent = vec!["Refresh", "Log", "EVE-Scout", Status::Ready.text()];
@@ -2024,14 +2000,8 @@ mod tests {
         for text in absent {
             assert!(find(&drawn, text).is_none(), "{what}: \"{text}\" is drawn");
         }
-        let bar = run.panel("status-bar");
-        assert_eq!(bar.is_some(), s.is_dry_run(), "{what}: the bar shows in a dry run only");
-        assert_eq!(find(&drawn, crate::app::DRY_RUN_NOTE).is_some(), s.is_dry_run(), "{what}: the note");
-        if let Some(bar) = bar {
-            assert!(bar.height() <= 37.0, "{what}: the bar is {} high, FRAME_ROOM counts 37", bar.height());
-            let in_bar: Vec<&str> = drawn.iter().filter(|(_, pos, _)| pos.y >= bar.top()).map(|(t, ..)| t.as_str()).collect();
-            assert_eq!(in_bar, [crate::app::DRY_RUN_NOTE], "{what}: only the note is in the bar");
-        }
+        assert!(run.panel("status-bar").is_none(), "{what}: the bar is drawn");
+        assert!(find(&drawn, crate::app::DRY_RUN_NOTE).is_none(), "{what}: the note is drawn");
     }
 
     #[test]
@@ -2067,7 +2037,7 @@ mod tests {
         let mut title_tops = Vec::new();
         for step in [1, 2] {
             let (mut s, _tmp) = wizard_session(true);
-            // The bar of a dry run is the only bar that can take room.
+            // A dry run draws no bar, so it takes no room.
             s.set_dry_run();
             let mut view = View::new(&s);
             let mut run = Run::new();
@@ -2076,7 +2046,7 @@ mod tests {
                 run.wait(0.5);
             }
             let drawn = run.settled(&mut view, &mut s);
-            let bar = run.panel("status-bar").expect("the dry-run bar is drawn");
+            assert!(run.panel("status-bar").is_none(), "step {step} draws no status bar");
             let footer = run.panel("welcome-footer");
             // Both steps draw the footer panel, so the body has the same room and the title stays put.
             assert!(footer.is_some(), "step {step} draws the footer panel");
@@ -2084,14 +2054,12 @@ mod tests {
             if step == 2 {
                 assert!(find(&drawn, "Do you have an EVE Metro subscription?").is_some(), "the subscription row is shown");
             }
-            let body_end = footer.map_or(bar.top(), |footer| footer.top());
+            let body_end = footer.map_or(SMALLEST_WINDOW.y, |footer| footer.top());
             for (text, pos, size) in &drawn {
                 let bottom = pos.y + size.y;
                 assert!(bottom <= SMALLEST_WINDOW.y, "step {step}: \"{text}\" ends at {bottom}");
-                if text == crate::app::DRY_RUN_NOTE {
-                    assert!(pos.y >= bar.top(), "the note is in the bar");
-                } else if let Some(footer) = footer.filter(|_| text == "Back" || text == "Continue") {
-                    assert!(pos.y >= footer.top() && bottom <= bar.top(), "step {step}: \"{text}\" is in the footer");
+                if let Some(footer) = footer.filter(|_| text == "Back" || text == "Continue") {
+                    assert!(pos.y >= footer.top() && bottom <= SMALLEST_WINDOW.y, "step {step}: \"{text}\" is in the footer");
                 } else {
                     assert!(bottom <= body_end, "step {step}: \"{text}\" ends at {bottom}, above {body_end}");
                 }

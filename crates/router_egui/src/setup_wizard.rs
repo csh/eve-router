@@ -3,7 +3,7 @@
 //! character, which stores its token at once, as in Settings.
 
 use crate::app::Session;
-use crate::pilots_view::{PilotsUi, Portraits};
+use crate::pilots_view::{PilotsUi, Portraits, question};
 use crate::search::SearchBox;
 use crate::settings_window::{
     CHARACTER_ROW, FIELD, METRO_NEEDS_CHARACTER, RowLook, character_table, eve_metro_available, group, keyring_warning, pilot_status,
@@ -16,12 +16,12 @@ use egui_phosphor_icons::icons;
 use petgraph::graph::NodeIndex;
 use router_core::config::{self, ApiKey};
 use router_core::esi::pilots::PilotView;
+use router_core::settings::Features;
 use router_core::sources::{
     self,
     nexum::{self, MapInfo},
 };
 use std::sync::mpsc::{self, Receiver, TryRecvError};
-use router_core::settings::Features;
 
 /// A page of the wizard.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -167,6 +167,8 @@ pub struct Wizard {
     metro_session: bool,
     /// The Nexum maps of the Nexum page.
     maps: MapsLoad,
+    /// True while the question about a bridge list that the pilot did not import is open.
+    confirm_bridges: bool,
 }
 
 impl Wizard {
@@ -203,6 +205,7 @@ impl Wizard {
             capital: capital_box(),
             metro_session,
             maps: MapsLoad::default(),
+            confirm_bridges: false,
         }
     }
 
@@ -275,22 +278,28 @@ impl Wizard {
     }
 
     /// Drop the edits of the page and move on. On the last page, return `Flow::Done`. The
-    /// Essentials page is the exception: Skip accepts its starting values, as Next does.
+    /// Essentials page keeps the starting switches of the preset, as Next does. Skip drops only
+    /// the edits of the pilot there too.
     pub fn skip(&mut self) -> Flow {
         if self.page() == WizardPage::Essentials {
-            // This page has no error, so the edits are always kept.
-            self.keep_edits();
-        } else {
-            if self.page() == WizardPage::EveMetro {
-                // `kept` holds the Enable pre-check of the preset. A skipped page changes no setting.
-                self.kept.metro_enabled = self.metro_session;
-            }
-            self.edit = self.kept.clone();
-            self.error = None;
+            self.kept.features_kept = true;
+        } else if self.page() == WizardPage::EveMetro {
+            // `kept` holds the Enable pre-check of the preset. A skipped page changes no setting.
+            self.kept.metro_enabled = self.metro_session;
         }
+        self.edit = self.kept.clone();
+        self.error = None;
         // The text that the pilot typed in the search box goes too.
         self.capital = capital_box();
         self.advance()
+    }
+
+    /// True when the paste box of the Alliance page holds text that Import did not read. Next and
+    /// Finish would drop this text, so the footer asks first.
+    fn has_unimported_bridges(&self) -> bool {
+        self.page() == WizardPage::Alliance
+            && !self.edit.bridge_text.trim().is_empty()
+            && self.edit.bridges.as_deref() != Some(self.edit.bridge_text.as_str())
     }
 
     /// The Import button: read the pasted list, and keep the text for Finish only if it gives a bridge.
@@ -500,14 +509,11 @@ const BRIDGE_ROW: f32 = 28.0;
 pub(crate) const SMALLEST_WINDOW: egui::Vec2 = egui::vec2(1280.0, 716.0);
 
 /// The room that the wizard frame takes above and below the page, in the smallest window: 64
-/// above (the margin, the steps row with its strip, and the gap) and 102 below (the margin of
-/// the page, the footer of 49 and the status bar of 37). This is the worst case: it counts the bar
-/// of a dry run, which shows only the dry-run note and is not taller than 37. Outside a dry run the
-/// wizard draws no bar, so the real room is smaller. The page tests use it. The view test
-/// `the_wizard_fits_the_smallest_window` measures the real room in a dry run and keeps it at most
-/// this value.
+/// above (the margin, the steps row with its strip, and the gap) and 65 below (the margin of
+/// the page and the footer of 49). The wizard draws no status bar. The page tests use it. The view
+/// test `the_wizard_fits_the_smallest_window` measures the real room and keeps it at most this value.
 #[cfg(test)]
-pub(crate) const FRAME_ROOM: f32 = 166.0;
+pub(crate) const FRAME_ROOM: f32 = 129.0;
 
 /// The gap between two step labels, in points.
 const STEP_GAP: f32 = 24.0;
@@ -595,13 +601,29 @@ impl Wizard {
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.add(AppButton::new(if last { "Finish" } else { "Next" }).primary()).clicked() {
-                    flow = self.next();
+                    if self.has_unimported_bridges() {
+                        self.confirm_bridges = true;
+                    } else {
+                        flow = self.next();
+                    }
                 }
                 if ui.app_button("Skip").clicked() {
                     flow = self.skip();
                 }
             });
         });
+        if self.confirm_bridges {
+            let text = "Are you sure you want to continue? Unsaved changes will be lost.";
+            let buttons = [("Cancel", true), ("Continue", false)];
+            match question(ui, "wizard-bridges-confirm", "Unsaved changes", text, &buttons) {
+                Some(0) => self.confirm_bridges = false,
+                Some(_) => {
+                    self.confirm_bridges = false;
+                    flow = self.next();
+                }
+                None => {}
+            }
+        }
         flow
     }
 
@@ -666,7 +688,8 @@ fn page_area(ui: &Ui) -> egui::Rect {
 fn page_shell(ui: &mut Ui, page: WizardPage, add: impl FnOnce(&mut Ui)) {
     let column = page_area(ui);
     ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
-        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+        // Each page keeps its own scroll offset, so the head of a page never starts out of view.
+        ScrollArea::vertical().id_salt(("wizard-page", page.label())).auto_shrink([false, false]).show(ui, |ui| {
             page_head(ui, page);
             add(ui);
         });
@@ -843,17 +866,19 @@ fn alliance_page(ui: &mut Ui, w: &mut Wizard, s: &Session) {
             let shown = w.edit.bridge_problems.len().min(PROBLEM_LINES);
             let hidden = w.edit.bridge_problems.len() - shown;
             // The box keeps one height and scrolls inside, so a long list cannot push Import down.
-            ScrollArea::vertical().id_salt("wizard-bridges").min_scrolled_height(PASTE_BOX).max_height(PASTE_BOX).auto_shrink([false, false]).show(
-                ui,
-                |ui| {
+            ScrollArea::vertical()
+                .id_salt("wizard-bridges")
+                .min_scrolled_height(PASTE_BOX)
+                .max_height(PASTE_BOX)
+                .auto_shrink([false, false])
+                .show(ui, |ui| {
                     ui.add(
                         TextEdit::multiline(&mut w.edit.bridge_text)
                             .hint_text("Paste a list of bridges in SMT format.")
                             .desired_width(f32::INFINITY)
                             .min_size(vec2(0.0, PASTE_BOX)),
                     );
-                },
-            );
+                });
             for problem in w.edit.bridge_problems.iter().take(PROBLEM_LINES) {
                 ui.label(RichText::new(problem).color(theme::ERROR));
             }
@@ -935,7 +960,7 @@ fn connection_card(ui: &mut Ui, w: &mut Wizard, s: &Session) {
             }
             ui.label(dim("Key"));
             // The key never shows. The field starts empty, and an empty field keeps a key that is set.
-            let hint = if s.cfg.nexum.key.is_some() { "A key is set. An empty field keeps it." } else { "paste a key with the read scope" };
+            let hint = if s.cfg.nexum.key.is_some() { "A key is set. An empty field keeps it." } else { "Paste a key with the read scope" };
             ui.add(TextEdit::singleline(&mut w.edit.nexum_key).password(true).hint_text(hint).desired_width(f32::INFINITY));
             ui.end_row();
             ui.label(dim("Signatures"));
@@ -1709,7 +1734,11 @@ mod tests {
             }
             assert!((cards[0].top() - area.top() - HEAD_ROOM).abs() <= 1.0, "{page:?}: the card starts at {}", cards[0].top());
             if let Some(second) = cards.get(1) {
-                assert!((second.top() - cards[0].bottom() - CARD_GAP).abs() <= 1.0, "{page:?}: the gap is {}", second.top() - cards[0].bottom());
+                assert!(
+                    (second.top() - cards[0].bottom() - CARD_GAP).abs() <= 1.0,
+                    "{page:?}: the gap is {}",
+                    second.top() - cards[0].bottom()
+                );
             }
             match page {
                 WizardPage::Alliance => assert!(has(&drawn, "Bridges to add (0)")),
@@ -1757,7 +1786,9 @@ mod tests {
             output.textures_delta.clear();
             (flow, drawn_texts(&output))
         };
-        let (_, laid_out) = run(Vec::new(), 0.0);
+        // A modal sizes in its first frame and draws its texts in the second.
+        run(Vec::new(), 0.0);
+        let (_, laid_out) = run(Vec::new(), 0.05);
         let (_, pos, size) = laid_out.iter().find(|(t, ..)| t == label).unwrap_or_else(|| panic!("no {label} button")).clone();
         let at = pos + size / 2.0;
         let button =
@@ -1970,18 +2001,72 @@ mod tests {
     }
 
     #[test]
-    fn skip_on_essentials_keeps_all_the_edits_of_the_page() {
+    fn skip_on_essentials_drops_the_edits_and_keeps_the_preset_switches() {
         let (s, _tmp) = session(true, true);
         let mut w = Wizard::with_preset(&s, Preset::Highsec, Preset::Highsec.answers());
+        let (theme, updates, features) = (w.kept.theme, w.kept.check_for_updates, w.kept.features);
         w.edit.theme = FactionTheme::Amarr;
-        w.edit.check_for_updates = false;
+        w.edit.check_for_updates = !updates;
+        w.edit.features.filaments = !features.filaments;
         w.capital.set_query("UAL");
         w.error = Some("old".into());
         w.skip();
-        assert_eq!((w.kept.theme, w.kept.check_for_updates), (FactionTheme::Amarr, false));
+        assert_eq!((w.kept.theme, w.kept.check_for_updates, w.kept.features), (theme, updates, features), "the edits go");
+        assert!(w.kept.features_kept, "the preset switches stay, so Finish writes them");
         assert_eq!(w.edit, w.kept);
         assert!(w.error.is_none());
         assert_eq!(w.capital.query(), "", "the capital search box resets");
+    }
+
+    #[test]
+    fn next_and_finish_ask_before_they_drop_a_bridge_list_that_was_not_imported() {
+        let (s, _tmp) = session(true, true);
+        let mut w = Wizard::new(&s);
+        assert_eq!(w.next(), Flow::Open);
+        assert_eq!(w.page(), WizardPage::Alliance);
+        assert!(!w.has_unimported_bridges(), "an empty box needs no question");
+        w.edit.bridge_text = "   \n ".into();
+        assert!(!w.has_unimported_bridges(), "a box with only blanks needs no question");
+        w.edit.bridge_text = "UALX-3 --> IL-YTR".into();
+        assert!(w.has_unimported_bridges());
+        // Next opens the question and stays on the page.
+        assert_eq!(click_footer(&mut w, "Next"), Flow::Open);
+        assert!(w.confirm_bridges);
+        assert_eq!(w.page(), WizardPage::Alliance);
+        // "Cancel" closes the question, and the text stays.
+        assert_eq!(click_footer(&mut w, "Cancel"), Flow::Open);
+        assert!(!w.confirm_bridges);
+        assert_eq!((w.page(), w.edit.bridge_text.as_str()), (WizardPage::Alliance, "UALX-3 --> IL-YTR"));
+        // "Continue" goes on and drops the list.
+        assert_eq!(click_footer(&mut w, "Next"), Flow::Open);
+        assert_eq!(click_footer(&mut w, "Continue"), Flow::Open);
+        assert!(!w.confirm_bridges);
+        assert_ne!(w.page(), WizardPage::Alliance);
+        assert!(w.kept.bridges.is_none());
+        // After Import, the same text needs no question.
+        w.back();
+        w.edit.bridge_text = "UALX-3 --> IL-YTR".into();
+        w.import(&s);
+        assert!(!w.has_unimported_bridges());
+        // Skip asks nothing: it drops the edits by design.
+        w.edit.bridge_text = "UALX-3 --> JITA-X".into();
+        assert!(w.has_unimported_bridges());
+        assert_ne!(click_footer(&mut w, "Skip"), Flow::Welcome);
+        assert!(!w.confirm_bridges);
+    }
+
+    #[test]
+    fn the_essentials_page_with_three_pilots_fits_the_smallest_window() {
+        let (mut s, _tmp, mut pilots) = session_with_characters(&[1, 2, 3]);
+        let mut w = Wizard::new(&s);
+        let output = page_frame(&mut w, &mut s, &mut pilots, SMALLEST_WINDOW);
+        let cards = test_ui::card_rects(&output);
+        let bottom = cards.iter().map(|card| card.bottom()).fold(0.0, f32::max);
+        assert!(
+            bottom <= page_area(SMALLEST_WINDOW).bottom(),
+            "the last card ends at {bottom}, the page ends at {}",
+            page_area(SMALLEST_WINDOW).bottom()
+        );
     }
 
     #[test]
@@ -2051,12 +2136,12 @@ mod tests {
         assert!(has(&drawn, "The URL is bad."));
         assert!(has(&drawn, "Connection") && has(&drawn, "Maps"));
         // A field hint is a text edit hint, so it shows as a drawn text.
-        assert!(has(&drawn, "paste a key with the read scope"));
+        assert!(has(&drawn, "Paste a key with the read scope"));
         // With a key in the session, the hint says that the key stays.
         s.cfg.nexum.key = Some(ApiKey("nxm_old_key".into()));
         let drawn = texts(|ui| w.body(ui, &mut s, &mut pilots));
         assert!(has(&drawn, "A key is set. An empty field keeps it."));
-        assert!(!has(&drawn, "paste a key with the read scope"));
+        assert!(!has(&drawn, "Paste a key with the read scope"));
     }
 
     #[test]
