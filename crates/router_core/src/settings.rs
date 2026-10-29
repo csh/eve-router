@@ -5,7 +5,7 @@ use crate::config::{self, AvoidName, Config, ConfigError};
 use crate::route::{DEFAULT_CAP_WEIGHT, DEFAULT_UNKNOWN_SIG_PENALTY, JUMP, Mode, PENALTY, RouteError, Router, RouterOptions};
 use crate::universe::Universe;
 use crate::wormhole;
-use crate::wormhole_space::{Stance, WormholeSpace};
+use crate::wormhole_space::{Group, Stance, WormholeSpace};
 use petgraph::graph::NodeIndex;
 use std::collections::HashSet;
 use std::sync::Arc;
@@ -325,6 +325,38 @@ impl Settings {
     /// The waypoints in the order to route them.
     pub fn order(&self, router: &Router, nodes: &[NodeIndex]) -> Result<Vec<NodeIndex>, RouteError> {
         if self.optimize { router.optimize(nodes) } else { Ok(nodes.to_vec()) }
+    }
+}
+
+/// The three switches of the setup wizard. Each starts on, whatever the current stance.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Features {
+    /// Use filaments.
+    pub filaments: bool,
+    /// Use the wormhole classes 1 to 6.
+    pub jspace: bool,
+    /// Use Pochven.
+    pub pochven: bool,
+}
+
+impl Default for Features {
+    fn default() -> Self {
+        Self { filaments: true, jspace: true, pochven: true }
+    }
+}
+
+impl Features {
+    /// Write the switches to the settings: a checked switch gives Allow, an unchecked one gives
+    /// Block. The Drifter stance, the hubs and the wormhole switch stay as they are.
+    pub fn apply(self, settings: &mut Settings) {
+        let stance = |on: bool| if on { Stance::Allow } else { Stance::Block };
+        settings.filaments = stance(self.filaments);
+        for group in Group::ALL {
+            if matches!(group, Group::Class(_)) {
+                settings.space.set(group, stance(self.jspace));
+            }
+        }
+        settings.space.set(Group::Pochven, stance(self.pochven));
     }
 }
 
@@ -859,5 +891,45 @@ mod tests {
     fn split_keeps_spaces_in_names() {
         assert_eq!(split_systems("Jita > New Caldari, Amarr"), vec!["Jita", "New Caldari", "Amarr"]);
         assert_eq!(split_systems("Jita\r\n New Caldari \n\nAmarr;Rens\tHek\n"), vec!["Jita", "New Caldari", "Amarr", "Rens", "Hek"]);
+    }
+
+    #[test]
+    fn a_checked_switch_writes_allow_and_an_unchecked_one_writes_block() {
+        use crate::wormhole_space::Group;
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        s.filaments = Stance::Avoid;
+        s.space.set(Group::Pochven, Stance::Avoid);
+        Features { filaments: true, jspace: true, pochven: true }.apply(&mut s);
+        assert_eq!((s.filaments, s.space.pochven), (Stance::Allow, Stance::Allow));
+        Features { filaments: false, jspace: true, pochven: false }.apply(&mut s);
+        assert_eq!((s.filaments, s.space.pochven), (Stance::Block, Stance::Block));
+    }
+
+    #[test]
+    fn the_jspace_switch_writes_classes_1_to_6_and_leaves_the_drifters() {
+        use crate::wormhole_space::{Group, WormholeClass};
+        const CLASSES: [WormholeClass; 6] =
+            [WormholeClass::C1, WormholeClass::C2, WormholeClass::C3, WormholeClass::C4, WormholeClass::C5, WormholeClass::C6];
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        s.space.set(Group::Drifter, Stance::Avoid);
+        s.hubs.thera = Stance::Avoid;
+        Features { jspace: false, ..Features::default() }.apply(&mut s);
+        for c in CLASSES {
+            assert_eq!(s.space.get(Group::Class(c)), Stance::Block);
+        }
+        assert_eq!((s.space.drifter, s.hubs.thera, s.wormholes), (Stance::Avoid, Stance::Avoid, true));
+        Features::default().apply(&mut s);
+        // Every class is Allow again. The Drifter stance is still Avoid.
+        for c in CLASSES {
+            assert_eq!(s.space.get(Group::Class(c)), Stance::Allow);
+        }
+        assert_eq!(s.space.drifter, Stance::Avoid);
+    }
+
+    #[test]
+    fn the_switches_start_on() {
+        assert_eq!(Features::default(), Features { filaments: true, jspace: true, pochven: true });
     }
 }

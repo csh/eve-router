@@ -91,6 +91,18 @@ impl SearchBox {
         self
     }
 
+    /// The text in the field. The tests read it.
+    #[cfg(test)]
+    pub fn query(&self) -> &str {
+        &self.query
+    }
+
+    /// Put text in the field, as if the pilot typed it. The tests use it.
+    #[cfg(test)]
+    pub fn set_query(&mut self, text: &str) {
+        self.query = text.into();
+    }
+
     /// Give the keyboard focus to the text field.
     pub fn focus(&self, ui: &Ui) {
         ui.memory_mut(|m| m.request_focus(self.id));

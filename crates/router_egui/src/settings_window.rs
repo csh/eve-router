@@ -484,7 +484,7 @@ impl Page {
 
 /// True if EVE Metro can work: the source needs a logged-in character, so it needs the EVE client
 /// ID, like each SSO feature. The build or the env var gives the API key.
-fn eve_metro_available(s: &Session) -> bool {
+pub(crate) fn eve_metro_available(s: &Session) -> bool {
     s.pilots.shows_characters() && s.cfg.eve_metro.key.is_some()
 }
 
@@ -499,9 +499,19 @@ fn disabled_text(locked: bool, reason: &'static str) -> &'static str {
 }
 
 /// A small heading for a group of rows on a page.
-fn group(ui: &mut Ui, text: &str) {
+pub(crate) fn group(ui: &mut Ui, text: &str) {
     ui.label(RichText::new(text.to_uppercase()).family(theme::bold()).color(theme::accent(ui)).extra_letter_spacing(1.5));
     ui.add_space(2.0);
+}
+
+/// The text of the keyring warning. This is the only place that holds it.
+pub(crate) const KEYRING_WARNING: &str = "Unable to access OS keyring, your character/API credentials will not be stored.";
+
+/// Show the keyring warning when the OS keyring is not available. It blocks nothing.
+pub(crate) fn keyring_warning(ui: &mut Ui, s: &Session) {
+    if s.keyring_missing {
+        ui.label(RichText::new(KEYRING_WARNING).color(theme::WARN));
+    }
 }
 
 /// The note of the Settings window while a route is active. The pages that do not change a route stay editable.
@@ -598,7 +608,8 @@ fn settings(
     action
 }
 
-const FIELD: f32 = 300.0;
+/// The width of a text field and of the search box.
+pub(crate) const FIELD: f32 = 300.0;
 /// The least height of the body of the Settings window, for each page.
 const MIN_BODY: f32 = 240.0;
 /// The least width of a column in the grids of the Engine page, so that their controls start at one place.
@@ -741,9 +752,10 @@ fn updates_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
                 }
             }
             Manual::Found(_) => {
-                let button = ui.add_enabled(!locked, AppButton::new("Install").primary());
-                if locked {
-                    button.on_disabled_hover_text("The install restarts the app. Stop the route first.");
+                let block = install_block(locked, s.is_dry_run());
+                let button = ui.add_enabled(block.is_none(), AppButton::new("Install").primary());
+                if let Some(reason) = block {
+                    button.on_disabled_hover_text(reason);
                 } else if button.clicked() {
                     form.update.start_install(ui.ctx());
                 }
@@ -763,18 +775,36 @@ fn updates_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: b
         label(ui, "Check for updates");
         let mut check = s.cfg.checks_for_updates();
         if ui.app_checkbox(&mut check, "").changed() {
-            s.cfg.check_for_updates = Some(check);
-            s.save();
+            s.set_update_checks(check, s.cfg.auto_update);
         }
         ui.end_row();
         label(ui, "Install updates automatically");
-        let row = ui.add_enabled_ui(s.cfg.checks_for_updates(), |ui| ui.app_checkbox(&mut s.cfg.auto_update, "").changed());
+        let mut auto = s.cfg.auto_update;
+        let row = ui.add_enabled_ui(s.cfg.checks_for_updates(), |ui| ui.app_checkbox(&mut auto, "").changed());
         row.response.on_disabled_hover_text("Checking for updates must be enabled.");
         if row.inner {
-            s.save();
+            s.set_update_checks(s.cfg.checks_for_updates(), auto);
         }
         ui.end_row();
     });
+}
+
+/// The hover text of Install while a route is active.
+const INSTALL_LOCKED: &str = "The install restarts the app. Stop the route first.";
+
+/// The hover text of Install in a dry run.
+const INSTALL_DRY_RUN: &str = "A dry run installs no update. An update restarts the app as a normal run, and that run saves the config.";
+
+/// Why Install is off, or `None` if it is on. The install restarts the app with no `--setup` and
+/// no `--dry-run`, so a dry run never installs. A route that is active also stops it.
+fn install_block(locked: bool, dry_run: bool) -> Option<&'static str> {
+    if dry_run {
+        Some(INSTALL_DRY_RUN)
+    } else if locked {
+        Some(INSTALL_LOCKED)
+    } else {
+        None
+    }
 }
 
 /// The width of the label column on the Updates page.
@@ -783,6 +813,7 @@ const UPDATE_LABEL: f32 = 190.0;
 fn nexum_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool, loading: bool) -> Option<Action> {
     let mut action = None;
     let field = FIELD;
+    keyring_warning(ui, s);
     group(ui, "Nexum");
     egui::Grid::new("settings-nexum").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
         // Nexum: the URL, the key and the map. A change applies at the next start.
@@ -1026,7 +1057,7 @@ fn maps_list(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: bool
 }
 
 /// The status of a character for the EVE Metro table: the text and its color.
-fn pilot_status(pilot: &PilotView) -> (&'static str, Color32) {
+pub(crate) fn pilot_status(pilot: &PilotView) -> (&'static str, Color32) {
     if pilot.live.expired || pilot.needs_reauth {
         return ("Log in again", theme::WARN);
     }
@@ -1119,6 +1150,7 @@ fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay
     // The overlay cannot show above a fullscreen client. The table warns at the name.
     let warnings: Vec<(u64, bool)> = pilots.iter().map(|p| (p.id, may_be_fullscreen(overlay.display_mode(&p.name)))).collect();
     let fullscreen = |pilot: &PilotView| warnings.iter().any(|&(id, warn)| id == pilot.id && warn);
+    keyring_warning(ui, s);
     character_table(
         ui,
         "overlay-characters",
@@ -1141,12 +1173,12 @@ fn overlay_page(ui: &mut Ui, s: &mut Session, portraits: &mut Portraits, overlay
 
 /// The look of a row of a table of characters.
 #[derive(Default)]
-struct RowLook {
+pub(crate) struct RowLook {
     /// The row has the selected look.
-    selected: bool,
+    pub(crate) selected: bool,
     /// The text of a warning. A row with a warning shows a warning icon before the name, the name in
     /// the warning color, and the text as the tooltip of both.
-    warning: Option<&'static str>,
+    pub(crate) warning: Option<&'static str>,
 }
 
 /// The row height of a table of characters.
@@ -1158,7 +1190,7 @@ const NAME_GAP: f32 = 8.0;
 /// A table of the linked characters: the portrait and the name, then the columns of `extra`. Each
 /// has a header text and a width. `cell` draws one cell of `extra` for a character, by the index
 /// in `extra`. `look` gives the look of a row. The table takes the height that is left, and scrolls.
-fn character_table(
+pub(crate) fn character_table(
     ui: &mut Ui,
     id_salt: &str,
     pilots: &[PilotView],
@@ -1269,6 +1301,7 @@ fn eve_metro_page(ui: &mut Ui, s: &mut Session, locked: bool, portraits: &mut Po
     let mut pick = None;
     use egui_extras::Column;
     let extra = [("Status", Column::exact(110.0)), ("", Column::exact(84.0))];
+    keyring_warning(ui, s);
     character_table(
         ui,
         "eve-metro-characters",
@@ -1309,15 +1342,11 @@ fn ansiblex_page(ui: &mut Ui, form: &mut SettingsForm, s: &mut Session, locked: 
                 ui.horizontal(|ui| {
                     ui.label(RichText::new(s.uni.name(capital)).color(Color32::WHITE));
                     if ui.app_button("Clear").clicked() {
-                        s.settings.rules.capital = None;
-                        s.recompute();
-                        s.save();
+                        s.set_capital(None);
                     }
                 });
             } else if let Some((_, node)) = form.capital.show(ui, &s.uni, field, "Search system… (none: jump bridges off)", &[]) {
-                s.settings.rules.capital = Some(node);
-                s.recompute();
-                s.save();
+                s.set_capital(Some(node));
             }
         })
         .response
@@ -1688,6 +1717,7 @@ fn pilot_picker(ui: &mut Ui, filter: &mut String, s: &mut Session) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_ui::drawn_texts;
     use router_core::test_support::overlay_universe;
 
     #[test]
@@ -1820,6 +1850,15 @@ mod tests {
         assert_eq!((s.settings.space.c5, s.settings.space.drifter), (Stance::Block, Stance::Avoid));
     }
 
+    /// Review focus: an install restarts the app with no `--setup` and no `--dry-run`, so a dry run never installs.
+    #[test]
+    fn a_dry_run_or_an_active_route_blocks_the_install() {
+        assert_eq!(install_block(false, false), None);
+        assert_eq!(install_block(true, false), Some(INSTALL_LOCKED));
+        assert_eq!(install_block(false, true), Some(INSTALL_DRY_RUN));
+        assert_eq!(install_block(true, true), Some(INSTALL_DRY_RUN));
+    }
+
     #[test]
     fn the_updates_page_draws_every_state() {
         use crate::app_update::{Available, Manual, Progress};
@@ -1908,20 +1947,6 @@ mod tests {
         assert_eq!(cells, pilots.len());
     }
 
-    /// The texts that a frame draws, with the position and the size of each.
-    fn drawn_texts(output: &egui::FullOutput) -> Vec<(String, egui::Pos2, egui::Vec2)> {
-        fn walk(shape: &egui::epaint::Shape, found: &mut Vec<(String, egui::Pos2, egui::Vec2)>) {
-            match shape {
-                egui::epaint::Shape::Text(text) => found.push((text.galley.text().to_string(), text.pos, text.galley.size())),
-                egui::epaint::Shape::Vec(shapes) => shapes.iter().for_each(|s| walk(s, found)),
-                _ => {}
-            }
-        }
-        let mut found = Vec::new();
-        output.shapes.iter().for_each(|clipped| walk(&clipped.shape, &mut found));
-        found
-    }
-
     #[test]
     fn the_nexum_page_warns_about_a_remote_http_url_only() {
         let (mut s, _tmp) = session_with_pilots();
@@ -2004,5 +2029,32 @@ mod tests {
         assert_eq!(region_matches(&uni, "FORGE", 6), ["The Forge"]);
         assert!(region_matches(&uni, "", 6).is_empty());
         assert!(region_matches(&uni, "e", 3).len() <= 3);
+    }
+
+    #[test]
+    fn the_keyring_warning_shows_on_the_settings_pages_that_store_credentials() {
+        /// Draw one page and tell whether it draws the warning.
+        fn warns(page: impl FnMut(&mut Ui)) -> bool {
+            let mut output = crate::test_ui::ctx().run_ui(Default::default(), page);
+            output.textures_delta.clear();
+            drawn_texts(&output).iter().any(|(text, ..)| text == KEYRING_WARNING)
+        }
+        for keyring_missing in [true, false] {
+            let (mut s, _tmp) = session_with_pilots();
+            s.keyring_missing = keyring_missing;
+            let mut portraits = Portraits::without_download(&[1, 2]);
+            let mut form = SettingsForm::new(&s, Page::Nexum);
+            assert_eq!(warns(|ui| _ = nexum_page(ui, &mut form, &mut s, false, false)), keyring_missing, "nexum");
+            // The page shows the character table only with a pilot and a key.
+            s.cfg.eve_metro.key = Some(ApiKey("metro_test_key".into()));
+            assert_eq!(warns(|ui| eve_metro_page(ui, &mut s, false, &mut portraits)), keyring_missing, "eve metro");
+            #[cfg(windows)]
+            {
+                let mut overlay = Overlay::default();
+                assert_eq!(warns(|ui| overlay_page(ui, &mut s, &mut portraits, &mut overlay)), keyring_missing, "overlay");
+            }
+            // The theme page stores no credentials.
+            assert!(!warns(|ui| theme_page(ui, &mut s)), "theme");
+        }
     }
 }

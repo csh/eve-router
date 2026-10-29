@@ -462,6 +462,25 @@ pub fn url_warning(text: &str) -> Option<&'static str> {
     (!local).then_some(HTTP_WARNING)
 }
 
+/// What happened to a config file that is not valid JSON at startup.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Damaged {
+    /// The file moved to this path.
+    MovedTo(PathBuf),
+    /// A dry run left the file where it was.
+    LeftInPlace,
+}
+
+/// The config at startup, and what the startup code needs to know about the file.
+pub struct StartConfig {
+    /// The loaded config, or the defaults for a missing or damaged file.
+    pub cfg: Config,
+    /// Set when the file was damaged.
+    pub damaged: Option<Damaged>,
+    /// True when the file is missing or damaged. The setup wizard shows then.
+    pub first_start: bool,
+}
+
 impl Config {
     /// Read the file. A missing file gives the default config. A file of an older version moves to
     /// the current shape (`config_migrate`).
@@ -487,6 +506,25 @@ impl Config {
             }
             other => other.map(|cfg| (cfg, None)),
         }
+    }
+
+    /// Load the config at startup. The startup code decides here whether the setup wizard shows.
+    /// A missing or damaged file is a first start. A token file does not count. A dry run never
+    /// renames a file: it keeps a damaged file in place and uses the defaults.
+    pub fn load_at_start(path: &Path, dry_run: bool) -> Result<StartConfig, FileError> {
+        let existed = path.is_file();
+        let (cfg, damaged) = if dry_run {
+            match Config::load(path) {
+                Ok(cfg) => (cfg, None),
+                Err(FileError::Json { .. }) => (Config::default(), Some(Damaged::LeftInPlace)),
+                Err(other) => return Err(other),
+            }
+        } else {
+            let (cfg, moved) = Config::load_recovering(path)?;
+            (cfg, moved.map(Damaged::MovedTo))
+        };
+        let first_start = !existed || damaged.is_some();
+        Ok(StartConfig { cfg, damaged, first_start })
     }
 
     /// Write the file through a temporary file and a rename, so a crash never leaves half a file.
@@ -823,6 +861,61 @@ mod tests {
         fs::create_dir(&path).unwrap();
         assert!(matches!(Config::load_recovering(&path), Err(FileError::Io { .. })));
         assert!(path.is_dir());
+    }
+
+    #[test]
+    fn a_missing_file_is_a_first_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        let start = Config::load_at_start(&path, false).unwrap();
+        assert!(start.first_start && start.damaged.is_none());
+        assert!(!path.exists(), "the check writes no file");
+    }
+
+    #[test]
+    fn a_damaged_file_is_a_first_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        fs::write(&path, "{not json").unwrap();
+        let start = Config::load_at_start(&path, false).unwrap();
+        let bad = path.with_extension("json.bad");
+        assert!(start.first_start);
+        assert_eq!(start.damaged, Some(Damaged::MovedTo(bad.clone())));
+        assert!(bad.is_file());
+    }
+
+    #[test]
+    fn a_dry_run_leaves_a_damaged_file_in_place() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        fs::write(&path, "{not json").unwrap();
+        let start = Config::load_at_start(&path, true).unwrap();
+        assert!(start.first_start);
+        assert_eq!(start.damaged, Some(Damaged::LeftInPlace));
+        assert_eq!(start.cfg.top, None);
+        assert_eq!(fs::read_to_string(&path).unwrap(), "{not json");
+        assert!(!path.with_extension("json.bad").exists());
+    }
+
+    #[test]
+    fn a_valid_file_is_not_a_first_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        Config { top: Some(3), ..Config::default() }.save(&path).unwrap();
+        for dry_run in [false, true] {
+            let start = Config::load_at_start(&path, dry_run).unwrap();
+            assert!(!start.first_start);
+            assert_eq!(start.damaged, None);
+            assert_eq!(start.cfg.top, Some(3));
+        }
+    }
+
+    #[test]
+    fn a_token_file_alone_is_a_first_start() {
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join(FILE_NAME);
+        fs::write(crate::esi::store::characters_path(&path), "[]").unwrap();
+        assert!(Config::load_at_start(&path, false).unwrap().first_start);
     }
 
     #[test]

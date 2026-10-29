@@ -13,7 +13,10 @@ mod overlay;
 mod pilots_view;
 mod search;
 mod settings_window;
+mod setup_wizard;
 mod strip;
+#[cfg(test)]
+mod test_ui;
 mod theme;
 mod view;
 mod widgets;

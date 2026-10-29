@@ -6,6 +6,7 @@ use crate::notice::{Level, Toaster};
 use crate::pilots_view::PilotsUi;
 use crate::search::{Pick, SearchBox};
 use crate::settings_window::{self, Page, Popup, SettingsForm};
+use crate::setup_wizard::{Flow, Wizard};
 use crate::strip;
 use crate::theme::{self, panel};
 use crate::widgets::{self, AppButton, UiExt, icon_label};
@@ -56,6 +57,10 @@ const GRID_MIN: f32 = 52.0;
 const GAP: f32 = 8.0;
 /// The width of the sidebar.
 const SIDEBAR: f32 = 280.0;
+/// The margin above and below the page of the setup wizard.
+const WIZARD_MARGIN: i8 = 16;
+/// The margin at the left and at the right of the page and of the footer of the setup wizard.
+const WIZARD_SIDE: i8 = 32;
 
 /// The height of the route list panel for `routes` routes. `spare` is the height that is left
 /// when the planner and the route table have their share. Up to `LIST_ROWS` routes always fit
@@ -126,6 +131,8 @@ pub struct View {
     waypoints_open: Option<bool>,
     /// The routing overlay. It lives here, because the settings window sets its position.
     pub overlay: crate::overlay::Overlay,
+    /// The setup wizard. While it is `Some`, the window shows the wizard in place of the route view.
+    pub wizard: Option<Wizard>,
 }
 
 /// A change of the avoid list, or a closed wormhole, from the context menu of a route step.
@@ -144,8 +151,10 @@ enum Edit {
 }
 
 impl View {
-    pub fn new(_session: &Session) -> Self {
+    /// The view at the start. The wizard shows first when the start asks for it (`Session::setup_due`).
+    pub fn new(session: &Session) -> Self {
         View {
+            wizard: session.setup_due.then(|| Wizard::new(session)),
             search: SearchBox::new("system-search").with_lists(),
             popup: None,
             settings: None,
@@ -161,6 +170,10 @@ impl View {
     }
 
     pub fn show(&mut self, ui: &mut Ui, s: &mut Session) {
+        if self.wizard.is_some() {
+            self.show_wizard(ui, s);
+            return;
+        }
         self.poll_maps(s);
         self.pilots.update(ui.ctx(), s);
         // A dragged value in the settings waits for a quiet time, then the app searches and saves.
@@ -220,6 +233,45 @@ impl View {
         self.pilots.windows(ui, s);
         crate::log_window::show(ui.ctx(), &mut self.log_open, s);
         self.toaster.show(ui, &mut s.notices);
+    }
+
+    /// The setup wizard in place of the route view: the status bar, the pinned footer, the steps
+    /// and the page. It shows no top bar, no sidebar and no Settings window, and it runs no
+    /// `apply_due`, so nothing is saved before Finish. The Characters window shows for the login,
+    /// with no Remove.
+    fn show_wizard(&mut self, ui: &mut Ui, s: &mut Session) {
+        // A Settings window would keep its old state after Finish. Only the top bar opens it, and the wizard does not draw that bar.
+        self.settings = None;
+        // A "Remove <name>?" question from before the wizard must not come back after Finish.
+        self.pilots.clear_remove();
+        self.pilots.poll_login(ui.ctx(), s);
+        // The status clears after `STATUS_TIME`, as in the route view. The Refresh button of the bar sets it.
+        match self.status_timer.update(s.status, Instant::now()) {
+            None => s.status = Status::Ready,
+            Some(_) if s.status == Status::Ready => {}
+            Some(left) => ui.ctx().request_repaint_after(left),
+        }
+        let Some(wizard) = &mut self.wizard else { return };
+        let bar =
+            Frame::new().fill(theme::bar_fill(ui)).inner_margin(Margin::symmetric(12, 6)).stroke(Stroke::new(1.0, theme::header_fill(ui)));
+        egui::Panel::bottom("status-bar").frame(bar).show(ui, |ui| status_bar(ui, s, &mut self.log_open));
+        let footer = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, 12));
+        let flow = egui::Panel::bottom("wizard-footer").frame(footer).show(ui, |ui| wizard.footer(ui)).inner;
+        let central = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, WIZARD_MARGIN));
+        egui::CentralPanel::default().frame(central).show(ui, |ui| {
+            wizard.steps(ui);
+            ui.add_space(12.0);
+            wizard.body(ui, s, &mut self.pilots);
+        });
+        self.pilots.characters_window(ui, s, false);
+        crate::log_window::show(ui.ctx(), &mut self.log_open, s);
+        self.toaster.show(ui, &mut s.notices);
+        // The page of this frame is drawn. The next frame shows the route view.
+        if flow == Flow::Done
+            && let Some(wizard) = self.wizard.take()
+        {
+            wizard.finish(s, ui.ctx());
+        }
     }
 
     /// The planner and the route list. They leave room for the route table under them.
@@ -955,8 +1007,14 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool) {
         }
         ui.add_space(6.0);
         sync_status(ui, s);
+        // A dry run saves nothing for the whole process, so its note stays in place of the status.
+        let text = if s.is_dry_run() {
+            RichText::new(crate::app::DRY_RUN_NOTE).color(theme::WARN)
+        } else {
+            RichText::new(s.status.text()).color(theme::TEXT_DIM)
+        };
         ui.with_layout(Layout::left_to_right(Align::Center), |ui| {
-            ui.add(Label::new(RichText::new(s.status.text()).color(theme::TEXT_DIM)).truncate());
+            ui.add(Label::new(text).truncate());
         });
     });
 }
@@ -1146,6 +1204,291 @@ mod tests {
         assert_eq!(route_list_height(2, 500.0, true), 2.0 * route_pitch(true) + panel_chrome(true));
         assert_eq!(route_list_height(9, 900.0, true), LIST_ROWS as f32 * route_pitch(true) + panel_chrome(true));
         assert_eq!(route_list_height(5, 40.0, true), 1.5 * route_pitch(true) + panel_chrome(true));
+    }
+
+    /// The texts of a frame, with the position and the size of each.
+    type Texts = Vec<(String, egui::Pos2, egui::Vec2)>;
+
+    /// A session for the wizard tests: a config in a temporary directory, an EVE client ID with
+    /// the characters Alice and Bo, and an EVE Metro key. Thus the wizard has all four pages.
+    fn wizard_session(setup_due: bool) -> (Session, tempfile::TempDir) {
+        use router_core::config::{ApiKey, Config};
+        use router_core::esi::pilots::Pilots;
+        use router_core::labels::Shortcuts;
+        use router_core::test_support::{overlay_universe, settings};
+        let uni = overlay_universe();
+        let settings = settings(&uni, Some("black-ops"));
+        let shortcuts = Shortcuts::new(&uni, &Default::default(), &Default::default(), &Default::default(), &Default::default());
+        let tmp = tempfile::tempdir().unwrap();
+        let mut s = Session::new(std::sync::Arc::new(uni), settings, Config::default(), tmp.path().join("eve-router.json"), shortcuts);
+        s.pilots = Pilots::offline_with_client_id(tmp.path().join("active-route.json"), &[(1, "Alice Ander"), (2, "Bo Berg")]);
+        s.cfg.eve_metro.key = Some(ApiKey("metro_test_key".into()));
+        s.setup_due = setup_due;
+        (s, tmp)
+    }
+
+    /// The view of the session. The portraits of Alice and Bo need no download, so no test needs the network.
+    fn wizard_view(s: &Session) -> View {
+        let mut view = View::new(s);
+        view.pilots.portraits = crate::pilots_view::Portraits::without_download(&[1, 2]);
+        view
+    }
+
+    /// One frame of `view.show` in a window of `size`, with these input events.
+    fn show_output(ctx: &egui::Context, view: &mut View, s: &mut Session, size: egui::Vec2, events: Vec<egui::Event>) -> egui::FullOutput {
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, size);
+        let input = egui::RawInput { screen_rect: Some(screen), events, ..Default::default() };
+        let mut output = ctx.run_ui(input, |ui| view.show(ui, s));
+        // The frame output holds texture changes. A test with no renderer drops them.
+        output.textures_delta.clear();
+        output
+    }
+
+    /// One frame of `view.show` in the smallest window, with these input events.
+    fn show_frame(ctx: &egui::Context, view: &mut View, s: &mut Session, events: Vec<egui::Event>) -> Texts {
+        crate::test_ui::drawn_texts(&show_output(ctx, view, s, crate::setup_wizard::SMALLEST_WINDOW, events))
+    }
+
+    /// The drawn text that is exactly `text`.
+    fn find<'a>(drawn: &'a Texts, text: &str) -> Option<&'a (String, egui::Pos2, egui::Vec2)> {
+        drawn.iter().find(|(t, ..)| t == text)
+    }
+
+    /// The bottom edge of the drawn text `text`.
+    fn bottom_of(drawn: &Texts, text: &str) -> f32 {
+        let (_, pos, size) = find(drawn, text).unwrap_or_else(|| panic!("\"{text}\" is drawn"));
+        pos.y + size.y
+    }
+
+    /// A click on the center of the drawn text `text`: the pointer moves there and pushes the
+    /// button in one frame, and releases it in the next frame.
+    fn click(ctx: &egui::Context, view: &mut View, s: &mut Session, text: &str) {
+        let drawn = show_frame(ctx, view, s, vec![]);
+        let (_, pos, size) = find(&drawn, text).unwrap_or_else(|| panic!("\"{text}\" is drawn"));
+        let at = *pos + *size / 2.0;
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+        show_frame(ctx, view, s, vec![egui::Event::PointerMoved(at), button(true)]);
+        show_frame(ctx, view, s, vec![button(false)]);
+    }
+
+    #[test]
+    fn the_wizard_shows_only_when_the_start_asks_for_it() {
+        let (s, _tmp) = wizard_session(false);
+        assert!(View::new(&s).wizard.is_none());
+        let (s, _tmp) = wizard_session(true);
+        assert!(View::new(&s).wizard.is_some());
+    }
+
+    #[test]
+    fn the_wizard_fits_the_smallest_window() {
+        use crate::setup_wizard::{FRAME_ROOM, SMALLEST_WINDOW, WizardPage};
+        let (mut s, _tmp) = wizard_session(true);
+        let mut view = wizard_view(&s);
+        let ctx = crate::test_ui::ctx();
+        // The last texts of the body on each page.
+        let pages = [
+            (WizardPage::Essentials, vec!["Pochven", "+ Add character"]),
+            (WizardPage::Alliance, vec!["Import"]),
+            (WizardPage::Nexum, vec!["Select the maps in Settings, on the Nexum page."]),
+            (WizardPage::EveMetro, vec!["Bo Berg"]),
+        ];
+        for (index, (page, last_texts)) in pages.iter().enumerate() {
+            assert_eq!(view.wizard.as_ref().unwrap().page(), *page);
+            // The first frame lays the page out.
+            show_frame(&ctx, &mut view, &mut s, vec![]);
+            let drawn = show_frame(&ctx, &mut view, &mut s, vec![]);
+            let next = if index + 1 == pages.len() { "Finish" } else { "Next" };
+            // The footer sits on the status bar. The page ends at the footer, less the margin of the page.
+            let footer = egui::PanelState::load(&ctx, egui::Id::new("wizard-footer")).expect("the footer is drawn").outer_rect;
+            let page_end = footer.top() - f32::from(WIZARD_MARGIN);
+            for button in ["Back", "Skip", next] {
+                let bottom = bottom_of(&drawn, button);
+                assert!(bottom <= SMALLEST_WINDOW.y && bottom <= footer.bottom(), "{page:?}: \"{button}\" is on the screen");
+            }
+            let back_top = find(&drawn, "Back").unwrap().1.y;
+            for text in last_texts {
+                let bottom = bottom_of(&drawn, text);
+                assert!(bottom < back_top && bottom <= page_end, "{page:?}: \"{text}\" ends at {bottom}, the page ends at {page_end}");
+            }
+            // The room of the frame: the steps row puts the page lower than the top of the screen,
+            // and the footer and the status bar take the bottom. The page tests in setup_wizard.rs use FRAME_ROOM.
+            if *page == WizardPage::Alliance {
+                let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, SMALLEST_WINDOW);
+                let input = egui::RawInput { screen_rect: Some(screen), ..Default::default() };
+                let mut output = ctx.run_ui(input, |ui| view.wizard.as_mut().unwrap().body(ui, &mut s, &mut view.pilots));
+                output.textures_delta.clear();
+                let offset = bottom_of(&drawn, "Import") - bottom_of(&crate::test_ui::drawn_texts(&output), "Import");
+                let room = offset + (SMALLEST_WINDOW.y - page_end);
+                assert!(room <= FRAME_ROOM, "the frame takes {room} points: {offset} above the page, the page ends at {page_end}");
+            }
+            view.wizard.as_mut().unwrap().next();
+        }
+    }
+
+    /// The page of the wizard, drawn in a window of `size` after three frames. The cards of the
+    /// Essentials page read their natural heights in one frame and use them in the next frame.
+    fn settled_wizard(size: egui::Vec2) -> (egui::FullOutput, egui::Rect) {
+        let (mut s, _tmp) = wizard_session(true);
+        let mut view = wizard_view(&s);
+        let ctx = crate::test_ui::ctx();
+        let mut last = None;
+        for _ in 0..3 {
+            last = Some(show_output(&ctx, &mut view, &mut s, size, vec![]));
+        }
+        let footer = egui::PanelState::load(&ctx, egui::Id::new("wizard-footer")).expect("the footer is drawn").outer_rect;
+        (last.expect("three frames ran"), footer)
+    }
+
+    /// The cards of the Essentials page in a window of `size`: the Characters card, then the Updates, Theme and Features cards.
+    fn essentials_cards(output: &egui::FullOutput, size: egui::Vec2) -> (egui::Rect, Vec<egui::Rect>) {
+        let cards = crate::test_ui::card_rects(output);
+        assert_eq!(cards.len(), 4, "Characters, Updates, Theme and Features");
+        let (left, right): (Vec<_>, Vec<_>) = cards.into_iter().partition(|card| card.center().x < size.x / 2.0);
+        assert_eq!((left.len(), right.len()), (1, 3));
+        (left[0], right)
+    }
+
+    #[test]
+    fn both_columns_of_the_first_page_end_at_the_same_bottom() {
+        use crate::setup_wizard::SMALLEST_WINDOW;
+        let mut heights = Vec::new();
+        for size in [SMALLEST_WINDOW, egui::vec2(SMALLEST_WINDOW.x, 1000.0)] {
+            let (output, footer) = settled_wizard(size);
+            let (characters, right) = essentials_cards(&output, size);
+            let page_end = footer.top() - f32::from(WIZARD_MARGIN);
+            let features = right[2];
+            assert!(
+                (characters.bottom() - features.bottom()).abs() <= 1.0,
+                "the columns end at {} and {}",
+                characters.bottom(),
+                features.bottom()
+            );
+            assert!((features.bottom() - page_end).abs() <= 1.0, "the columns end at {}, the page ends at {page_end}", features.bottom());
+            assert!(features.bottom() < footer.top(), "the cards are above the footer");
+            // The cards of the column have the gap, and the top of the column is the top of the card at the left.
+            assert!((right[0].top() - characters.top()).abs() <= 1.0);
+            assert!((right[1].top() - right[0].bottom() - 16.0).abs() <= 1.0 && (right[2].top() - right[1].bottom() - 16.0).abs() <= 1.0);
+            heights.push((characters.height(), right[0].height(), right[1].height(), right[2].height()));
+        }
+        // The taller window gives the new height to the Characters card, and in equal parts to Updates and Features. Theme keeps its height.
+        let (small, tall) = (heights[0], heights[1]);
+        let grown = 1000.0 - SMALLEST_WINDOW.y;
+        assert!((tall.0 - small.0 - grown).abs() <= 1.0, "the Characters card grew by {}", tall.0 - small.0);
+        assert!((tall.2 - small.2).abs() <= 1.0, "the Theme card keeps its height");
+        let (updates, features) = (tall.1 - small.1, tall.3 - small.3);
+        assert!(
+            (updates - features).abs() <= 1.0 && (updates + features - grown).abs() <= 1.0,
+            "Updates grew by {updates}, Features by {features}"
+        );
+    }
+
+    #[test]
+    fn the_first_page_has_a_margin_of_32_and_a_gap_of_20() {
+        use crate::setup_wizard::SMALLEST_WINDOW;
+        for size in [SMALLEST_WINDOW, egui::vec2(1500.0, 800.0)] {
+            let (output, footer) = settled_wizard(size);
+            let (characters, right) = essentials_cards(&output, size);
+            assert!((characters.left() - 32.0).abs() <= 1.0, "the left edge is at {}", characters.left());
+            assert!(right.iter().all(|card| (card.right() - (size.x - 32.0)).abs() <= 1.0), "the right edge is not at {}", size.x - 32.0);
+            assert!(right.iter().all(|card| (card.left() - characters.right() - 20.0).abs() <= 1.0), "the gap is not 20");
+            // The footer buttons keep the same margin: Back at the left, the primary button at the right.
+            let buttons: Vec<egui::Rect> = crate::test_ui::drawn_shapes(&output)
+                .into_iter()
+                .filter_map(|shape| if let egui::epaint::Shape::Rect(r) = shape { Some(r.rect) } else { None })
+                .filter(|rect| rect.top() >= footer.top() && rect.bottom() <= footer.bottom() && rect.width() < 200.0)
+                .collect();
+            let left = buttons.iter().map(|r| r.left()).fold(f32::MAX, f32::min);
+            let right_edge = buttons.iter().map(|r| r.right()).fold(f32::MIN, f32::max);
+            assert!((left - 32.0).abs() <= 1.0, "the footer starts at {left}");
+            assert!((right_edge - (size.x - 32.0)).abs() <= 1.0, "the footer ends at {right_edge}");
+        }
+    }
+
+    /// Review focus: no write before Finish, also when the followed pilot flies a new ship.
+    #[test]
+    fn a_wizard_frame_writes_no_file() {
+        use router_core::esi::client::Ship;
+        use router_core::esi::pilots::PilotState;
+        use router_core::settings::HullSource;
+        let (mut s, tmp) = wizard_session(true);
+        s.settings.hull_source = HullSource::Pilot(1);
+        let ship = Ship { ship_type_id: 1, ship_item_id: 1, ship_name: "Test".into() };
+        s.pilots.live.insert(1, PilotState { ship: Some(ship), ..Default::default() });
+        let mut view = wizard_view(&s);
+        let ctx = crate::test_ui::ctx();
+        for _ in 0..5 {
+            show_frame(&ctx, &mut view, &mut s, vec![]);
+        }
+        assert!(tmp.path().read_dir().unwrap().next().is_none(), "no file on the disk");
+        assert!(view.wizard.is_some());
+        // Finish writes the config one time.
+        for _ in 0..3 {
+            view.wizard.as_mut().unwrap().next();
+        }
+        click(&ctx, &mut view, &mut s, "Finish");
+        assert!(view.wizard.is_none(), "Finish ends the wizard");
+        assert!(tmp.path().join("eve-router.json").exists());
+    }
+
+    #[test]
+    fn the_status_bar_shows_the_dry_run_note() {
+        for dry_run in [true, false] {
+            let (mut s, _tmp) = wizard_session(true);
+            if dry_run {
+                s.set_dry_run();
+            }
+            let mut view = wizard_view(&s);
+            let drawn = show_frame(&crate::test_ui::ctx(), &mut view, &mut s, vec![]);
+            assert_eq!(find(&drawn, crate::app::DRY_RUN_NOTE).is_some(), dry_run);
+            assert_eq!(find(&drawn, Status::Ready.text()).is_some(), !dry_run);
+        }
+    }
+
+    /// Review focus: a Settings window would keep its old state after Finish, so it never opens
+    /// or draws while the wizard runs.
+    #[test]
+    fn the_wizard_shows_no_settings_window() {
+        let (mut s, tmp) = wizard_session(true);
+        let mut view = wizard_view(&s);
+        // A form from some other path. The wizard drops it, and draws no window.
+        view.settings = Some(SettingsForm::new(&s, Page::default()));
+        let ctx = crate::test_ui::ctx();
+        let keys = [(Key::F, Modifiers::COMMAND), (Key::F5, Modifiers::NONE), (Key::Escape, Modifiers::NONE)];
+        let events = keys
+            .iter()
+            .map(|&(key, modifiers)| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers })
+            .collect();
+        for events in [vec![], events, vec![]] {
+            let drawn = show_frame(&ctx, &mut view, &mut s, events);
+            assert!(find(&drawn, "SETTINGS").is_none(), "the Settings window is drawn");
+            assert!(view.settings.is_none());
+        }
+        // The top bar with its Settings button is not drawn. The Essentials page holds no text with that word.
+        let drawn = show_frame(&ctx, &mut view, &mut s, vec![]);
+        assert!(!drawn.iter().any(|(t, ..)| t.contains("Settings")), "the Settings button is drawn");
+        assert!(tmp.path().read_dir().unwrap().next().is_none(), "no file on the disk");
+    }
+
+    /// Review focus: a "Remove <name>?" question from before the wizard must not come back after Finish.
+    #[test]
+    fn the_wizard_closes_an_open_remove_question() {
+        let (mut s, _tmp) = wizard_session(true);
+        let mut view = wizard_view(&s);
+        view.pilots.characters_open = true;
+        view.pilots.ask_remove(1);
+        let ctx = crate::test_ui::ctx();
+        // A window sizes itself in the first frame and draws nothing, so the test reads the second frame.
+        show_frame(&ctx, &mut view, &mut s, vec![]);
+        let drawn = show_frame(&ctx, &mut view, &mut s, vec![]);
+        assert!(find(&drawn, "Alice Ander").is_some(), "the Characters window is open");
+        assert!(!drawn.iter().any(|(t, ..)| t.starts_with("Remove")), "no Remove while the wizard runs");
+        // After the wizard, the window offers Remove again, and the old question is gone.
+        view.wizard.take().unwrap().finish(&mut s, &ctx);
+        show_frame(&ctx, &mut view, &mut s, vec![]);
+        let drawn = show_frame(&ctx, &mut view, &mut s, vec![]);
+        assert!(find(&drawn, "Remove").is_some(), "the Characters window offers Remove");
+        assert!(!drawn.iter().any(|(t, ..)| t.starts_with("Remove Alice Ander?")));
     }
 
     #[test]

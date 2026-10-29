@@ -30,6 +30,8 @@ pub const MAX_AVATARS: usize = 3;
 pub const AVATAR: f32 = 20.0;
 /// The portrait size to download. 64 px is sharp at 32 px on a 2x display.
 const PORTRAIT_SIZE: u32 = 64;
+/// The time between two frames while a login or a send waits for its thread.
+const LOGIN_POLL: std::time::Duration = std::time::Duration::from_millis(250);
 /// The wait before the one retry of a failed portrait download.
 const PORTRAIT_RETRY_WAIT: std::time::Duration = std::time::Duration::from_secs(2);
 
@@ -214,9 +216,8 @@ pub struct PilotsUi {
 impl PilotsUi {
     /// Read the tracker and the login. Call this each frame.
     pub fn update(&mut self, ctx: &egui::Context, s: &mut Session) {
-        self.portraits.poll(ctx);
         let had_login = s.pilots.login.is_some();
-        s.pilots.update();
+        self.poll_login(ctx, s);
         s.sync_metro_affiliation();
         match s.pilots.sync_hull(&mut s.settings) {
             HullSync::None => {}
@@ -244,9 +245,6 @@ impl PilotsUi {
                 }
             }
         }
-        for text in std::mem::take(&mut s.pilots.notices) {
-            s.notify(Level::Error, text);
-        }
         // The login is done: continue the route start.
         if had_login && s.pilots.login.is_none() {
             self.continue_after_login(s);
@@ -256,10 +254,37 @@ impl PilotsUi {
             self.scroll = progress.is_some();
             self.last_progress = progress;
         }
-        // A login or a send waits for a thread. Draw again soon to show the result.
-        if s.pilots.login.is_some() || s.pilots.send.is_some() {
-            ctx.request_repaint_after(std::time::Duration::from_millis(250));
+        // A send waits for a thread. Draw again soon to show the result.
+        if s.pilots.send.is_some() {
+            ctx.request_repaint_after(LOGIN_POLL);
         }
+    }
+
+    /// Read the portraits, the login and the tracker, and show the notices of the pilots. Call this
+    /// each frame. It changes no setting and saves nothing, so the setup wizard calls it in place
+    /// of `update`.
+    pub(crate) fn poll_login(&mut self, ctx: &egui::Context, s: &mut Session) {
+        self.portraits.poll(ctx);
+        s.pilots.update();
+        for text in std::mem::take(&mut s.pilots.notices) {
+            s.notify(Level::Error, text);
+        }
+        // A login waits for a thread. Draw again soon to show the result.
+        if s.pilots.login.is_some() {
+            ctx.request_repaint_after(LOGIN_POLL);
+        }
+    }
+
+    /// Close the "Remove <name>?" question. The setup wizard calls this, so no old question
+    /// shows after Finish.
+    pub(crate) fn clear_remove(&mut self) {
+        self.remove = None;
+    }
+
+    /// Open the "Remove <name>?" question for the character `id`, as a click on Remove does.
+    #[cfg(test)]
+    pub(crate) fn ask_remove(&mut self, id: u64) {
+        self.remove = Some(id);
     }
 
     /// Start the route that waited for the login. Drop it if the route is gone.
@@ -281,7 +306,8 @@ impl PilotsUi {
         route
     }
 
-    fn login(&mut self, s: &mut Session) {
+    /// Start the login and open the characters window with the login steps.
+    pub(crate) fn login(&mut self, s: &mut Session) {
         self.paste.clear();
         if let Err(e) = s.pilots.start_login() {
             s.notify(Level::Error, e.to_string());
@@ -335,7 +361,7 @@ impl PilotsUi {
     /// All windows of this module.
     pub fn windows(&mut self, ui: &mut Ui, s: &mut Session) {
         self.resume_window(ui, s);
-        self.characters_window(ui, s);
+        self.characters_window(ui, s, true);
         self.start_window(ui, s);
         self.sending_window(ui, s);
         self.stop_window(ui, s);
@@ -353,13 +379,15 @@ impl PilotsUi {
         }
     }
 
-    fn characters_window(&mut self, ui: &mut Ui, s: &mut Session) {
+    /// The Characters window. With `allow_remove` false (the setup wizard runs), it offers no Remove.
+    pub(crate) fn characters_window(&mut self, ui: &mut Ui, s: &mut Session, allow_remove: bool) {
         if !self.characters_open {
             return;
         }
         let response = Modal::new(Id::new("characters")).frame(crate::settings_window::modal_frame()).show(ui.ctx(), |ui| {
             ui.set_width(crate::theme::modal_width(ui, 520.0));
             crate::settings_window::title(ui, "Characters");
+            crate::settings_window::keyring_warning(ui, s);
             // No keyring: offer a login for this session only.
             if s.pilots.accounts.is_none() && s.pilots.keyring_error.is_some() {
                 ui.label(
@@ -389,7 +417,7 @@ impl PilotsUi {
                         ship_row(ui, row, &s.settings.hulls);
                     });
                     ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                        if ui.app_button("Remove").clicked() {
+                        if allow_remove && ui.app_button("Remove").clicked() {
                             self.remove = Some(row.id);
                         }
                         let again = if row.live.expired { Some("Log in again") } else { row.needs_reauth.then_some("Re-authorize") };
@@ -400,7 +428,7 @@ impl PilotsUi {
                         }
                     });
                 });
-                if self.remove == Some(row.id) {
+                if allow_remove && self.remove == Some(row.id) {
                     let text = format!("Remove {}? This revokes access and deletes stored tokens.", row.name);
                     ui.label(RichText::new(text).color(theme::WARN));
                     ui.add_space(4.0);
@@ -1170,5 +1198,52 @@ mod tests {
         // A picked pilot that cannot send now (offline) gives way to the last sender.
         assert_eq!(preselect(HullSource::Pilot(9), &ids, Some(3)), 3);
         assert_eq!(preselect(HullSource::Manual, &ids, None), 1);
+    }
+
+    /// A session with the character Alice, a window that is open, and the portrait of Alice.
+    fn characters_setup() -> (Session, PilotsUi, tempfile::TempDir) {
+        let (mut s, tmp) = session_with_routes();
+        s.pilots = Pilots::offline_with_client_id(tmp.path().join("active-route.json"), &[(1, "Alice Ander")]);
+        let ui = PilotsUi { portraits: Portraits::without_download(&[1]), characters_open: true, ..Default::default() };
+        (s, ui, tmp)
+    }
+
+    /// The texts that the Characters window draws in one frame.
+    fn characters_texts(s: &mut Session, ui_state: &mut PilotsUi, allow_remove: bool) -> Vec<String> {
+        // A window sizes itself in the first frame and draws nothing, so the test reads the second frame.
+        let ctx = crate::test_ui::ctx();
+        let mut draw = |s: &mut Session| ctx.run_ui(Default::default(), |ui| ui_state.characters_window(ui, s, allow_remove));
+        draw(s).textures_delta.clear();
+        let mut output = draw(s);
+        output.textures_delta.clear();
+        crate::test_ui::drawn_texts(&output).into_iter().map(|(text, ..)| text).collect()
+    }
+
+    #[test]
+    fn the_characters_window_shows_the_keyring_warning() {
+        for keyring_missing in [true, false] {
+            let (mut s, mut ui, _tmp) = characters_setup();
+            s.keyring_missing = keyring_missing;
+            let drawn = characters_texts(&mut s, &mut ui, true);
+            let shown = drawn.iter().any(|t| t == crate::settings_window::KEYRING_WARNING);
+            assert_eq!(shown, keyring_missing);
+        }
+    }
+
+    #[test]
+    fn the_characters_window_hides_remove_while_the_wizard_runs() {
+        let (mut s, mut ui, _tmp) = characters_setup();
+        let drawn = characters_texts(&mut s, &mut ui, true);
+        assert!(drawn.iter().any(|t| t == "Remove"));
+        let drawn = characters_texts(&mut s, &mut ui, false);
+        assert!(!drawn.iter().any(|t| t == "Remove"));
+        assert!(drawn.iter().any(|t| t == "Alice Ander"));
+        // A confirmation that is open does not show when Remove is locked.
+        ui.remove = Some(1);
+        let drawn = characters_texts(&mut s, &mut ui, false);
+        assert!(!drawn.iter().any(|t| t.starts_with("Remove ") || t == "Remove"));
+        assert!(drawn.iter().any(|t| t == "Alice Ander"));
+        let drawn = characters_texts(&mut s, &mut ui, true);
+        assert!(drawn.iter().any(|t| t.starts_with("Remove Alice Ander?")));
     }
 }

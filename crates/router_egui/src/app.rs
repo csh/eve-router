@@ -5,7 +5,7 @@ use crate::notice::{Level, Notice};
 use crate::theme;
 use crate::view::View;
 use petgraph::graph::NodeIndex;
-use router_core::config::{ApiKey, AppPaths, Config, EveMetroConfig};
+use router_core::config::{ApiKey, AppPaths, Config, Damaged, EveMetroConfig};
 use router_core::error::FileError;
 use router_core::esi::client::Affiliation;
 use router_core::esi::pilots::Pilots;
@@ -17,14 +17,14 @@ use router_core::nexum_key::{self, KeyStore, KeyringKey};
 use router_core::overlay::{self, OverlayReport, Pair};
 use router_core::refresh::{self, Refresher, RouteChange, Setup, Snapshot, kept_route, route_change};
 use router_core::route::{Route, Stop};
-use router_core::settings::{Settings, split_systems};
+use router_core::settings::{Features, Settings, split_systems};
 use router_core::sources::nexum::MapInfo;
 use router_core::sources::{OverlayWarning, evemetro};
 use router_core::startup::StartupError;
 use router_core::universe::Universe;
 use router_core::wormhole::{ClosedHole, SourceData};
 use router_core::{sde_update, startup};
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, TryRecvError};
 use std::time::{Duration, Instant};
@@ -231,26 +231,87 @@ fn ask_to_update(ctx: &egui::Context, tx: &mpsc::Sender<LoadMsg>, available: &Av
     answer.recv().unwrap_or(false)
 }
 
-/// The command-line arguments that name systems. The restart flag of an update is not a system.
+/// Flag that starts the setup wizard. It works in every build.
+pub const SETUP_ARG: &str = "--setup";
+
+/// Flag that makes the wizard change nothing on disk. It works only in development builds
+/// (debug assertions on). A release build ignores it.
+pub const DRY_RUN_ARG: &str = "--dry-run";
+
+/// The setup flags of the command line.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct SetupFlags {
+    /// Start the setup wizard.
+    pub setup: bool,
+    /// Change nothing on disk. Set only together with `setup`, and only in development builds.
+    pub dry_run: bool,
+}
+
+/// Read the setup flags. `--dry-run` has an effect only together with `--setup`, and only
+/// in development builds. In a release build, `dry_run` is always false.
+fn setup_flags(args: impl Iterator<Item = String>) -> SetupFlags {
+    let (mut setup, mut dry_run) = (false, false);
+    for arg in args {
+        setup |= arg == SETUP_ARG;
+        dry_run |= arg == DRY_RUN_ARG;
+    }
+    SetupFlags { setup, dry_run: setup && dry_run && cfg!(debug_assertions) }
+}
+
+/// The command-line arguments that name systems. The restart flag of an update and the
+/// setup flags are not systems. This drops `--dry-run` in every build.
 fn waypoint_args(args: impl Iterator<Item = String>) -> Vec<String> {
-    args.filter(|arg| arg != app_update::UPDATED_ARG).collect()
+    args.filter(|arg| ![app_update::UPDATED_ARG, SETUP_ARG, DRY_RUN_ARG].contains(&arg.as_str())).collect()
+}
+
+/// True if the start can run `nexum_key::unlock`. With a key in the file, unlock moves the key to
+/// the keyring and writes the file, so a dry run must not run it. The key then stays in memory.
+/// Without a key in the file, unlock only reads the keyring.
+fn unlock_allowed(dry_run: bool, cfg: &Config) -> bool {
+    let key_in_file = cfg.nexum.key.is_some() && cfg.nexum.key_in_file;
+    !(dry_run && key_in_file)
+}
+
+/// Make the Nexum key right at the start, with `nexum_key::unlock`, when `unlock_allowed` lets it
+/// run. Return the warnings for the user. A dry run with a key in the file changes nothing.
+fn unlock_at_start(dry_run: bool, cfg: &mut Config, cfg_path: &Path, store: Result<&dyn KeyStore, &StoreError>) -> Vec<String> {
+    if !unlock_allowed(dry_run, cfg) {
+        return Vec::new();
+    }
+    nexum_key::unlock(cfg, cfg_path, store)
+}
+
+/// True if the start looks for a new version. The config must allow the check, the env var
+/// `SKIP_ENV` must be off, and the start must not follow an update. A dry run never looks: an
+/// install restarts the app with no `--setup` and no `--dry-run`, and the new process could save.
+fn update_step_enabled(config_allows: bool, skip_env: bool, just_updated: bool, dry_run: bool) -> bool {
+    config_allows && !skip_env && !just_updated && !dry_run
 }
 
 /// The startup load, with the config file and the default SDE directory. The arguments
 /// of the command line are the first waypoints, for example `eve-router Jita "New Caldari"`.
 fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, StartupError> {
     let paths = AppPaths::detect();
-    // A damaged config file moves aside, and the start goes on with the defaults.
-    let (mut cfg, damaged) = Config::load_recovering(&paths.config)?;
+    let flags = setup_flags(std::env::args().skip(1));
+    // A damaged config file moves aside, and the start goes on with the defaults. A dry run
+    // leaves the file in place.
+    let start = Config::load_at_start(&paths.config, flags.dry_run)?;
+    let mut cfg = start.cfg;
     // The EVE Metro key comes from the build or the env var, never from the file.
     cfg.eve_metro.key = evemetro::api_key().map(ApiKey);
     let mut warnings = Vec::new();
-    if let Some(bad) = damaged {
-        warnings.push(format!("The config file was damaged. It is now {}, and the defaults are in use.", bad.display()));
+    match &start.damaged {
+        Some(Damaged::MovedTo(bad)) => {
+            warnings.push(format!("The config file was damaged. It is now {}, and the defaults are in use.", bad.display()));
+        }
+        Some(Damaged::LeftInPlace) => {
+            warnings.push("The config file is damaged. The dry run uses the defaults and does not change the file.".to_string());
+        }
+        None => {}
     }
     // The Nexum key lives in the keyring. A key in an old file moves there now.
     let key_store = key_keyring();
-    warnings.extend(nexum_key::unlock(&mut cfg, &paths.config, key_store.as_deref()));
+    warnings.extend(unlock_at_start(flags.dry_run, &mut cfg, &paths.config, key_store.as_deref()));
     // Each step wakes the window, so the splash screen shows it.
     let progress = |step| {
         let _ = tx.send(LoadMsg::Progress(step));
@@ -260,7 +321,7 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     // EVE Metro needs a logged-in character, so it stays off without an EVE client ID.
     let sso_ready = client_id().is_some();
     // The update step comes first. A restart after it must not repeat the check.
-    let enabled = cfg.checks_for_updates() && !env_flag(app_update::SKIP_ENV) && !app_update::just_updated();
+    let enabled = update_step_enabled(cfg.checks_for_updates(), env_flag(app_update::SKIP_ENV), app_update::just_updated(), flags.dry_run);
     let report = {
         let (tx, ctx) = (tx.clone(), ctx.clone());
         update_step(
@@ -310,6 +371,7 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     session.bridges = pairs;
     session.log = log;
     session.refresher = Some(refresher);
+    let key_store_failed = key_store.is_err();
     session.key_store = key_store.ok();
     for line in startup_lines {
         session.notify(Level::Info, line);
@@ -321,12 +383,34 @@ fn load(ctx: egui::Context, tx: &mpsc::Sender<LoadMsg>) -> Result<Session, Start
     }
     // A tracker event or a login result repaints the window.
     session.pilots = Pilots::open(&paths.config, keyring(), client_id(), Arc::new(move || ctx.request_repaint()));
+    // The two keyring checks of the load: the Nexum key store and the token store.
+    session.keyring_missing = key_store_failed || session.pilots.keyring_error.is_some();
+    // `--setup` opens the wizard also with a valid config file.
+    session.setup_due = start.first_start || flags.setup;
+    if flags.dry_run {
+        session.set_dry_run();
+    }
     // The command line can give the start, the midpoints and the destination.
     let systems = waypoint_args(std::env::args().skip(1));
     if !systems.is_empty() {
         session.add_list(&systems.join(","));
     }
     Ok(session)
+}
+
+/// The note that tells the pilot that a dry run saves nothing.
+pub const DRY_RUN_NOTE: &str = "Dry run: the config is not saved";
+
+/// When a change reaches the disk.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+enum Writes {
+    /// Each change writes its file at once.
+    #[default]
+    Now,
+    /// The changes wait in memory. `write_once` writes the config one time at the end.
+    Held,
+    /// A dry run: no change reaches the disk or the keyring until the app stops.
+    Never,
 }
 
 /// The loaded map, the settings, the waypoints and the routes. It holds no UI state.
@@ -382,6 +466,12 @@ pub struct Session {
     pub map_names: Vec<MapInfo>,
     /// The logins, the tracking and the active route.
     pub pilots: Pilots,
+    /// When a change reaches the disk. See `write_once` and `set_dry_run`.
+    writes: Writes,
+    /// The setup wizard shows at the start. `load` sets it, and `View::new` reads it.
+    pub setup_due: bool,
+    /// The OS keyring is not available. `load` sets it, and `keyring_warning` reads it.
+    pub keyring_missing: bool,
 }
 
 impl Session {
@@ -415,6 +505,9 @@ impl Session {
             apply_at: None,
             map_names: Vec::new(),
             pilots: Pilots::offline(active_path(&cfg_path)),
+            writes: Writes::Now,
+            setup_due: false,
+            keyring_missing: false,
         };
         session.recompute();
         session.fetch_warnings = session.shortcuts.warnings.clone();
@@ -540,14 +633,10 @@ impl Session {
     /// Add the bridges of a pasted SMT list to the list, or replace the list with them. Save the
     /// list, and give the map to the refresh worker. Return the lines that did not give a bridge.
     pub fn import_bridges(&mut self, text: &str, replace: bool) -> Vec<String> {
-        let report = overlay::parse_bridges(&self.uni, text, self.settings.hulls.range_ly);
-        let mut problems: Vec<String> = report.unknown.iter().map(|name| format!("Unknown system \"{name}\"")).collect();
-        problems.extend(report.same.iter().map(|name| format!("{name} cannot bridge to itself")));
-        problems.extend(report.not_sovnull.iter().map(|name| format!("An entered system is not sovnull: {name}")));
-        problems.extend(report.too_far.iter().map(|pair| format!("Invalid connection between {pair}.")));
+        let (new, problems) = self.read_bridges(text);
         let before = if replace { Vec::new() } else { self.bridges.clone() };
         let mut pairs = before.clone();
-        pairs.extend(report.pairs.iter().filter(|p| !before.contains(p)));
+        pairs.extend(new.iter().filter(|p| !before.contains(p)));
         let added = pairs.len() - before.len();
         self.set_bridges(pairs);
         let s = if added == 1 { "" } else { "s" };
@@ -556,6 +645,17 @@ impl Session {
             self.notify(Level::Info, format!("Added {added} jump bridge{s}"));
         }
         problems
+    }
+
+    /// Read the bridges of a pasted SMT list, and change nothing. Return the pairs, and the lines
+    /// that did not give a bridge.
+    pub fn read_bridges(&self, text: &str) -> (Vec<Pair>, Vec<String>) {
+        let report = overlay::parse_bridges(&self.uni, text, self.settings.hulls.range_ly);
+        let mut problems: Vec<String> = report.unknown.iter().map(|name| format!("Unknown system \"{name}\"")).collect();
+        problems.extend(report.same.iter().map(|name| format!("{name} cannot bridge to itself")));
+        problems.extend(report.not_sovnull.iter().map(|name| format!("An entered system is not sovnull: {name}")));
+        problems.extend(report.too_far.iter().map(|pair| format!("Invalid connection between {pair}.")));
+        (report.pairs, problems)
     }
 
     /// Take the bridge at row `i` off the list.
@@ -573,11 +673,14 @@ impl Session {
     }
 
     /// Keep `pairs` as the bridges: write the bridge file, and tell the worker, which builds the new map.
-    /// Without a worker, the new bridges load at the next start.
+    /// Without a worker, the new bridges load at the next start. A dry run writes no file.
     fn set_bridges(&mut self, mut pairs: Vec<Pair>) {
         pairs.sort_by_cached_key(|&(a, b)| (self.uni.name(a).to_lowercase(), self.uni.name(b).to_lowercase()));
         let path = self.cfg_path.with_file_name(router_core::config::BRIDGES_FILE);
-        if let Err(e) = overlay::save_bridges(&path, &self.uni, &pairs) {
+        // In a dry run, the bridges stay in memory and go to the worker, as after a save.
+        if self.writes != Writes::Never
+            && let Err(e) = overlay::save_bridges(&path, &self.uni, &pairs)
+        {
             tracing::error!(error = %e, "cannot save the jump bridges");
             self.notify(Level::Error, e.to_string());
             return;
@@ -832,11 +935,66 @@ impl Session {
         }
     }
 
+    /// Stop all writes to the disk and the keyring until the process ends. The changes stay in
+    /// memory. There is no way back.
+    pub fn set_dry_run(&mut self) {
+        self.writes = Writes::Never;
+        tracing::info!("dry run: the config, the bridges and the Nexum key are not saved");
+    }
+
+    /// True after `set_dry_run`.
+    pub fn is_dry_run(&self) -> bool {
+        self.writes == Writes::Never
+    }
+
+    /// Run `f` with the config writes held, then write the config one time. The bridge file and
+    /// the keyring do not wait. In a dry run, `f` runs and nothing is written.
+    pub fn write_once(&mut self, f: impl FnOnce(&mut Session)) {
+        // A nested call or a dry run only runs `f`. The outer call writes, or nothing does.
+        if self.writes != Writes::Now {
+            f(self);
+            return;
+        }
+        self.writes = Writes::Held;
+        f(self);
+        // A dry run that starts inside `f` stays on.
+        if self.writes == Writes::Held {
+            self.writes = Writes::Now;
+            self.save();
+        }
+    }
+
+    /// Set the update check at the start and the automatic install, and save.
+    pub fn set_update_checks(&mut self, check: bool, auto: bool) {
+        self.cfg.check_for_updates = Some(check);
+        self.cfg.auto_update = auto;
+        self.save();
+    }
+
+    /// Set or clear the alliance capital. Search again and save.
+    pub fn set_capital(&mut self, capital: Option<NodeIndex>) {
+        self.settings.rules.capital = capital;
+        self.recompute();
+        self.save();
+    }
+
+    /// Write the switches of the setup wizard to the settings. Search again and save.
+    pub fn apply_features(&mut self, features: Features) {
+        features.apply(&mut self.settings);
+        self.recompute();
+        self.save();
+    }
+
     /// Set or clear the Nexum key, and save. The keyring holds the key. Without a keyring the key
-    /// stays in memory and goes at exit. The file never holds a key that the user enters.
+    /// stays in memory and goes at exit. The file never holds a key that the user enters. A dry run
+    /// does not touch the keyring.
     pub fn set_nexum_key(&mut self, key: Option<ApiKey>) {
         self.cfg.nexum.key = key.clone();
         self.cfg.nexum.key_in_file = false;
+        if self.writes == Writes::Never {
+            self.nexum_saved();
+            return;
+        }
         let result = match (&self.key_store, &key) {
             (Some(store), Some(key)) => store.set(key),
             (Some(store), None) => store.delete(),
@@ -958,9 +1116,13 @@ impl Session {
         theme::apply(ctx, self.faction_theme(), self.cfg.compact);
     }
 
-    /// Copy the settings to the config, and write the config file.
+    /// Copy the settings to the config, and write the config file. A held write or a dry run
+    /// writes no file.
     fn write_config(&mut self) -> Result<(), FileError> {
         self.settings.store(&self.uni, &mut self.cfg);
+        if self.writes != Writes::Now {
+            return Ok(());
+        }
         let result = self.cfg.save(&self.cfg_path);
         if let Err(e) = &result {
             tracing::error!(error = %e, "cannot save the config");
@@ -1026,6 +1188,7 @@ mod tests {
     use router_core::sources::FetchError;
     use router_core::test_support::{FIXTURE_TIME, fake_refresher, hole, overlay_universe, settings, snapshot};
     use router_core::wormhole::{SourceId, Wormhole};
+    use router_core::wormhole_space::Stance;
 
     /// A session that writes its config to a new temporary directory. Keep the directory until the test ends.
     fn session() -> (Session, tempfile::TempDir) {
@@ -1295,6 +1458,62 @@ mod tests {
         );
         assert_eq!(problems, ["Invalid connection between HM-XR2 and UALX-3."]);
         assert_eq!(s.bridges.len(), 1);
+    }
+
+    #[test]
+    fn held_writes_reach_the_file_one_time() {
+        let (mut s, _tmp) = session();
+        let path = s.cfg_path.clone();
+        s.write_once(|s| {
+            s.save();
+            s.set_capital(None);
+            assert!(!path.exists(), "a held write waits");
+        });
+        assert!(path.exists());
+        // With no write inside, write_once still writes the file one time.
+    }
+
+    #[test]
+    fn a_dry_run_writes_no_file_and_no_key() {
+        let (mut s, tmp) = session();
+        s.key_store = Some(Box::new(router_core::nexum_key::MemoryKey::default()));
+        s.set_dry_run();
+        s.write_once(|s| {
+            s.set_update_checks(false, false);
+            s.set_nexum_key(Some(ApiKey("nxm_test_key".into())));
+            s.import_bridges("0 IL-YTR --> UALX-3", false);
+        });
+        s.save();
+        assert!(tmp.path().read_dir().unwrap().next().is_none(), "no config, no ansiblex.txt");
+        assert_eq!(s.key_store.as_ref().unwrap().get().unwrap(), None);
+        // The session holds the values in memory.
+        assert!(s.is_dry_run() && !s.cfg.checks_for_updates());
+        assert_eq!(s.bridges.len(), 1);
+        assert!(s.cfg.nexum.key.is_some());
+    }
+
+    #[test]
+    fn the_new_setters_change_the_session_and_save() {
+        let (mut s, _tmp) = session();
+        s.set_update_checks(false, true);
+        let saved = Config::load(&s.cfg_path).unwrap();
+        assert_eq!((saved.check_for_updates, saved.auto_update), (Some(false), true));
+        let ualx = s.uni.resolve("UALX-3").unwrap();
+        s.set_capital(Some(ualx));
+        assert_eq!(s.settings.rules.capital, Some(ualx));
+        assert_eq!(Config::load(&s.cfg_path).unwrap().capital.as_deref(), Some("UALX-3"));
+        s.apply_features(Features { pochven: false, ..Features::default() });
+        assert_eq!(s.settings.space.pochven, Stance::Block);
+        assert_eq!(Config::load(&s.cfg_path).unwrap().wormhole_space.pochven, Stance::Block);
+    }
+
+    #[test]
+    fn reading_bridges_writes_nothing() {
+        let (s, tmp) = session();
+        let (pairs, problems) = s.read_bridges("0 IL-YTR --> UALX-3\nNope --> Jita");
+        assert_eq!(pairs.len(), 1);
+        assert_eq!(problems, ["Unknown system \"Nope\""]);
+        assert!(tmp.path().read_dir().unwrap().next().is_none());
     }
 
     #[test]
@@ -1771,5 +1990,84 @@ mod tests {
         let args = ["--updated", "Jita", "Amarr"].map(String::from);
         assert_eq!(waypoint_args(args.into_iter()), ["Jita", "Amarr"]);
         assert!(waypoint_args(["--updated".to_string()].into_iter()).is_empty());
+    }
+
+    /// `--dry-run` has an effect only together with `--setup`.
+    #[test]
+    fn the_setup_flags_parse_and_dry_run_needs_setup() {
+        let flags = |args: &[&str]| setup_flags(args.iter().map(|a| a.to_string()));
+        assert_eq!(flags(&["--setup", "Jita"]), SetupFlags { setup: true, dry_run: false });
+        // --dry-run works only in development builds, so a release build expects false.
+        assert_eq!(flags(&["--dry-run", "--setup"]), SetupFlags { setup: true, dry_run: cfg!(debug_assertions) });
+        // Without --setup, --dry-run has no effect.
+        assert_eq!(flags(&["--dry-run"]), SetupFlags::default());
+        assert_eq!(flags(&["Jita"]), SetupFlags::default());
+    }
+
+    /// The setup flags are not system names.
+    #[test]
+    fn the_setup_flags_are_not_waypoints() {
+        let args = ["--setup", "Jita", "--dry-run", "--updated", "Amarr"].map(String::from);
+        assert_eq!(waypoint_args(args.into_iter()), ["Jita", "Amarr"]);
+    }
+
+    /// Review focus: a dry run must not move a key from the file to the keyring, because the move rewrites the file.
+    #[test]
+    fn a_dry_run_keeps_an_old_key_in_the_file() {
+        use router_core::config::NexumConfig;
+        let old = Config {
+            nexum: NexumConfig { key: Some(ApiKey("nxm_old".into())), key_in_file: true, ..Default::default() },
+            ..Default::default()
+        };
+        assert!(!unlock_allowed(true, &old));
+        assert!(unlock_allowed(false, &old));
+        // A file with no key: unlock only reads the keyring, so it runs also in a dry run.
+        assert!(unlock_allowed(true, &Config::default()));
+    }
+
+    /// Review focus: the start of a dry run leaves a key of an old file in the file and out of the keyring.
+    #[test]
+    fn a_dry_run_start_leaves_the_old_key_file_alone() {
+        use router_core::config::NexumConfig;
+        use router_core::nexum_key::{KeyStore, MemoryKey};
+        let old_key = || ApiKey("nxm_old".into());
+        let old = || Config { nexum: NexumConfig { key: Some(old_key()), key_in_file: true, ..Default::default() }, ..Default::default() };
+        let tmp = tempfile::tempdir().unwrap();
+        let path = tmp.path().join("eve-router.json");
+        old().save(&path).unwrap();
+        let text = std::fs::read_to_string(&path).unwrap();
+        // A dry run: no move, no write. The key stays in memory.
+        let store = MemoryKey::default();
+        let mut cfg = old();
+        assert!(unlock_at_start(true, &mut cfg, &path, Ok(&store)).is_empty());
+        assert_eq!(std::fs::read_to_string(&path).unwrap(), text, "the file did not change");
+        assert_eq!(store.get().unwrap(), None, "the keyring did not change");
+        assert_eq!((cfg.nexum.key, cfg.nexum.key_in_file), (Some(old_key()), true));
+        // A normal start moves the key to the keyring and writes the file without it.
+        let mut cfg = old();
+        assert!(unlock_at_start(false, &mut cfg, &path, Ok(&store)).is_empty());
+        assert_eq!(store.get().unwrap(), Some(old_key()));
+        assert!(!cfg.nexum.key_in_file);
+        assert!(!std::fs::read_to_string(&path).unwrap().contains("nxm_old"), "the file holds no key");
+    }
+
+    /// Review focus: an update restart drops `--setup` and `--dry-run`, so a dry run never runs the update step.
+    #[test]
+    fn a_dry_run_skips_the_update_step() {
+        // (config allows, SKIP_ENV set, just updated, dry run) and the result.
+        let table = [
+            ((true, false, false, false), true),
+            ((false, false, false, false), false),
+            ((true, true, false, false), false),
+            ((true, false, true, false), false),
+            ((true, false, false, true), false),
+        ];
+        for ((config_allows, skip_env, just_updated, dry_run), enabled) in table {
+            assert_eq!(
+                update_step_enabled(config_allows, skip_env, just_updated, dry_run),
+                enabled,
+                "{config_allows} {skip_env} {just_updated} {dry_run}"
+            );
+        }
     }
 }
