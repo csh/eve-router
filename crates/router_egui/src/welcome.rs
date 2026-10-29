@@ -58,19 +58,55 @@ impl Preset {
 
     /// The answers this preset starts with.
     pub fn answers(self) -> Answers {
+        let picks = Picks::ALL_ON;
         match self {
-            Preset::Highsec => Answers { wormholes: false, pochven: false, subscription: false },
-            Preset::Lowsec | Preset::Nullsec | Preset::Wormholes => Answers { wormholes: true, pochven: true, subscription: false },
-            Preset::Custom => Answers { wormholes: true, pochven: true, subscription: true },
+            Preset::Highsec => Answers { wormholes: Comfort::No, picks, pochven: false, subscription: false },
+            Preset::Lowsec | Preset::Nullsec | Preset::Wormholes => {
+                Answers { wormholes: Comfort::Yes, picks, pochven: true, subscription: false }
+            }
+            Preset::Custom => Answers { wormholes: Comfort::Yes, picks, pochven: true, subscription: true },
         }
     }
 }
 
-/// The three travel answers of the welcome screen.
+/// The answer to the wormhole question.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Comfort {
+    /// The pilot uses every wormhole source.
+    Yes,
+    /// The pilot picks the sources, one switch for each.
+    Somewhat,
+    /// The pilot uses no wormhole source.
+    No,
+}
+
+/// The wormhole switches that the answer Somewhat shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Picks {
+    /// Use Thera.
+    pub thera: bool,
+    /// Use Turnur.
+    pub turnur: bool,
+    /// Use each class of J-space, in the order of the classes 1 to 6.
+    pub classes: [bool; 6],
+    /// Use Nexum. The wizard shows the Nexum page only when this is on.
+    pub nexum: bool,
+}
+
+impl Picks {
+    /// Every switch on. It is the starting value, and the value of the answer Yes.
+    pub const ALL_ON: Picks = Picks { thera: true, turnur: true, classes: [true; 6], nexum: true };
+    /// Every switch off. It is the value of the answer No.
+    pub const ALL_OFF: Picks = Picks { thera: false, turnur: false, classes: [false; 6], nexum: false };
+}
+
+/// The travel answers of the welcome screen.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Answers {
     /// The pilot travels through wormholes.
-    pub wormholes: bool,
+    pub wormholes: Comfort,
+    /// The switches of the answer Somewhat. The answers Yes and No ignore them.
+    pub picks: Picks,
     /// The pilot travels through Pochven.
     pub pochven: bool,
     /// The pilot has an EVE Metro subscription.
@@ -78,9 +114,20 @@ pub struct Answers {
 }
 
 impl Answers {
-    /// The starting toggles of the Essentials page. Filaments start on.
+    /// The wormhole switches that count: all on for Yes, all off for No, the picks for Somewhat.
+    pub fn effective_picks(self) -> Picks {
+        match self.wormholes {
+            Comfort::Yes => Picks::ALL_ON,
+            Comfort::Somewhat => self.picks,
+            Comfort::No => Picks::ALL_OFF,
+        }
+    }
+
+    /// The starting toggles of the Essentials page. A filament jump ends in Pochven, so the
+    /// filaments follow the Pochven answer.
     pub fn features(self) -> Features {
-        Features { filaments: true, jspace: self.wormholes, pochven: self.pochven }
+        let picks = self.effective_picks();
+        Features { filaments: self.pochven, classes: picks.classes, pochven: self.pochven, thera: picks.thera, turnur: picks.turnur }
     }
 }
 
@@ -90,7 +137,7 @@ pub fn pages_for(preset: Preset, answers: Answers, client_id: bool, metro: bool)
     if preset.show_alliance_setup() {
         pages.push(WizardPage::Alliance);
     }
-    if answers.wormholes {
+    if answers.effective_picks().nexum {
         pages.push(WizardPage::Nexum);
     }
     if client_id && metro && answers.pochven && answers.subscription {
@@ -99,8 +146,9 @@ pub fn pages_for(preset: Preset, answers: Answers, client_id: bool, metro: bool)
     pages
 }
 
-/// The width of the column that holds the content. The longest text fits in it.
-const COLUMN: f32 = 640.0;
+/// The width of the column that holds the content. It is the column of the wizard pages, and the
+/// longest text fits in it.
+const COLUMN: f32 = theme::SETUP_COLUMN;
 /// The width of the stack of preset buttons and of each pair of answer buttons.
 const STACK_WIDTH: f32 = 320.0;
 /// The width of one answer button. Two of them and the gap fill `STACK_WIDTH`.
@@ -129,13 +177,25 @@ const QUESTION_ROW: f32 = 22.0;
 /// The space under a question.
 const QUESTION_GAP: f32 = 10.0;
 /// The space above the second and the third question.
-const ROW_GAP: f32 = 22.0;
+const BLOCK_GAP: f32 = 22.0;
+/// The height of one row of chips of the Somewhat switches.
+const TOGGLE_ROW: f32 = 28.0;
+/// The space between two rows of chips.
+const TOGGLE_GAP: f32 = 6.0;
+/// The number of rows of chips: three columns of three chips.
+const TOGGLE_ROWS: usize = 3;
+/// The size of the caption under the chips.
+const CAPTION_SIZE: f32 = 13.0;
+/// The height of the row of the caption.
+const CAPTION_ROW: f32 = 18.0;
+/// The space between the chips and the caption.
+const CAPTION_GAP: f32 = 8.0;
 /// The extra space above the quiet last preset button.
 const QUIET_GAP: f32 = 8.0;
 /// The time in seconds after a step change in which the screen ignores a click on the buttons of
 /// the new step. The buttons of the two steps overlap on the screen, so the second click of a
 /// double-click would hit a button of the new step without this guard.
-const STEP_CLICK_GUARD: f64 = 0.4;
+const STEP_CLICK_GUARD: f64 = theme::CLICK_GUARD;
 
 /// The height of the content of step 1. The rows have fixed heights, so the height is known in the
 /// first frame and the content can sit in the middle at once.
@@ -152,11 +212,19 @@ fn preset_height() -> f32 {
         + QUIET_GAP
 }
 
-/// The height of the content of step 2, with or without the subscription question.
+/// The height of the content of step 2, with or without the subscription question. It always
+/// includes the rows of the Somewhat switches, so the content does not move when the pilot
+/// picks Somewhat.
 fn travel_height(subscription: bool) -> f32 {
     let pair = QUESTION_ROW + QUESTION_GAP + BUTTON_HEIGHT;
     let questions = if subscription { 3.0 } else { 2.0 };
-    TITLE_ROW + TITLE_GAP + questions * pair + (questions - 1.0) * ROW_GAP
+    let picks = picks_height();
+    TITLE_ROW + TITLE_GAP + questions * pair + picks + (questions - 1.0) * BLOCK_GAP
+}
+
+/// The height that the chips of the Somewhat switches and their caption need, with the space above them.
+fn picks_height() -> f32 {
+    TOGGLE_ROWS as f32 * TOGGLE_ROW + (TOGGLE_ROWS - 1) as f32 * TOGGLE_GAP + CAPTION_GAP + CAPTION_ROW + QUESTION_GAP
 }
 
 /// A centered line of text in a row of a fixed height.
@@ -182,6 +250,61 @@ fn question(ui: &mut Ui, salt: &str, text: &str, (yes, no): (&str, &str), value:
             }
         });
     });
+}
+
+/// The wormhole question with the answers Yes, Somewhat and No. The answer Somewhat shows the nine
+/// switches of `Picks` as chips under the buttons. When `armed` is false, a click does nothing.
+fn wormhole_question(ui: &mut Ui, answers: &mut Answers, armed: bool) {
+    text_row(ui, "Are you comfortable travelling through Wormholes?", QUESTION_SIZE, theme::TEXT, QUESTION_ROW);
+    ui.add_space(QUESTION_GAP);
+    ui.push_id("welcome-wormholes", |ui| {
+        ui.allocate_ui_with_layout(vec2(STACK_WIDTH, BUTTON_HEIGHT), Layout::left_to_right(Align::Center), |ui| {
+            ui.spacing_mut().item_spacing.x = GAP;
+            let size = vec2((STACK_WIDTH - 2.0 * GAP) / 3.0, BUTTON_HEIGHT);
+            for (comfort, text) in [(Comfort::Yes, "Yes"), (Comfort::Somewhat, "Somewhat"), (Comfort::No, "No")] {
+                let chosen = answers.wormholes == comfort;
+                if ui.add(AppButton::new(text).choice(chosen).min_size(size)).clicked() && armed {
+                    answers.wormholes = comfort;
+                }
+            }
+        });
+    });
+    if answers.wormholes != Comfort::Somewhat {
+        return;
+    }
+    ui.add_space(QUESTION_GAP);
+    let picks = &mut answers.picks;
+    let [c1, c2, c3, c4, c5, c6] = &mut picks.classes;
+    let mut chips: [(&mut bool, &str); 9] = [
+        (&mut picks.thera, "Thera"),
+        (&mut picks.turnur, "Turnur"),
+        (&mut picks.nexum, "Nexum"),
+        (c1, "Class 1"),
+        (c2, "Class 2"),
+        (c3, "Class 3"),
+        (c4, "Class 4"),
+        (c5, "Class 5"),
+        (c6, "Class 6"),
+    ];
+    // Each chip has the width of a button of the trio above it, so the rows line up.
+    let size = vec2((STACK_WIDTH - 2.0 * GAP) / 3.0, TOGGLE_ROW);
+    ui.push_id("welcome-picks", |ui| {
+        for (i, row) in chips.chunks_mut(3).enumerate() {
+            if i > 0 {
+                ui.add_space(TOGGLE_GAP);
+            }
+            ui.allocate_ui_with_layout(vec2(STACK_WIDTH, TOGGLE_ROW), Layout::left_to_right(Align::Center), |ui| {
+                ui.spacing_mut().item_spacing.x = GAP;
+                for (value, text) in row {
+                    if ui.add(AppButton::new(*text).selected(**value).min_size(size)).clicked() && armed {
+                        **value = !**value;
+                    }
+                }
+            });
+        }
+    });
+    ui.add_space(CAPTION_GAP);
+    text_row(ui, "A lit chip is on. Click a chip to switch it off.", CAPTION_SIZE, theme::TEXT_DIM, CAPTION_ROW);
 }
 
 /// The step of the welcome screen.
@@ -230,7 +353,8 @@ impl Welcome {
         self.settled_at = ui.input(|i| i.time);
     }
 
-    /// The current step.
+    /// The current step. Only the tests read it.
+    #[cfg(test)]
     pub fn step(&self) -> Step {
         self.step
     }
@@ -268,10 +392,8 @@ impl Welcome {
     /// texts and the buttons. The caller makes the panel and the footer.
     pub fn body(&mut self, ui: &mut Ui, s: &Session) -> WelcomeFlow {
         let show_subscription = self.answers.pochven && eve_metro_available(s);
-        let height = match self.step {
-            Step::Preset => preset_height(),
-            Step::Travel => travel_height(show_subscription),
-        };
+        // Centre the tallest content of any step, so the title stays at one place on every step.
+        let height = preset_height().max(travel_height(true));
         let area = ui.available_rect_before_wrap();
         let top = (area.center().y - height / 2.0).max(area.top());
         let rect = Rect::from_min_size(pos2(area.center().x - COLUMN / 2.0, top), vec2(COLUMN, height));
@@ -332,34 +454,36 @@ impl Welcome {
     fn travel_step(&mut self, ui: &mut Ui, show_subscription: bool) {
         let armed = self.armed(ui);
         let answers = &mut self.answers;
-        let wormholes = "Are you comfortable travelling through Wormholes?";
-        question(ui, "welcome-wormholes", wormholes, ("Yes", "No"), &mut answers.wormholes, armed);
-        ui.add_space(ROW_GAP);
+        wormhole_question(ui, answers, armed);
+        ui.add_space(BLOCK_GAP);
         let pochven = "Are you comfortable travelling through Pochven?";
         question(ui, "welcome-pochven", pochven, ("Yes", "No"), &mut answers.pochven, armed);
         if show_subscription {
-            ui.add_space(ROW_GAP);
+            ui.add_space(BLOCK_GAP);
             let text = "Do you have an EVE Metro subscription?";
-            question(ui, "welcome-subscription", text, ("I do", "I do not"), &mut answers.subscription, armed);
+            question(ui, "welcome-subscription", text, ("Yes", "No"), &mut answers.subscription, armed);
         }
     }
 
-    /// Draw the footer of step 2: Back at the left, Continue at the right. Step 1 has no footer. The
-    /// caller decides when to call it.
+    /// Draw the footer: Back at the left, Continue at the right. Step 1 draws the same row
+    /// invisible, so the body has the same room on both steps and the title stays at one place.
     pub fn footer(&mut self, ui: &mut Ui) -> WelcomeFlow {
         let mut flow = WelcomeFlow::Open;
-        if self.step != Step::Travel {
-            return flow;
-        }
-        ui.horizontal(|ui| {
-            if ui.add(AppButton::new("Back")).clicked() {
-                self.back();
-                self.settle(ui);
+        let hidden = self.step != Step::Travel;
+        ui.scope(|ui| {
+            if hidden {
+                ui.set_invisible();
             }
-            ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
-                if ui.add(AppButton::new("Continue").primary()).clicked() {
-                    flow = WelcomeFlow::Start(self.preset, self.answers);
+            ui.horizontal(|ui| {
+                if ui.add(AppButton::new("Back")).clicked() && !hidden {
+                    self.back();
+                    self.settle(ui);
                 }
+                ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
+                    if ui.add(AppButton::new("Continue").primary()).clicked() && !hidden {
+                        flow = WelcomeFlow::Start(self.preset, self.answers);
+                    }
+                });
             });
         });
         flow
@@ -370,8 +494,8 @@ impl Welcome {
 mod tests {
     use super::*;
 
-    fn answers(wormholes: bool, pochven: bool, subscription: bool) -> Answers {
-        Answers { wormholes, pochven, subscription }
+    fn answers(wormholes: Comfort, pochven: bool, subscription: bool) -> Answers {
+        Answers { wormholes, picks: Picks::ALL_ON, pochven, subscription }
     }
 
     #[test]
@@ -393,11 +517,11 @@ mod tests {
     fn the_preset_table_gives_the_answers() {
         // (preset, wormholes, pochven, subscription, asks_travel, show_alliance_setup)
         let table = [
-            (Preset::Highsec, false, false, false, true, false),
-            (Preset::Lowsec, true, true, false, true, false),
-            (Preset::Nullsec, true, true, false, true, true),
-            (Preset::Wormholes, true, true, false, true, false),
-            (Preset::Custom, true, true, true, false, true),
+            (Preset::Highsec, Comfort::No, false, false, true, false),
+            (Preset::Lowsec, Comfort::Yes, true, false, true, false),
+            (Preset::Nullsec, Comfort::Yes, true, false, true, true),
+            (Preset::Wormholes, Comfort::Yes, true, false, true, false),
+            (Preset::Custom, Comfort::Yes, true, true, false, true),
         ];
         for (preset, w, p, s, travel, alliance) in table {
             assert_eq!(preset.answers(), answers(w, p, s), "{preset:?}");
@@ -423,14 +547,30 @@ mod tests {
 
     #[test]
     fn the_answers_set_the_starting_toggles() {
-        for wormholes in [false, true] {
+        for (wormholes, on) in [(Comfort::Yes, true), (Comfort::Somewhat, true), (Comfort::No, false)] {
             for pochven in [false, true] {
                 let features = answers(wormholes, pochven, false).features();
-                assert_eq!(features.jspace, wormholes);
+                assert_eq!(features.classes, [on; 6], "{wormholes:?}");
+                assert_eq!((features.thera, features.turnur), (on, on), "{wormholes:?}");
                 assert_eq!(features.pochven, pochven);
-                assert!(features.filaments);
+                assert_eq!(features.filaments, pochven, "the filaments follow Pochven");
             }
         }
+    }
+
+    #[test]
+    fn somewhat_uses_the_picks_and_the_other_answers_ignore_them() {
+        let picks = Picks { thera: false, turnur: true, classes: [true, false, true, false, false, true], nexum: false };
+        let some = Answers { wormholes: Comfort::Somewhat, picks, ..Preset::Lowsec.answers() };
+        let features = some.features();
+        assert_eq!((features.thera, features.turnur, features.classes), (false, true, picks.classes));
+        assert_eq!(some.effective_picks(), picks);
+        assert_eq!(Answers { wormholes: Comfort::Yes, ..some }.effective_picks(), Picks::ALL_ON);
+        assert_eq!(Answers { wormholes: Comfort::No, ..some }.effective_picks(), Picks::ALL_OFF);
+        // The Nexum switch decides the Nexum page.
+        assert_eq!(pages_for(Preset::Lowsec, some, true, true), [WizardPage::Essentials]);
+        let with_nexum = Answers { picks: Picks { nexum: true, ..picks }, ..some };
+        assert_eq!(pages_for(Preset::Lowsec, with_nexum, true, true), [WizardPage::Essentials, WizardPage::Nexum]);
     }
 
     #[test]
@@ -597,6 +737,7 @@ mod tests {
                 "EVE Router",
                 "Are you comfortable travelling through Wormholes?",
                 "Yes",
+                "Somewhat",
                 "No",
                 "Are you comfortable travelling through Pochven?",
                 "Yes",
@@ -648,23 +789,41 @@ mod tests {
     #[test]
     fn an_answer_click_changes_only_that_answer() {
         let (s, _tmp) = session(true, true);
-        // Lowsec starts with Yes, Yes and "I do not". The subscription row shows.
+        // Lowsec starts with Yes, Yes and No. The subscription row shows.
         let mut w = at_travel(Preset::Lowsec);
         let start = w.answers();
         click_body(&mut w, &s, "No", 0);
-        assert_eq!(w.answers(), Answers { wormholes: false, ..start });
+        assert_eq!(w.answers(), Answers { wormholes: Comfort::No, ..start });
         click_body(&mut w, &s, "Yes", 0);
         assert_eq!(w.answers(), start);
         click_body(&mut w, &s, "No", 1);
         assert_eq!(w.answers(), Answers { pochven: false, ..start });
         click_body(&mut w, &s, "Yes", 1);
         assert_eq!(w.answers(), start);
-        click_body(&mut w, &s, "I do", 0);
+        click_body(&mut w, &s, "Yes", 2);
         assert_eq!(w.answers(), Answers { subscription: true, ..start });
-        click_body(&mut w, &s, "I do not", 0);
+        click_body(&mut w, &s, "No", 2);
         assert_eq!(w.answers(), start);
         // A click on the chosen answer keeps it.
         click_body(&mut w, &s, "Yes", 0);
+        assert_eq!(w.answers(), start);
+    }
+
+    /// The subscription row has the buttons Yes and No and no other text. A click on the third
+    /// pair changes only the subscription answer.
+    #[test]
+    fn the_subscription_row_uses_yes_and_no() {
+        let (s, _tmp) = session(true, true);
+        let mut w = at_travel(Preset::Lowsec);
+        let start = w.answers();
+        assert!(!start.subscription);
+        let texts = body_texts(&mut w, &s);
+        let count = |label: &str| labels(&texts).iter().filter(|t| **t == label).count();
+        assert_eq!((count("Yes"), count("No")), (3, 3), "three pairs");
+        assert!(labels(&texts).iter().all(|t| !t.starts_with("I do")), "no I do text: {:?}", labels(&texts));
+        click_body(&mut w, &s, "Yes", 2);
+        assert_eq!(w.answers(), Answers { subscription: true, ..start });
+        click_body(&mut w, &s, "No", 2);
         assert_eq!(w.answers(), start);
     }
 
@@ -678,8 +837,8 @@ mod tests {
         assert!(w.answers().pochven);
         assert!(row(&mut w), "Pochven is Yes");
         let texts = body_texts(&mut w, &s);
-        assert!(labels(&texts).ends_with(&["Do you have an EVE Metro subscription?", "I do", "I do not"]));
-        click_body(&mut w, &s, "I do", 0);
+        assert!(labels(&texts).ends_with(&["Do you have an EVE Metro subscription?", "Yes", "No"]));
+        click_body(&mut w, &s, "Yes", 2);
         click_body(&mut w, &s, "No", 1);
         assert!(!row(&mut w), "Pochven is No again");
         click_body(&mut w, &s, "Yes", 1);
@@ -694,7 +853,8 @@ mod tests {
             let texts = body_texts(&mut w, &s);
             assert!(w.answers().pochven);
             assert!(!labels(&texts).contains(&"Do you have an EVE Metro subscription?"), "{client_id} {metro_key}");
-            assert!(!labels(&texts).contains(&"I do"));
+            assert_eq!(labels(&texts).iter().filter(|t| **t == "Yes").count(), 2, "two Yes texts, no third pair");
+            assert_eq!(labels(&texts).iter().filter(|t| **t == "No").count(), 2, "two No texts, no third pair");
             // The Pochven buttons still work.
             click_body(&mut w, &s, "No", 1);
             assert_eq!(w.answers(), Answers { pochven: false, ..Preset::Lowsec.answers() });
@@ -706,7 +866,7 @@ mod tests {
         let (s, _tmp) = session(true, true);
         let mut w = at_travel(Preset::Lowsec);
         click_body(&mut w, &s, "No", 0);
-        click_body(&mut w, &s, "I do", 0);
+        click_body(&mut w, &s, "Yes", 2);
         assert_ne!(w.answers(), Preset::Lowsec.answers());
         w.back();
         assert_eq!(w.step(), Step::Preset);
@@ -735,8 +895,14 @@ mod tests {
         }
         assert!((stack[1].top() - stack[0].bottom() - 8.0).abs() <= 1.0, "8 px gap");
         let rects = button_rects(&mut at_travel(Preset::Lowsec), &s);
-        assert_eq!(rects.len(), 6, "three pairs");
-        for pair in rects.chunks(2) {
+        assert_eq!(rects.len(), 7, "one trio and two pairs");
+        let trio = &rects[..3];
+        for r in trio {
+            assert!((r.width() - (320.0 - 16.0) / 3.0).abs() <= 1.0, "{r:?}");
+        }
+        assert!((trio[2].right() - trio[0].left() - 320.0).abs() <= 1.0, "the trio is 320 wide");
+        assert!((trio[0].left() + 160.0 - WINDOW.x / 2.0).abs() <= 1.0, "centered");
+        for pair in rects[3..].chunks(2) {
             assert!((pair[0].width() - 156.0).abs() <= 1.0 && (pair[1].width() - 156.0).abs() <= 1.0, "{pair:?}");
             assert!((pair[1].right() - pair[0].left() - 320.0).abs() <= 1.0, "the pair is 320 wide");
             assert!((pair[1].left() - pair[0].right() - 8.0).abs() <= 1.0, "8 px gap");
@@ -788,7 +954,7 @@ mod tests {
         assert_eq!((w.step(), w.answers()), (Step::Travel, Preset::Highsec.answers()), "the early click does nothing");
         let draw = &mut |ui: &mut Ui| w.body(ui, &s);
         click_at(&ctx, draw, yes, 0.61);
-        assert_eq!(w.answers(), Answers { wormholes: true, ..Preset::Highsec.answers() }, "a later click works");
+        assert_eq!(w.answers(), Answers { wormholes: Comfort::Yes, ..Preset::Highsec.answers() }, "a later click works");
     }
 
     #[test]
@@ -809,7 +975,11 @@ mod tests {
         let lowsec = center_of(&output, Preset::Lowsec.label(), 0);
         click_at(&ctx, draw, lowsec, 0.11);
         assert_eq!(w.step(), Step::Preset, "the early click does nothing");
-        let draw = &mut |ui: &mut Ui| w.body(ui, &s);
+        let draw = &mut |ui: &mut Ui| {
+            let footer = w.footer(ui);
+            let body = w.body(ui, &s);
+            if footer == WelcomeFlow::Open { body } else { footer }
+        };
         click_at(&ctx, draw, lowsec, 0.61);
         assert_eq!((w.step(), w.preset()), (Step::Travel, Preset::Lowsec), "a later click works");
     }
@@ -856,7 +1026,7 @@ mod tests {
             for shape in drawn_shapes(&output) {
                 if let egui::epaint::Shape::Text(t) = shape {
                     let x = t.galley.rect.translate(t.pos.to_vec2()).center().x;
-                    let pair = ["Yes", "No", "I do", "I do not"].contains(&t.galley.text());
+                    let pair = ["Yes", "Somewhat", "No"].contains(&t.galley.text());
                     if !pair {
                         assert!((x - middle).abs() <= 1.0, "{} at {x}", t.galley.text());
                     }
@@ -869,20 +1039,20 @@ mod tests {
     }
 
     #[test]
-    fn nothing_clips_in_the_smallest_window_and_the_content_is_centered() {
+    fn nothing_clips_in_the_smallest_window_and_the_title_stays_pinned() {
         let (s, _tmp) = session(true, true);
         let window = Rect::from_min_size(Pos2::ZERO, WINDOW);
+        // Every step centres the tallest content, so the title has one top on every step.
+        let pinned = WINDOW.y / 2.0 - preset_height().max(travel_height(true)) / 2.0;
         for mut w in [Welcome::new(), at_travel(Preset::Lowsec)] {
             let texts = body_texts(&mut w, &s);
             for (text, pos, size) in &texts {
                 assert!(window.contains_rect(Rect::from_min_size(*pos, *size)), "{text} clips");
                 assert!(size.x < COLUMN, "{text} fits the column");
             }
-            // The title fills its row, so its top is the top of the content. The last button
-            // is the bottom of the content.
+            // The title fills its row, so its top is the top of the content.
             let top = texts.first().unwrap().1.y;
-            let bottom = button_rects(&mut w, &s).iter().map(|r| r.bottom()).fold(0.0, f32::max);
-            assert!(((top + bottom) / 2.0 - WINDOW.y / 2.0).abs() <= 2.0, "centered: {top} to {bottom}");
+            assert!((top - pinned).abs() <= 2.0, "{:?}: the title is at {top}, not at {pinned}", w.step());
         }
     }
 }

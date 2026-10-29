@@ -44,6 +44,33 @@ pub fn link_color(hop: Hop) -> Color32 {
 /// The fill of a stop row in the route table, and of a hovered row.
 pub const ROW_FILL: Color32 = Color32::from_rgb(0x10, 0x12, 0x13);
 
+/// The width of the column of the welcome screen and of every page of the setup wizard, in points.
+/// One value keeps the content at the same edges when the pilot goes from one screen to the next.
+pub const SETUP_COLUMN: f32 = 800.0;
+
+/// The time in seconds that the setup screens ignore a click after a change of screen, step or
+/// page. One value keeps the welcome screen and the wizard in step: a double-click never reaches
+/// the buttons of the new screen, and a deliberate click never waits longer on one screen.
+pub const CLICK_GUARD: f64 = 0.4;
+
+/// The space between two cards of a setup page, in points.
+pub const CARD_GAP: f32 = 16.0;
+
+/// The space between two groups inside a card of a setup page.
+pub const GROUP_GAP: f32 = 14.0;
+
+/// The space between a heading and the control under it, or between a control and its error line.
+pub const ROW_GAP: f32 = 8.0;
+
+/// The space between the labels and the fields of a form grid of a setup page: across, then down.
+pub const FORM_GAP: egui::Vec2 = egui::vec2(18.0, 10.0);
+
+/// The space between the steps row and the page of the setup wizard.
+pub const STEPS_GAP: f32 = 12.0;
+
+/// The margin above and below the footer of the welcome screen and of the setup wizard.
+pub const FOOTER_MARGIN: i8 = 12;
+
 pub use router_core::config::FactionTheme;
 
 /// The colors of a faction theme.

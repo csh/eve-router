@@ -3,17 +3,24 @@
 //! character, which stores its token at once, as in Settings.
 
 use crate::app::Session;
-use crate::pilots_view::{PilotsUi, Portraits, pilot_portrait};
+use crate::pilots_view::{PilotsUi, Portraits};
 use crate::search::SearchBox;
 use crate::settings_window::{
-    FIELD, METRO_NEEDS_CHARACTER, RowLook, character_table, eve_metro_available, group, keyring_warning, pilot_status,
+    CHARACTER_ROW, FIELD, METRO_NEEDS_CHARACTER, RowLook, character_table, eve_metro_available, group, keyring_warning, pilot_status,
 };
-use crate::theme::{self, FactionTheme};
+use crate::theme::{self, CARD_GAP, FORM_GAP, FactionTheme, GROUP_GAP, ROW_GAP};
 use crate::welcome::{Answers, Preset, pages_for};
-use crate::widgets::{AppButton, UiExt};
-use egui::{Align, Color32, Label, Layout, RichText, ScrollArea, TextEdit, Ui, vec2};
+use crate::widgets::{AppButton, AppCheckbox, UiExt};
+use egui::{Align, Color32, Layout, RichText, ScrollArea, TextEdit, Ui, vec2};
+use egui_phosphor_icons::icons;
 use petgraph::graph::NodeIndex;
 use router_core::config::{self, ApiKey};
+use router_core::esi::pilots::PilotView;
+use router_core::sources::{
+    self,
+    nexum::{self, MapInfo},
+};
+use std::sync::mpsc::{self, Receiver, TryRecvError};
 use router_core::settings::Features;
 
 /// A page of the wizard.
@@ -30,13 +37,23 @@ pub enum WizardPage {
 }
 
 impl WizardPage {
-    /// The name of the page in the step list.
+    /// The name of the page in the step list. It is also the title of the page.
     pub fn label(self) -> &'static str {
         match self {
             WizardPage::Essentials => "Essentials",
             WizardPage::Alliance => "Alliance",
             WizardPage::Nexum => "Nexum",
             WizardPage::EveMetro => "EVE Metro",
+        }
+    }
+
+    /// The line under the title of the page. It says what the page is for in one sentence.
+    fn intro(self) -> &'static str {
+        match self {
+            WizardPage::Essentials => "The basics: your pilots, updates, theme and features.",
+            WizardPage::Alliance => "Set the capital of your alliance and add its jump bridges.",
+            WizardPage::Nexum => "Connect the router to your Nexum maps.",
+            WizardPage::EveMetro => "Third-party map of Pochven wormholes. A subscription is required.",
         }
     }
 }
@@ -79,6 +96,8 @@ struct Draft {
     nexum_key: String,
     /// Skip the connections that have no known signature.
     skip_unsigned: bool,
+    /// The IDs of the Nexum maps that the router reads.
+    nexum_maps: Vec<String>,
     /// Use EVE Metro.
     metro_enabled: bool,
     /// The character that identifies the pilot to EVE Metro.
@@ -101,10 +120,26 @@ impl Draft {
             nexum_url: s.cfg.nexum.url.clone().unwrap_or_default(),
             nexum_key: String::new(),
             skip_unsigned: !s.cfg.nexum.keep_unsigned,
+            nexum_maps: s.cfg.nexum.map_ids.clone(),
             metro_enabled: s.cfg.eve_metro.enabled,
             metro_character: s.cfg.eve_metro.character,
         }
     }
+}
+
+/// The Nexum map list of the Nexum page: the maps of the last fetch, the fetch that runs, and the
+/// last error. The wizard keeps it apart from the session, because the fetch uses the URL and the
+/// key that the pilot typed, and these reach the session only at Finish.
+#[derive(Default)]
+struct MapsLoad {
+    /// The maps of the last fetch that worked.
+    list: Vec<MapInfo>,
+    /// The answer of the fetch on its thread. It is `Some` while the fetch runs.
+    rx: Option<Receiver<Result<Vec<MapInfo>, sources::FetchError>>>,
+    /// The text of the last error.
+    error: Option<String>,
+    /// True after the pilot asked for the list.
+    tried: bool,
 }
 
 /// The search box of the capital.
@@ -128,11 +163,10 @@ pub struct Wizard {
     capital: SearchBox,
     /// The theme that the window shows now. It differs from the edited theme until the next draw.
     applied: FactionTheme,
-    /// The natural height of the Updates, Theme and Features cards, as the last frame drew them.
-    /// A value of 0 means that no frame drew the card yet.
-    natural: [f32; 3],
     /// The value of the EVE Metro Enable box in the session. Skip on the EVE Metro page restores it.
     metro_session: bool,
+    /// The Nexum maps of the Nexum page.
+    maps: MapsLoad,
 }
 
 impl Wizard {
@@ -154,7 +188,7 @@ impl Wizard {
         let mut draft = Draft::from_session(s);
         let metro_session = draft.metro_enabled;
         draft.features = answers.features();
-        // The answer "I do" turns EVE Metro on, but only when the page shows and a character is
+        // The subscription answer Yes turns EVE Metro on, but only when the page shows and a character is
         // linked. A hidden page must not change a setting.
         if preset.asks_travel() && pages.contains(&WizardPage::EveMetro) && !s.pilots.characters().is_empty() {
             draft.metro_enabled = true;
@@ -167,8 +201,8 @@ impl Wizard {
             edit: draft,
             error: None,
             capital: capital_box(),
-            natural: [0.0; 3],
             metro_session,
+            maps: MapsLoad::default(),
         }
     }
 
@@ -266,6 +300,66 @@ impl Wizard {
         self.edit.bridges = (!pairs.is_empty()).then(|| self.edit.bridge_text.clone());
     }
 
+    /// True when the URL of the field is a good URL and a key is known, from the field or from the
+    /// session. Only then can the page ask for the map list.
+    fn maps_ready(&self, s: &Session) -> bool {
+        let url = config::parse_nexum_url(&self.edit.nexum_url).ok().flatten().is_some();
+        url && (!self.edit.nexum_key.trim().is_empty() || s.cfg.nexum.key.is_some())
+    }
+
+    /// Start the fetch of the map list on a thread. It uses the URL and the key of the fields. An
+    /// empty key field keeps the key of the session.
+    fn load_maps(&mut self, s: &Session, ctx: &egui::Context) {
+        let mut cfg = s.cfg.nexum.clone();
+        if let Ok(url) = config::parse_nexum_url(&self.edit.nexum_url) {
+            cfg.url = url;
+        }
+        let key = self.edit.nexum_key.trim();
+        if !key.is_empty() {
+            cfg.key = Some(ApiKey(key.to_string()));
+        }
+        let ctx = ctx.clone();
+        let (tx, rx) = mpsc::channel();
+        std::thread::spawn(move || {
+            let _ = tx.send(nexum::fetch_maps(&cfg, sources::TIMEOUT));
+            ctx.request_repaint();
+        });
+        self.maps = MapsLoad { list: std::mem::take(&mut self.maps.list), rx: Some(rx), error: None, tried: true };
+    }
+
+    /// Take the answer of the fetch, when it is there.
+    fn poll_maps(&mut self) {
+        let Some(rx) = &self.maps.rx else { return };
+        match rx.try_recv() {
+            Ok(Ok(list)) => {
+                self.maps.list = list;
+                self.maps.rx = None;
+            }
+            Ok(Err(e)) => {
+                self.maps.error = Some(e.to_string());
+                self.maps.rx = None;
+            }
+            Err(TryRecvError::Empty) => {}
+            Err(TryRecvError::Disconnected) => {
+                self.maps.error = Some("The map list did not arrive.".into());
+                self.maps.rx = None;
+            }
+        }
+    }
+
+    /// The rows of the map table: the maps of the fetch, or the maps that the session knows, then the
+    /// maps that are on but not in the list, so the pilot can turn them off.
+    fn map_rows(&self, s: &Session) -> Vec<(String, String)> {
+        let known: Vec<&MapInfo> = if self.maps.list.is_empty() { s.map_names.iter().collect() } else { self.maps.list.iter().collect() };
+        let mut rows: Vec<(String, String)> = known.iter().map(|m| (m.id.clone(), m.name.clone())).collect();
+        for id in &self.edit.nexum_maps {
+            if !rows.iter().any(|(r, _)| r == id) {
+                rows.push((id.clone(), "Not in the list".into()));
+            }
+        }
+        rows
+    }
+
     /// The theme to show now. It is the edited theme, so the pilot sees a preview.
     pub fn theme(&self) -> FactionTheme {
         self.edit.theme
@@ -328,6 +422,10 @@ fn finish_nexum(s: &mut Session, kept: &Draft, base: &Draft) {
         s.cfg.nexum.keep_unsigned = !kept.skip_unsigned;
         changed = true;
     }
+    if kept.nexum_maps != base.nexum_maps {
+        s.cfg.nexum.map_ids.clone_from(&kept.nexum_maps);
+        changed = true;
+    }
     let key = kept.nexum_key.trim();
     maps_stale |= !key.is_empty();
     if maps_stale {
@@ -341,41 +439,61 @@ fn finish_nexum(s: &mut Session, kept: &Draft, base: &Draft) {
     }
 }
 
-/// The least height of the character box on the Essentials page, in rows. The box takes all the
-/// height that the page has, and this value only guards a window that is too small. The box
-/// scrolls inside, so it keeps its size for 1 to 100 characters.
-const CHARACTER_ROWS_MIN: f32 = 3.0;
+/// The height that a scope of the Updates and Theme row may take. The cards keep their own height.
+const ROW_ROOM: f32 = 10_000.0;
 
-/// The width of the one column on the Essentials page when the build has no EVE client ID.
-const SINGLE_COLUMN: f32 = 520.0;
+/// The number of character rows that the table of the EVE Metro page shows before it scrolls.
+const METRO_ROWS_SHOWN: usize = 6;
 
-/// The size of a portrait in the character box. A row is as high as its portrait.
-const PORTRAIT: f32 = 32.0;
+/// The height of one row of the map table.
+const MAP_ROW: f32 = 28.0;
 
-/// The radius of the status dot at the right end of a character row, in points.
-const STATUS_DOT_RADIUS: f32 = 4.0;
+/// The number of map rows that the table of the Nexum page shows before it scrolls.
+const MAP_ROWS_SHOWN: usize = 6;
 
-/// The space between the status dot and the right edge of the character box, in points.
-const STATUS_DOT_INSET: f32 = 12.0;
+/// The share of the row that the Updates card takes. The Theme card takes the rest.
+const UPDATES_SHARE: f32 = 0.4;
 
-/// The space between two groups on a page.
-const GROUP_GAP: f32 = 14.0;
+/// The width of the column of a page. All the pages and the welcome screen use it, so the content
+/// keeps the same edges when the pilot goes from one screen to the next.
+const PAGE_COLUMN: f32 = theme::SETUP_COLUMN;
 
-/// The space between two cards of a column.
-const CARD_GAP: f32 = 16.0;
+/// The number of switches in the Features card. They share one row in equal columns.
+const FEATURE_COUNT: f32 = 5.0;
 
-/// The space between the two columns of the Essentials page.
-const COLUMN_GAP: f32 = 20.0;
+/// The number of character rows that the table shows before it scrolls.
+const CHARACTER_ROWS_SHOWN: usize = 3;
 
-/// The space between a heading and the control under it.
-const ROW_GAP: f32 = 8.0;
+/// The height of the box with the note "No pilot is linked yet."
+const EMPTY_BOX: f32 = 72.0;
+
+/// The height of the "+ Add character" button.
+const ADD_HEIGHT: f32 = 32.0;
+
+/// The size of the title of a page, in points.
+const PAGE_TITLE_SIZE: f32 = 20.0;
+
+/// The height of the row of the title of a page.
+const PAGE_TITLE_ROW: f32 = 28.0;
+
+/// The height of the row of the intro line of a page.
+const PAGE_INTRO_ROW: f32 = 20.0;
+
+/// The room that the head of a page takes above its first card: the title, the intro line and the
+/// gap. The cards of a page start this far under the top of the page area.
+const HEAD_ROOM: f32 = PAGE_TITLE_ROW + PAGE_INTRO_ROW + CARD_GAP;
 
 /// The number of problem lines that the Alliance page shows. One dim line counts the others.
 const PROBLEM_LINES: usize = 5;
 
-/// The fixed height of the paste box on the Alliance page, about 9 lines of text. The box
-/// scrolls inside, so the page fits the smallest window with any list.
-const PASTE_BOX: f32 = 180.0;
+/// The height of the paste box on the Alliance page, about 5 lines of text. The box scrolls inside.
+const PASTE_BOX: f32 = 110.0;
+
+/// The number of bridge rows that the table of the Alliance page shows before it scrolls.
+const BRIDGE_ROWS_SHOWN: usize = 5;
+
+/// The height of one row of the bridge table.
+const BRIDGE_ROW: f32 = 28.0;
 
 /// The inner size of the smallest window of the app, in points: 1280 by 748, less the title bar of 32.
 #[cfg(test)]
@@ -493,8 +611,11 @@ impl Wizard {
         match self.page() {
             WizardPage::Essentials => essentials_page(ui, self, s, pilots),
             WizardPage::Alliance => alliance_page(ui, self, s),
-            WizardPage::Nexum => nexum_page(ui, self, s),
-            WizardPage::EveMetro => eve_metro_page(ui, self, s, &mut pilots.portraits),
+            WizardPage::Nexum => {
+                self.poll_maps();
+                nexum_page(ui, self, s);
+            }
+            WizardPage::EveMetro => page_shell(ui, WizardPage::EveMetro, |ui| eve_metro_page(ui, self, s, &mut pilots.portraits)),
         }
         // After the page, so a theme button of this frame shows in the next frame. A change from
         // Skip also comes here, at the end of this frame or of the next one.
@@ -513,45 +634,73 @@ impl Wizard {
     }
 }
 
-/// The Essentials page: the keyring warning, then the characters at the left and the cards for
-/// updates, theme and features at the right. Without an EVE client ID, a character cannot log in,
-/// so the page shows one centered column of cards. The cards fill the height that is left, and
-/// both columns end at the bottom of the page.
+/// The Essentials page: the keyring warning, then one centered column with the characters (when
+/// the build has an EVE client ID) and the cards for updates, theme and features. Each card keeps
+/// its own height. The column scrolls when the window is too small for it.
 fn essentials_page(ui: &mut Ui, w: &mut Wizard, s: &mut Session, pilots: &mut PilotsUi) {
     keyring_warning(ui, s);
+    page_shell(ui, WizardPage::Essentials, |ui| {
+        if s.pilots.shows_characters() {
+            characters_card(ui, s, pilots);
+            ui.add_space(card_gap(ui));
+        }
+        option_cards(ui, w);
+    });
+}
+
+/// The space that a page adds between two cards: the card gap, less the space that the layout adds after a card.
+fn card_gap(ui: &Ui) -> f32 {
+    CARD_GAP - ui.spacing().item_spacing.y
+}
+
+/// The room of the column of a page:`PAGE_COLUMN` points wide, centered, as high as the page has room.
+fn page_area(ui: &Ui) -> egui::Rect {
     let area = ui.available_rect_before_wrap();
-    if s.pilots.shows_characters() {
-        let column = ((area.width() - COLUMN_GAP) / 2.0).max(0.0);
-        let left = egui::Rect::from_min_size(area.min, vec2(column, area.height()));
-        let right = left.translate(vec2(column + COLUMN_GAP, 0.0));
-        ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| characters_card(ui, s, pilots));
-        ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| option_cards(ui, w));
-        return;
-    }
-    let width = SINGLE_COLUMN.min(area.width());
-    let column = egui::Rect::from_min_size(egui::pos2(area.center().x - width / 2.0, area.top()), vec2(width, area.height()));
-    ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| option_cards(ui, w));
+    let width = PAGE_COLUMN.min(area.width());
+    egui::Rect::from_min_size(egui::pos2(area.center().x - width / 2.0, area.top()), vec2(width, area.height()))
 }
 
-/// The height of an `AppButton` with one line of text.
-fn button_height(ui: &Ui) -> f32 {
-    (ui.text_style_height(&egui::TextStyle::Button) + 2.0 * ui.spacing().button_padding.y).max(ui.spacing().interact_size.y)
+/// The shell of a page: one centered column with the centered title and intro line of `page`, then the
+/// cards that `add` draws. The column scrolls when the window is too small for them. The head
+/// takes `HEAD_ROOM`, so every page puts its first card at the same place.
+fn page_shell(ui: &mut Ui, page: WizardPage, add: impl FnOnce(&mut Ui)) {
+    let column = page_area(ui);
+    ui.scope_builder(egui::UiBuilder::new().max_rect(column), |ui| {
+        ScrollArea::vertical().auto_shrink([false, false]).show(ui, |ui| {
+            page_head(ui, page);
+            add(ui);
+        });
+    });
 }
 
-/// The Characters card: a hint, a box that scrolls, then "+ Add character". The card takes the
-/// height of the column. The box takes the height that the hint and the button leave, so it
-/// keeps its size for 1 to 100 characters.
+/// The title and the intro line of `page`, in rows of a fixed height, then the gap to the first
+/// card. The rows have no spacing between them, so the head is `HEAD_ROOM` high.
+fn page_head(ui: &mut Ui, page: WizardPage) {
+    // The layout adds this space after the head, so the gap is the card gap less this space.
+    let after = ui.spacing().item_spacing.y;
+    let width = ui.available_width();
+    ui.scope(|ui| {
+        ui.spacing_mut().item_spacing.y = 0.0;
+        let title = RichText::new(page.label()).font(egui::FontId::new(PAGE_TITLE_SIZE, theme::bold())).color(theme::TEXT);
+        ui.add_sized([width, PAGE_TITLE_ROW], egui::Label::new(title));
+        ui.add_sized([width, PAGE_INTRO_ROW], egui::Label::new(dim(page.intro())));
+        ui.add_space(HEAD_ROOM - PAGE_TITLE_ROW - PAGE_INTRO_ROW - after);
+    });
+}
+
+/// The Characters card: a hint, the table of the linked characters, then "+ Add character".
 fn characters_card(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
-    theme::panel(ui, "Characters", "", true, |ui| {
+    theme::panel(ui, "Characters", "", false, |ui| {
         ui.label(dim("Log in each pilot that you fly."));
-        let spacing = ui.spacing().item_spacing.y;
-        let list_height = (ui.available_height() - spacing - button_height(ui)).max(CHARACTER_ROWS_MIN * PORTRAIT);
-        let (list, _) = ui.allocate_exact_size(vec2(ui.available_width(), list_height), egui::Sense::hover());
-        ui.painter().rect_stroke(list, 3.0, egui::Stroke::new(1.0, theme::LINE), egui::StrokeKind::Inside);
-        ui.scope_builder(egui::UiBuilder::new().max_rect(list.shrink(1.0)), |ui| character_rows(ui, s, pilots));
+        character_list(ui, s, pilots);
         let blocked = s.pilots.login_blocked();
         let busy = s.pilots.login.is_some();
-        let mut button = ui.add_enabled(blocked.is_none() && !busy, AppButton::new("+ Add character"));
+        let empty = s.pilots.characters().is_empty();
+        let mut add = AppButton::new("+ Add character").min_size(vec2(ui.available_width(), ADD_HEIGHT));
+        if empty {
+            add = add.primary();
+        }
+        let mut button = ui.add_enabled(blocked.is_none() && !busy, add);
         if let Some(reason) = &blocked {
             button = button.on_disabled_hover_text(reason.as_str());
         }
@@ -562,161 +711,221 @@ fn characters_card(ui: &mut Ui, s: &mut Session, pilots: &mut PilotsUi) {
     });
 }
 
-/// The rows of the character box: the portrait, the name, and at the right end a dot that shows
-/// the status. The status text shows on hover. A line divides two rows.
-fn character_rows(ui: &mut Ui, s: &Session, pilots: &mut PilotsUi) {
+/// The height that a table of characters gets for `rows` rows. The table takes the height that is
+/// left and keeps 8 points free below its rows.
+fn table_room(ui: &Ui, rows: usize) -> f32 {
+    rows as f32 * (CHARACTER_ROW + ui.spacing().item_spacing.y) + 8.0
+}
+
+/// The linked characters in the table of the Settings window, with a Status column, or a box with
+/// a note when no pilot is linked. The table shows `CHARACTER_ROWS_SHOWN` rows and scrolls inside,
+/// so the page keeps its height for 1 to 100 characters.
+fn character_list(ui: &mut Ui, s: &Session, pilots: &mut PilotsUi) {
     let characters = s.pilots.characters();
-    let height = ui.available_height();
-    // Only the rows in view draw, so only their portraits download.
-    ScrollArea::vertical().max_height(height).min_scrolled_height(height).auto_shrink([false, false]).show_rows(
-        ui,
-        PORTRAIT,
-        characters.len(),
-        |ui, rows| {
-            if characters.is_empty() {
-                ui.label(dim("No linked character yet."));
-            }
-            let first = rows.start;
-            for (index, pilot) in characters[rows].iter().enumerate() {
-                let (row, _) = ui.allocate_exact_size(vec2(ui.available_width(), PORTRAIT), egui::Sense::hover());
-                let dot = egui::pos2(row.right() - STATUS_DOT_INSET - STATUS_DOT_RADIUS, row.center().y);
-                // The name stops before the dot.
-                let text = egui::Rect::from_min_max(row.min, egui::pos2(dot.x - STATUS_DOT_RADIUS - ROW_GAP, row.max.y));
-                ui.scope_builder(egui::UiBuilder::new().max_rect(text).layout(Layout::left_to_right(Align::Center)), |ui| {
-                    pilot_portrait(ui, &mut pilots.portraits, pilot, PORTRAIT);
-                    ui.add(Label::new(RichText::new(&pilot.name).color(theme::TEXT)).truncate());
-                });
-                let (status, color) = pilot_status(pilot);
-                let hit = egui::Rect::from_center_size(dot, vec2(4.0 * STATUS_DOT_RADIUS, 4.0 * STATUS_DOT_RADIUS));
-                let response = ui.interact(hit, ui.id().with(("status", pilot.id)), egui::Sense::hover());
-                response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Label, ui.is_enabled(), status));
-                response.on_hover_text(status);
-                ui.painter().circle_filled(dot, STATUS_DOT_RADIUS, color);
-                if first + index + 1 < characters.len() {
-                    let y = row.bottom() + ui.spacing().item_spacing.y / 2.0;
-                    ui.painter().hline(row.x_range(), y, egui::Stroke::new(1.0, theme::LINE));
-                }
-            }
-        },
-    );
-}
-
-/// One card of the right column. `extra` is the height that the card adds under its content.
-/// Return the natural height of the card: its height without `extra`.
-fn option_card(ui: &mut Ui, title: &str, extra: f32, add: impl FnOnce(&mut Ui)) -> f32 {
-    let top = ui.cursor().top();
-    theme::panel(ui, title, "", false, |ui| {
-        add(ui);
-        if extra > 0.0 {
-            ui.set_min_height(ui.min_rect().height() + extra);
-        }
-    });
-    ui.min_rect().bottom() - top - extra.max(0.0)
-}
-
-/// The cards of the right column on the Essentials page: Updates, Theme and Features. Theme keeps
-/// the height of its buttons. Updates and Features share the height that is left in equal parts.
-/// The first frame has no natural heights, so it draws the cards at their natural size, and the
-/// next frame stretches them.
-fn option_cards(ui: &mut Ui, w: &mut Wizard) {
-    let known = w.natural.iter().all(|height| *height > 0.0);
-    let free = ui.available_height() - w.natural.iter().sum::<f32>() - 2.0 * CARD_GAP;
-    let extra = if known { (free / 2.0).max(0.0) } else { 0.0 };
-    // The gap comes from the card gap, less the space that the layout adds after a card.
-    let gap = CARD_GAP - ui.spacing().item_spacing.y;
-    let before = w.natural;
-    w.natural[0] = option_card(ui, "Updates", extra, |ui| {
-        ui.app_checkbox(&mut w.edit.check_for_updates, "Check for updates");
-        let row = ui.add_enabled_ui(w.edit.check_for_updates, |ui| ui.app_checkbox(&mut w.edit.auto_update, "Install automatically"));
-        row.response.on_disabled_hover_text("Checking for updates must be enabled.");
-    });
-    ui.add_space(gap);
-    w.natural[1] = option_card(ui, "Theme", 0.0, |ui| {
-        ui.horizontal(|ui| {
-            for faction in FactionTheme::ALL {
-                if ui.add(AppButton::new(faction.label()).choice(w.edit.theme == faction)).clicked() {
-                    w.edit.theme = faction;
-                }
-            }
+    if characters.is_empty() {
+        let (rect, _) = ui.allocate_exact_size(vec2(ui.available_width(), EMPTY_BOX), egui::Sense::hover());
+        ui.painter().rect_stroke(rect, 3.0, egui::Stroke::new(1.0, theme::LINE), egui::StrokeKind::Inside);
+        let font = egui::FontId::proportional(14.0);
+        ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, "No pilot is linked yet.", font, theme::TEXT_DIM);
+        return;
+    }
+    let (room, width) = (table_room(ui, CHARACTER_ROWS_SHOWN), ui.available_width());
+    ui.allocate_ui(vec2(width, room), |ui| {
+        use egui_extras::Column;
+        let extra = [("Status", Column::exact(110.0))];
+        let look = |_: &PilotView| RowLook::default();
+        character_table(ui, "wizard-characters", &characters, &mut pilots.portraits, &extra, look, |ui, pilot, _| {
+            let (text, color) = pilot_status(pilot);
+            ui.label(RichText::new(text).color(color));
         });
     });
-    ui.add_space(gap);
-    w.natural[2] = option_card(ui, "Features", extra, |ui| {
-        ui.app_checkbox(&mut w.edit.features.filaments, "Filaments");
-        ui.app_checkbox(&mut w.edit.features.jspace, "J-space");
-        ui.app_checkbox(&mut w.edit.features.pochven, "Pochven");
-    });
-    // A card that changed its natural height needs a new split in the next frame.
-    if w.natural.iter().zip(before).any(|(now, old)| (now - old).abs() > 0.5) {
-        ui.ctx().request_repaint();
-    }
 }
 
-/// The Alliance page: one card with the capital, then the box for a list of jump bridges, its
-/// Import button and the problem lines of the last import.
-fn alliance_page(ui: &mut Ui, w: &mut Wizard, s: &Session) {
-    theme::panel(ui, "Alliance capital", "", true, |ui| {
-        ui.label(dim("Needed for Ansiblex zones."));
-        // The name and Clear while a capital is set, else the search box.
-        if let Some(capital) = w.edit.capital {
+/// One card of the column: a panel with `title` that keeps the height of its content.
+fn option_card(ui: &mut Ui, title: &str, add: impl FnOnce(&mut Ui)) {
+    theme::panel(ui, title, "", false, add);
+}
+
+/// The cards of the Essentials page after the characters: Updates and Theme side by side, then
+/// Features. The two cards of the row have the height of two checkbox rows.
+fn option_cards(ui: &mut Ui, w: &mut Wizard) {
+    let gap = card_gap(ui);
+    let row = 2.0 * ui.spacing().interact_size.y + ui.spacing().item_spacing.y;
+    // The Theme card needs more room than the Updates card: its four buttons stay in one row. Each
+    // card gets a rectangle of the row, and the row is as high as the taller card.
+    let free = ui.available_width() - CARD_GAP;
+    let updates = free * UPDATES_SHARE;
+    let top = ui.cursor().min;
+    let left = egui::Rect::from_min_size(top, vec2(updates, ROW_ROOM));
+    let right = egui::Rect::from_min_size(top + vec2(updates + CARD_GAP, 0.0), vec2(free - updates, ROW_ROOM));
+    let first = ui.scope_builder(egui::UiBuilder::new().max_rect(left), |ui| {
+        option_card(ui, "Updates", |ui| {
+            ui.set_min_height(row);
+            ui.app_checkbox(&mut w.edit.check_for_updates, "Check for updates");
+            let auto = ui.add_enabled_ui(w.edit.check_for_updates, |ui| ui.app_checkbox(&mut w.edit.auto_update, "Install automatically"));
+            auto.response.on_disabled_hover_text("Checking for updates must be enabled.");
+        });
+    });
+    let second = ui.scope_builder(egui::UiBuilder::new().max_rect(right), |ui| {
+        option_card(ui, "Theme", |ui| {
+            ui.set_min_height(row);
             ui.horizontal(|ui| {
-                ui.label(RichText::new(s.uni.name(capital)).color(Color32::WHITE));
-                if ui.app_button("Clear").clicked() {
-                    w.edit.capital = None;
+                for faction in FactionTheme::ALL {
+                    if ui.add(AppButton::new(faction.label()).choice(w.edit.theme == faction)).clicked() {
+                        w.edit.theme = faction;
+                    }
                 }
             });
-        } else if let Some((_, node)) = w.capital.show(ui, &s.uni, FIELD, "Search system… (none: jump bridges off)", &[]) {
-            w.edit.capital = Some(node);
-        }
-        ui.add_space(GROUP_GAP);
-        group(ui, "Ansiblex import");
-        // The box keeps its height and scrolls inside, so a long list cannot push Import down.
-        ScrollArea::vertical()
-            .id_salt("wizard-bridges")
-            .min_scrolled_height(PASTE_BOX)
-            .max_height(PASTE_BOX)
-            .auto_shrink([false, false])
-            .show(ui, |ui| {
-                ui.add(
-                    TextEdit::multiline(&mut w.edit.bridge_text)
-                        .hint_text("Paste a list of bridges in SMT format.")
-                        .desired_width(f32::INFINITY)
-                        .min_size(vec2(0.0, PASTE_BOX)),
-                );
+        });
+    });
+    let bottom = first.response.rect.bottom().max(second.response.rect.bottom());
+    let whole = egui::Rect::from_min_max(top, egui::pos2(right.right(), bottom));
+    ui.allocate_rect(whole, egui::Sense::hover());
+    ui.add_space(gap);
+    option_card(ui, "Features", |ui| {
+        // One row of equal columns fills the width of the card.
+        let column = (ui.available_width() - (FEATURE_COUNT - 1.0) * ui.spacing().item_spacing.x) / FEATURE_COUNT;
+        egui::Grid::new("wizard-features").num_columns(FEATURE_COUNT as usize).min_col_width(column).show(ui, |ui| {
+            ui.app_checkbox(&mut w.edit.features.filaments, "Filaments");
+            ui.app_checkbox(&mut w.edit.features.pochven, "Pochven");
+            // The box is on when all six classes are on, and shows a dash when some are on. A click
+            // on a dash switches all six classes on.
+            let mut all = w.edit.features.classes.iter().all(|on| *on);
+            let partial = w.edit.features.jspace() && !all;
+            let mut response = ui.add(AppCheckbox::new(&mut all, "J-space").mixed(partial));
+            if partial {
+                response = response.on_hover_text("Some classes are off. A click switches all on.");
+            }
+            if response.changed() {
+                w.edit.features.classes = [all; 6];
+            }
+            ui.app_checkbox(&mut w.edit.features.thera, "Thera");
+            ui.app_checkbox(&mut w.edit.features.turnur, "Turnur");
+            ui.end_row();
+        });
+    });
+}
+
+/// The Alliance page: two stacked cards. The first card has the two groups of the Ansiblex page of
+/// the Settings window: the capital, then the box for a list of jump bridges with its Import button
+/// and the problem lines of the last import. The second card has the table of the bridges that
+/// Finish adds. The table has no zones: the zone of a bridge end needs the capital, and the capital
+/// of the session changes at Finish.
+fn alliance_page(ui: &mut Ui, w: &mut Wizard, s: &Session) {
+    // Finish adds only the bridges that the list does not hold. `read` counts all the bridges of
+    // the imported text, so the page can tell "nothing imported" from "all in the list already".
+    let read = w.edit.bridges.as_ref().map_or(0, |text| s.read_bridges(text).0.len());
+    let staged: Vec<_> = match &w.edit.bridges {
+        Some(text) => s.read_bridges(text).0.into_iter().filter(|pair| !s.bridges.contains(pair)).collect(),
+        None => Vec::new(),
+    };
+    page_shell(ui, WizardPage::Alliance, |ui| {
+        theme::panel(ui, "Ansiblex", "", false, |ui| {
+            group(ui, "Alliance capital");
+            egui::Grid::new("wizard-capital").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
+                ui.label(dim("System"));
+                // The name and Clear while a capital is set, else the search box.
+                if let Some(capital) = w.edit.capital {
+                    ui.horizontal(|ui| {
+                        ui.label(RichText::new(s.uni.name(capital)).color(Color32::WHITE));
+                        if ui.app_button("Clear").clicked() {
+                            w.edit.capital = None;
+                        }
+                    });
+                } else if let Some((_, node)) = w.capital.show(ui, &s.uni, FIELD, "Search system\u{2026} (none: jump bridges off)", &[]) {
+                    w.edit.capital = Some(node);
+                }
+                ui.end_row();
             });
-        ui.horizontal(|ui| {
+            ui.add_space(GROUP_GAP);
+            group(ui, "Import");
+            // Only the first problem lines show, and one dim line counts the others.
+            let shown = w.edit.bridge_problems.len().min(PROBLEM_LINES);
+            let hidden = w.edit.bridge_problems.len() - shown;
+            // The box keeps one height and scrolls inside, so a long list cannot push Import down.
+            ScrollArea::vertical().id_salt("wizard-bridges").min_scrolled_height(PASTE_BOX).max_height(PASTE_BOX).auto_shrink([false, false]).show(
+                ui,
+                |ui| {
+                    ui.add(
+                        TextEdit::multiline(&mut w.edit.bridge_text)
+                            .hint_text("Paste a list of bridges in SMT format.")
+                            .desired_width(f32::INFINITY)
+                            .min_size(vec2(0.0, PASTE_BOX)),
+                    );
+                },
+            );
+            for problem in w.edit.bridge_problems.iter().take(PROBLEM_LINES) {
+                ui.label(RichText::new(problem).color(theme::ERROR));
+            }
+            if hidden > 0 {
+                ui.label(dim(&format!("and {hidden} more.")));
+            }
             let empty = w.edit.bridge_text.trim().is_empty();
             if ui.add_enabled(!empty, AppButton::new("Import").primary()).clicked() {
                 w.import(s);
             }
-            // Finish adds only the bridges that the list does not hold.
-            if let Some(text) = &w.edit.bridges {
-                let added = s.read_bridges(text).0.iter().filter(|pair| !s.bridges.contains(pair)).count();
-                let plural = if added == 1 { "" } else { "s" };
-                ui.label(RichText::new(format!("Finish adds {added} jump bridge{plural} to the list.")).color(theme::TEXT));
+        });
+        ui.add_space(card_gap(ui));
+        theme::panel(ui, &format!("Bridges to add ({})", staged.len()), "", false, |ui| {
+            if read > 0 && staged.is_empty() {
+                let plural = if read == 1 { "bridge is" } else { "bridges are" };
+                ui.label(dim(&format!("The {read} {plural} in your list already. Finish adds nothing.")));
+            } else if staged.is_empty() {
+                ui.label(dim("Nothing to add yet. Paste a list, then push Import."));
+            } else {
+                bridge_table(ui, s, &staged);
             }
         });
-        // The problem lines go below the Import row, and only the first lines show. A long list
-        // thus cannot push the button down.
-        let problems = &w.edit.bridge_problems;
-        for problem in problems.iter().take(PROBLEM_LINES) {
-            ui.label(RichText::new(problem).color(theme::ERROR));
-        }
-        let hidden = problems.len().saturating_sub(PROBLEM_LINES);
-        if hidden > 0 {
-            ui.label(dim(&format!("and {hidden} more.")));
-        }
     });
 }
 
-/// The Nexum page: the keyring warning, then one card with the URL and its warning, the key, the
-/// signature switch, the error of the page, and a note about the maps.
+/// The table of the bridges that Finish adds: a system, the arrow, a system. The table shows
+/// `BRIDGE_ROWS_SHOWN` rows, then it scrolls inside.
+fn bridge_table(ui: &mut Ui, s: &Session, staged: &[router_core::overlay::Pair]) {
+    use egui_extras::Column;
+    egui_extras::TableBuilder::new(ui)
+        .id_salt("wizard-bridge-table")
+        .striped(true)
+        .cell_layout(Layout::left_to_right(Align::Center))
+        .column(Column::remainder().at_least(110.0).clip(true))
+        .column(Column::exact(30.0))
+        .column(Column::remainder().at_least(110.0).clip(true))
+        .min_scrolled_height(0.0)
+        .max_scroll_height(BRIDGE_ROW * BRIDGE_ROWS_SHOWN as f32)
+        .auto_shrink([false, true])
+        .header(22.0, |mut header| {
+            for text in ["System", "", "System"] {
+                header.col(|ui| _ = ui.label(theme::header_text(text)));
+            }
+        })
+        .body(|body| {
+            body.rows(BRIDGE_ROW, staged.len(), |mut row| {
+                let (a, b) = staged[row.index()];
+                row.col(|ui| _ = ui.label(RichText::new(s.uni.name(a)).color(theme::TEXT)));
+                row.col(|ui| _ = ui.label(RichText::new(icons::ARROWS_LEFT_RIGHT.as_str()).color(theme::BRIDGE)));
+                row.col(|ui| _ = ui.label(RichText::new(s.uni.name(b)).color(theme::TEXT)));
+            });
+        });
+}
+
+/// The Nexum page: the keyring warning, then two stacked cards. The first card has the connection:
+/// the URL and its warning, the key, the signature switch and the error of the page. The second
+/// card has the maps of the Settings window, loaded with the URL and the key of the fields.
 fn nexum_page(ui: &mut Ui, w: &mut Wizard, s: &Session) {
     keyring_warning(ui, s);
-    theme::panel(ui, "Nexum", "", true, |ui| {
-        egui::Grid::new("wizard-nexum").num_columns(2).spacing(vec2(18.0, 10.0)).show(ui, |ui| {
+    page_shell(ui, WizardPage::Nexum, |ui| {
+        connection_card(ui, w, s);
+        ui.add_space(card_gap(ui));
+        maps_card(ui, w, s);
+    });
+}
+
+/// The connection card of the Nexum page.
+fn connection_card(ui: &mut Ui, w: &mut Wizard, s: &Session) {
+    theme::panel(ui, "Connection", "", false, |ui| {
+        egui::Grid::new("wizard-nexum").num_columns(2).spacing(FORM_GAP).show(ui, |ui| {
             ui.label(dim("URL"));
-            ui.add(TextEdit::singleline(&mut w.edit.nexum_url).hint_text("https://nexum.example").desired_width(FIELD));
+            ui.add(TextEdit::singleline(&mut w.edit.nexum_url).hint_text("https://nexum.example").desired_width(f32::INFINITY));
             ui.end_row();
             // A plain http:// URL to a remote host sends the key in clear text.
             if let Some(warning) = config::url_warning(&w.edit.nexum_url) {
@@ -727,26 +936,100 @@ fn nexum_page(ui: &mut Ui, w: &mut Wizard, s: &Session) {
             ui.label(dim("Key"));
             // The key never shows. The field starts empty, and an empty field keeps a key that is set.
             let hint = if s.cfg.nexum.key.is_some() { "A key is set. An empty field keeps it." } else { "paste a key with the read scope" };
-            ui.add(TextEdit::singleline(&mut w.edit.nexum_key).password(true).hint_text(hint).desired_width(FIELD));
+            ui.add(TextEdit::singleline(&mut w.edit.nexum_key).password(true).hint_text(hint).desired_width(f32::INFINITY));
             ui.end_row();
             ui.label(dim("Signatures"));
             ui.app_checkbox(&mut w.edit.skip_unsigned, "Skip connections with no known signatures");
             ui.end_row();
         });
-        ui.add_space(ROW_GAP);
         if let Some(error) = &w.error {
+            ui.add_space(ROW_GAP);
             ui.label(RichText::new(error).color(theme::ERROR));
         }
-        ui.label(dim("Select the maps in Settings, on the Nexum page."));
+    });
+}
+
+/// The maps card of the Nexum page: the button that loads the list, then a table with a switch for
+/// each map. The router reads the maps that are on. The table takes the height that is left, and
+/// scrolls inside.
+fn maps_card(ui: &mut Ui, w: &mut Wizard, s: &Session) {
+    theme::panel(ui, "Maps", "", false, |ui| {
+        if !w.maps_ready(s) {
+            ui.label(dim("Set the URL and the key to list the maps."));
+            return;
+        }
+        let loading = w.maps.rx.is_some();
+        ui.horizontal(|ui| {
+            let text = if w.maps.tried { "Reload maps" } else { "Load maps" };
+            if ui.add_enabled(!loading, AppButton::new(text)).clicked() {
+                w.load_maps(s, ui.ctx());
+            }
+            if loading {
+                ui.add(egui::Spinner::new().color(theme::accent(ui)));
+            }
+        });
+        if let Some(error) = &w.maps.error {
+            ui.label(RichText::new(error).color(theme::ERROR));
+        }
+        let rows = w.map_rows(s);
+        if rows.is_empty() {
+            let note = if w.maps.tried && !loading && w.maps.error.is_none() {
+                "The key has access to no maps."
+            } else {
+                "Load the maps, then switch on the ones that the router reads."
+            };
+            ui.label(dim(note));
+            return;
+        }
+        let mut toggled: Option<(String, bool)> = None;
+        use egui_extras::Column;
+        egui_extras::TableBuilder::new(ui)
+            .id_salt("wizard-maps")
+            .striped(true)
+            .cell_layout(Layout::left_to_right(Align::Center))
+            .column(Column::exact(44.0))
+            .column(Column::remainder().at_least(120.0).clip(true))
+            .column(Column::exact(110.0).clip(true))
+            .min_scrolled_height(0.0)
+            .max_scroll_height(MAP_ROW * MAP_ROWS_SHOWN as f32)
+            .auto_shrink([false, true])
+            .header(22.0, |mut header| {
+                for text in ["On", "Map", ""] {
+                    header.col(|ui| _ = ui.label(theme::header_text(text)));
+                }
+            })
+            .body(|body| {
+                body.rows(MAP_ROW, rows.len(), |mut row| {
+                    let (id, name) = rows[row.index()].clone();
+                    let mut on = w.edit.nexum_maps.contains(&id);
+                    row.col(|ui| {
+                        if ui.app_checkbox(&mut on, "").changed() {
+                            toggled = Some((id.clone(), on));
+                        }
+                    });
+                    row.col(|ui| _ = ui.label(RichText::new(name).color(if on { theme::TEXT } else { theme::TEXT_DIM })));
+                    row.col(|ui| _ = ui.label(dim(&id)));
+                });
+            });
+        if let Some((id, on)) = toggled {
+            if on {
+                w.edit.nexum_maps.push(id);
+            } else {
+                w.edit.nexum_maps.retain(|m| *m != id);
+            }
+        }
+        if w.edit.nexum_maps.is_empty() {
+            ui.label(dim("No map is on: the router reads no Nexum data."));
+        }
     });
 }
 
 /// The EVE Metro page: one card with the Enable switch and a table of the linked characters. A
 /// "Use" button picks the character that identifies the pilot to EVE Metro. While Enable is on and
-/// no character is picked, the page shows the warning of the Settings page.
+/// no character is picked, the page shows the warning of the Settings page. The table shows
+/// `METRO_ROWS_SHOWN` rows, then it scrolls inside.
 fn eve_metro_page(ui: &mut Ui, w: &mut Wizard, s: &Session, portraits: &mut Portraits) {
-    theme::panel(ui, "EVE Metro", "", true, |ui| {
-        ui.label(dim("Third-party map of Pochven wormholes. A subscription is required."));
+    theme::panel(ui, "Account", "", false, |ui| {
         ui.app_checkbox(&mut w.edit.metro_enabled, "Enable");
         ui.add_space(GROUP_GAP);
         group(ui, "Character");
@@ -763,26 +1046,29 @@ fn eve_metro_page(ui: &mut Ui, w: &mut Wizard, s: &Session, portraits: &mut Port
         let mut pick = None;
         use egui_extras::Column;
         let extra = [("Status", Column::exact(110.0)), ("", Column::exact(84.0))];
-        character_table(
-            ui,
-            "wizard-metro-characters",
-            &characters,
-            portraits,
-            &extra,
-            |pilot| RowLook { selected: picked == Some(pilot.id), ..Default::default() },
-            |ui, pilot, column| match column {
-                0 => {
-                    let (text, color) = pilot_status(pilot);
-                    ui.label(RichText::new(text).color(color));
-                }
-                _ if picked == Some(pilot.id) => _ = ui.label(RichText::new("In use").color(theme::accent(ui))),
-                _ => {
-                    if ui.add(AppButton::new("Use")).clicked() {
-                        pick = Some(pilot.id);
+        let (room, width) = (table_room(ui, METRO_ROWS_SHOWN), ui.available_width());
+        ui.allocate_ui(vec2(width, room), |ui| {
+            character_table(
+                ui,
+                "wizard-metro-characters",
+                &characters,
+                portraits,
+                &extra,
+                |pilot| RowLook { selected: picked == Some(pilot.id), ..Default::default() },
+                |ui, pilot, column| match column {
+                    0 => {
+                        let (text, color) = pilot_status(pilot);
+                        ui.label(RichText::new(text).color(color));
                     }
-                }
-            },
-        );
+                    _ if picked == Some(pilot.id) => _ = ui.label(RichText::new("In use").color(theme::accent(ui))),
+                    _ => {
+                        if ui.add(AppButton::new("Use")).clicked() {
+                            pick = Some(pilot.id);
+                        }
+                    }
+                },
+            );
+        });
         if let Some(id) = pick {
             w.edit.metro_character = Some(id);
         }
@@ -830,7 +1116,7 @@ mod tests {
         let mut w = Wizard::new(s);
         w.edit.check_for_updates = false;
         w.edit.theme = FactionTheme::Gallente;
-        w.edit.features = Features { jspace: false, ..Features::default() };
+        w.edit.features = Features { classes: [false; 6], ..Features::default() };
         assert_eq!(w.next(), Flow::Open);
         w.edit.capital = s.uni.exact("UALX-3");
         w.edit.bridge_text = "UALX-3 --> IL-YTR".into();
@@ -994,7 +1280,7 @@ mod tests {
         s.settings.filaments = Stance::Avoid;
         s.settings.space.pochven = Stance::Block;
         let mut w = Wizard::new(&s);
-        w.edit.features = Features { filaments: false, jspace: false, pochven: false };
+        w.edit.features = Features { filaments: false, classes: [false; 6], pochven: false, thera: false, turnur: false };
         assert!(!w.kept.features_kept);
         w.finish(&mut s, &egui::Context::default());
         assert_eq!((s.settings.filaments, s.settings.space.pochven), (Stance::Avoid, Stance::Block));
@@ -1348,54 +1634,29 @@ mod tests {
         last.expect("three frames ran")
     }
 
-    /// The rect of the character box: the rounded rect with the border of the theme.
-    fn character_box(output: &egui::FullOutput) -> egui::Rect {
-        let boxes: Vec<_> = test_ui::drawn_shapes(output)
-            .into_iter()
-            .filter_map(|shape| match shape {
-                egui::epaint::Shape::Rect(r) if r.corner_radius == egui::CornerRadius::same(3) && r.stroke.color == theme::LINE => {
-                    Some(r.rect)
-                }
-                _ => None,
-            })
-            .collect();
-        assert_eq!(boxes.len(), 1, "one character box");
-        boxes[0]
-    }
-
     #[test]
-    fn the_character_box_keeps_its_size() {
-        // The "+ Add character" button and the box of Essentials with these characters.
-        let measure = |count: u64, size: egui::Vec2| {
+    fn the_characters_table_keeps_its_height() {
+        // The place of the "+ Add character" button with these characters, and the names that draw.
+        let measure = |count: u64| {
             let ids: Vec<u64> = (1..=count).collect();
             let (mut s, _tmp, mut pilots) = session_with_characters(&ids);
             let mut w = Wizard::new(&s);
-            let output = page_frame(&mut w, &mut s, &mut pilots, size);
-            let add = position(&drawn_texts(&output), "+ Add character");
-            (add, character_box(&output))
+            let drawn = drawn_texts(&page_frame(&mut w, &mut s, &mut pilots, SMALLEST_WINDOW));
+            let names = drawn.iter().filter(|(t, ..)| t.starts_with("Pilot ")).count();
+            (position(&drawn, "+ Add character"), names)
         };
-        let (one_add, one_box) = measure(1, SMALLEST_WINDOW);
-        let (many_add, many_box) = measure(100, SMALLEST_WINDOW);
-        assert_eq!(one_add, many_add);
-        assert_eq!(one_box, many_box);
-        // The box fills the page: it is far taller than ten rows, and the button is under it.
-        assert!(one_box.height() > 10.0 * PORTRAIT, "the box is {} points high", one_box.height());
-        assert!(one_add.y > one_box.bottom());
-        // A taller window gives the box all the new height, with any count of characters.
-        let tall = egui::vec2(SMALLEST_WINDOW.x, SMALLEST_WINDOW.y + 284.0);
-        for count in [1, 100] {
-            let (add, list) = measure(count, tall);
-            assert!(
-                (list.height() - one_box.height() - 284.0).abs() <= 1.0,
-                "{count} characters: the box is {} points high",
-                list.height()
-            );
-            assert!((add.y - one_add.y - 284.0).abs() <= 1.0, "{count} characters: the button moved to {}", add.y);
-        }
+        let (one, one_names) = measure(1);
+        let (three, three_names) = measure(CHARACTER_ROWS_SHOWN as u64);
+        let (many, many_names) = measure(100);
+        // The table has a row for each character up to the limit, then it scrolls inside.
+        assert_eq!((one_names, three_names), (1, CHARACTER_ROWS_SHOWN));
+        assert!(one.y < three.y, "one row is shorter than {CHARACTER_ROWS_SHOWN} rows");
+        assert_eq!(three, many, "100 characters take the room of {CHARACTER_ROWS_SHOWN}");
+        assert!(many_names <= CHARACTER_ROWS_SHOWN + 1, "{many_names} names draw: only the rows in view draw");
     }
 
     #[test]
-    fn the_characters_card_draws_a_hint_and_one_status_dot_for_each_row() {
+    fn the_characters_card_draws_a_hint_and_one_status_for_each_row() {
         use router_core::esi::pilots::PilotState;
         let (mut s, _tmp, mut pilots) = session_with_characters(&[1, 2, 3]);
         // Pilot 1 is online, pilot 2 is offline, and the state of pilot 3 is not known.
@@ -1405,34 +1666,26 @@ mod tests {
         let output = page_frame(&mut w, &mut s, &mut pilots, SMALLEST_WINDOW);
         let drawn = drawn_texts(&output);
         assert!(has(&drawn, "Log in each pilot that you fly."));
-        assert!(!drawn.iter().any(|(t, ..)| t.contains("scrolls")), "the false sentence of the mockup is not drawn");
-        let mut dots: Vec<_> = test_ui::drawn_shapes(&output)
-            .into_iter()
-            .filter_map(|shape| match shape {
-                egui::epaint::Shape::Circle(c) if c.radius == STATUS_DOT_RADIUS => Some((c.center, c.fill)),
-                _ => None,
-            })
-            .collect();
-        dots.sort_by(|a, b| a.0.y.partial_cmp(&b.0.y).expect("no NaN"));
-        assert_eq!(dots.iter().map(|d| d.1).collect::<Vec<_>>(), [theme::OK, theme::TEXT_DIM, theme::TEXT_DIM]);
-        // The dots stand in one column at the right end of the character card, level with the names.
-        let card = test_ui::card_rects(&output)[0];
-        for (index, (center, _)) in dots.iter().enumerate() {
-            assert!(center.x < card.right() - 8.0 && center.x > card.right() - 40.0, "a dot is at x = {}", center.x);
-            assert!((center.x - dots[0].0.x).abs() < 0.5);
-            let (_, pos, size) = drawn.iter().find(|(t, ..)| *t == format!("Pilot {}", index + 1)).expect("the name is drawn");
-            assert!((pos.y + size.y / 2.0 - center.y).abs() <= 2.0, "row {index}: the name and the dot are on one line");
+        assert!(has(&drawn, "CHARACTER") && has(&drawn, "STATUS"), "the header of the table");
+        // One status for each pilot, on the line of the name. No dot repeats it. The state of
+        // pilot 3 is not known, and the table shows it as offline.
+        for (index, status) in ["Online", "Offline", "Offline"].into_iter().enumerate() {
+            let name = position(&drawn, &format!("Pilot {}", index + 1));
+            let on_line = |(text, pos, _): &(String, egui::Pos2, egui::Vec2)| text == status && (pos.y - name.y).abs() <= 2.0;
+            assert!(drawn.iter().any(on_line), "row {index}: the status {status} is on the line of the name");
         }
+        let circles = test_ui::drawn_shapes(&output).into_iter().filter(|s| matches!(s, egui::epaint::Shape::Circle(_))).count();
+        assert_eq!(circles, 0, "no status dot");
     }
 
     #[test]
-    fn pages_2_to_4_draw_one_card_with_their_headings() {
+    fn pages_2_to_4_draw_stacked_cards_with_their_headings() {
         let (mut s, _tmp, mut pilots) = session_with_characters(&[1, 2]);
         let mut w = Wizard::new(&s);
         // Each page: the texts from the top to the bottom of the card.
         let pages: [(WizardPage, &[&str]); 3] = [
-            (WizardPage::Alliance, &["Alliance capital", "Needed for Ansiblex zones.", "ANSIBLEX IMPORT", "Import"]),
-            (WizardPage::Nexum, &["Nexum", "URL", "Key", "Select the maps in Settings, on the Nexum page."]),
+            (WizardPage::Alliance, &["Ansiblex", "ALLIANCE CAPITAL", "System", "IMPORT", "Import"]),
+            (WizardPage::Nexum, &["Connection", "URL", "Key", "Signatures"]),
             (
                 WizardPage::EveMetro,
                 &["EVE Metro", "Third-party map of Pochven wormholes. A subscription is required.", "Enable", "CHARACTER", "Use"],
@@ -1447,13 +1700,22 @@ mod tests {
             let ys: Vec<f32> = order.iter().map(|text| position(&drawn, text).y).collect();
             assert!(ys.windows(2).all(|pair| pair[0] < pair[1]), "{page:?}: the texts {order:?} come in order, at {ys:?}");
             assert!(!drawn.iter().any(|(t, ..)| t.contains("Save")), "{page:?}: no Save button");
-            // One card holds the page, and it ends at the bottom of the page area.
             let cards = test_ui::card_rects(&output);
-            assert_eq!(cards.len(), 1, "{page:?}: one card");
-            assert!((cards[0].bottom() - area.bottom()).abs() <= 1.0, "{page:?}: the card ends at {}", cards[0].bottom());
-            assert!((cards[0].left() - area.left()).abs() <= 1.0 && (cards[0].right() - area.right()).abs() <= 1.0);
-            // The old heading "Import" is gone.
-            assert!(!has(&drawn, "IMPORT"));
+            // The cards are stacked in the one column of the page: centered, under the head.
+            assert_eq!(cards.len(), if page == WizardPage::EveMetro { 1 } else { 2 }, "{page:?}: the number of cards");
+            for card in &cards {
+                assert!((card.width() - PAGE_COLUMN).abs() <= 1.0, "{page:?}: a card is {} points wide", card.width());
+                assert!((card.center().x - SMALLEST_WINDOW.x / 2.0).abs() <= 1.0, "{page:?}: a card is centered at {}", card.center().x);
+            }
+            assert!((cards[0].top() - area.top() - HEAD_ROOM).abs() <= 1.0, "{page:?}: the card starts at {}", cards[0].top());
+            if let Some(second) = cards.get(1) {
+                assert!((second.top() - cards[0].bottom() - CARD_GAP).abs() <= 1.0, "{page:?}: the gap is {}", second.top() - cards[0].bottom());
+            }
+            match page {
+                WizardPage::Alliance => assert!(has(&drawn, "Bridges to add (0)")),
+                WizardPage::Nexum => assert!(has(&drawn, "Set the URL and the key to list the maps.") || has(&drawn, "Load maps")),
+                _ => {}
+            }
             // The Metro page has the heading and the header of the table.
             if page == WizardPage::EveMetro {
                 assert_eq!(drawn.iter().filter(|(t, ..)| t == "CHARACTER").count(), 2);
@@ -1471,14 +1733,15 @@ mod tests {
             assert!(!has(&drawn_texts(&output), "+ Add character"));
             let cards = test_ui::card_rects(&output);
             assert_eq!(cards.len(), 3, "Updates, Theme and Features");
-            for card in &cards {
-                assert!((card.width() - 520.0).abs() <= 1.0, "the column is {} points wide", card.width());
-                assert!((card.center().x - size.x / 2.0).abs() <= 1.0, "the column is centered at {}", card.center().x);
-            }
-            // The cards fill the page, as the right column does.
+            let (updates, theme, features) = (cards[0], cards[1], cards[2]);
+            // Features has the width of the column. Updates and Theme share the row over it.
+            assert!((features.width() - PAGE_COLUMN).abs() <= 1.0, "the column is {} points wide", features.width());
+            assert!((features.center().x - size.x / 2.0).abs() <= 1.0, "the column is centered at {}", features.center().x);
+            assert!((updates.left() - features.left()).abs() <= 1.0 && (theme.right() - features.right()).abs() <= 1.0);
+            // The cards start under the head of the page, and keep their own height.
             let area = page_area(size);
-            assert!((cards[0].top() - area.top()).abs() <= 1.0 && (cards[2].bottom() - area.bottom()).abs() <= 1.0);
-            assert!((cards[1].top() - cards[0].bottom() - 16.0).abs() <= 1.0);
+            assert!((updates.top() - area.top() - HEAD_ROOM).abs() <= 1.0, "the cards start at {}", updates.top());
+            assert!((features.top() - updates.bottom() - CARD_GAP).abs() <= 1.0);
         }
     }
 
@@ -1544,7 +1807,7 @@ mod tests {
         // A spot check of the table through the wizard.
         let highsec = Wizard::with_preset(&s, Preset::Highsec, Preset::Highsec.answers());
         assert_eq!(highsec.pages, [WizardPage::Essentials]);
-        assert_eq!(highsec.edit.features, Features { filaments: true, jspace: false, pochven: false });
+        assert_eq!(highsec.edit.features, Features { filaments: false, classes: [false; 6], pochven: false, thera: false, turnur: false });
         // Wizard::new is the Custom preset.
         let custom = Wizard::with_preset(&s, Preset::Custom, Preset::Custom.answers());
         let new = Wizard::new(&s);
@@ -1682,7 +1945,7 @@ mod tests {
         assert_eq!(space.pochven, Stance::Block);
         assert_eq!([space.c1, space.c2, space.c3, space.c4, space.c5, space.c6], [Stance::Block; 6]);
         assert_eq!(space.drifter, Stance::Avoid, "Drifter is not a switch of the page");
-        assert_eq!(s.settings.filaments, Stance::Allow);
+        assert_eq!(s.settings.filaments, Stance::Block, "no Pochven answer, no filaments");
         assert!(tmp.path().join("eve-router.json").exists());
 
         // A wizard with more pages: Skip on page 1 keeps the toggles.
@@ -1786,7 +2049,7 @@ mod tests {
         w.error = Some("The URL is bad.".into());
         let drawn = texts(|ui| w.body(ui, &mut s, &mut pilots));
         assert!(has(&drawn, "The URL is bad."));
-        assert!(has(&drawn, "Select the maps in Settings, on the Nexum page."));
+        assert!(has(&drawn, "Connection") && has(&drawn, "Maps"));
         // A field hint is a text edit hint, so it shows as a drawn text.
         assert!(has(&drawn, "paste a key with the read scope"));
         // With a key in the session, the hint says that the key stays.
@@ -1797,26 +2060,47 @@ mod tests {
     }
 
     #[test]
+    fn the_alliance_page_says_when_the_list_holds_the_bridges_already() {
+        let (mut s, _tmp) = session(true, true);
+        let mut pilots = pilots_ui();
+        let mut w = Wizard::new(&s);
+        assert_eq!(w.next(), Flow::Open);
+        w.edit.bridge_text = "UALX-3 --> IL-YTR".into();
+        w.import(&s);
+        while w.next() == Flow::Open {}
+        w.finish(&mut s, &egui::Context::default());
+        assert_eq!(s.bridges.len(), 1);
+        // The same list again: the page reads it, and Finish has nothing to add.
+        let mut w = Wizard::new(&s);
+        assert_eq!(w.next(), Flow::Open);
+        w.edit.bridge_text = "UALX-3 --> IL-YTR".into();
+        w.import(&s);
+        let drawn = texts(|ui| w.body(ui, &mut s, &mut pilots));
+        assert!(has(&drawn, "The 1 bridge is in your list already. Finish adds nothing."));
+        assert!(has(&drawn, "Bridges to add (0)"));
+    }
+
+    #[test]
     fn the_alliance_and_metro_pages_draw_their_states() {
         let (mut s, tmp) = session(true, true);
         let mut pilots = pilots_ui();
         let mut w = Wizard::new(&s);
         assert_eq!(w.next(), Flow::Open);
-        // A capital shows its name with Clear. A good import says how many bridges Finish adds.
+        // A capital shows its name with Clear. A good import fills the table of the bridges to add.
         w.edit.capital = s.uni.exact("UALX-3");
         let drawn = texts(|ui| w.body(ui, &mut s, &mut pilots));
         assert!(has(&drawn, "Clear") && has(&drawn, "Import"));
         w.edit.bridge_text = "UALX-3 --> IL-YTR".into();
         w.import(&s);
         let drawn = texts(|ui| w.body(ui, &mut s, &mut pilots));
-        assert!(has(&drawn, "Finish adds 1 jump bridge to the list."));
-        // A bad import shows its problem lines and no count.
+        assert!(has(&drawn, "Bridges to add (1)"));
+        // A bad import shows its problem lines and no bridge to add.
         w.edit.bridge_text = "Nope --> Jita".into();
         w.import(&s);
         assert!(!w.edit.bridge_problems.is_empty());
         let drawn = texts(|ui| w.body(ui, &mut s, &mut pilots));
         assert!(w.edit.bridge_problems.iter().all(|p| has(&drawn, p)));
-        assert!(!drawn.iter().any(|(t, ..)| t.starts_with("Finish adds")));
+        assert!(has(&drawn, "Bridges to add (0)"));
         // The EVE Metro page: the picked character reads "In use", the other one has a "Use" button.
         while w.page() != WizardPage::EveMetro {
             assert_eq!(w.next(), Flow::Open);
@@ -1923,8 +2207,8 @@ mod tests {
         assert_eq!(delay, std::time::Duration::MAX, "the preview asks for no endless frames");
     }
 
-    /// The Alliance page after an import of `bad` lines that give no bridge. The list also holds
-    /// one good line, so the page shows the "Finish adds" text.
+    /// The Alliance page in the smallest window after an import of `bad` lines that give no bridge.
+    /// The list also holds one good line, so the page shows one bridge to add.
     fn alliance_with_problems(bad: usize) -> Vec<(String, egui::Pos2, egui::Vec2)> {
         let (mut s, _tmp) = session(true, true);
         let mut pilots = pilots_ui();
@@ -1935,7 +2219,7 @@ mod tests {
         w.import(&s);
         // An import gives one problem for each bad line. The test sets the problems directly, so one short list gives any count.
         w.edit.bridge_problems = (1..=bad).map(|i| format!("Unknown system \"Bad{i}\"")).collect();
-        texts(|ui| w.body(ui, &mut s, &mut pilots))
+        drawn_texts(&page_frame(&mut w, &mut s, &mut pilots, SMALLEST_WINDOW))
     }
 
     /// The position of the drawn text that starts with `start`.
@@ -1944,19 +2228,21 @@ mod tests {
     }
 
     #[test]
-    fn many_problem_lines_do_not_move_the_import_button() {
-        let one = alliance_with_problems(1);
+    fn many_problem_lines_do_not_move_the_import_button_past_the_limit() {
+        // The page shows `PROBLEM_LINES` lines and one count line. More problems add no line.
+        let limit = alliance_with_problems(PROBLEM_LINES + 1);
         let many = alliance_with_problems(100);
-        assert_eq!(position(&one, "Import"), position(&many, "Import"));
-        assert_eq!(position(&one, "Finish adds"), position(&many, "Finish adds"));
+        assert_eq!(position(&limit, "Import"), position(&many, "Import"));
+        assert_eq!(position(&limit, "Bridges to add"), position(&many, "Bridges to add"));
     }
 
     #[test]
-    fn the_import_row_comes_before_the_problem_lines() {
+    fn the_problem_lines_come_before_the_import_button() {
         let drawn = alliance_with_problems(3);
         let first_problem = position(&drawn, "Unknown system").y;
-        assert!(position(&drawn, "Import").y < first_problem);
-        assert!(position(&drawn, "Finish adds 1 jump bridge").y < first_problem);
+        assert!(first_problem < position(&drawn, "Import").y);
+        // The bridge table stands in the card under the Import card.
+        assert!(has(&drawn, "Bridges to add (1)"));
     }
 
     #[test]
@@ -1988,11 +2274,8 @@ mod tests {
         if import {
             w.import(&s);
         }
-        let input =
-            egui::RawInput { screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, SMALLEST_WINDOW)), ..Default::default() };
-        let mut output = test_ui::ctx().run_ui(input, |ui| w.body(ui, &mut s, &mut pilots));
-        output.textures_delta.clear();
-        (drawn_texts(&output), w)
+        let drawn = drawn_texts(&page_frame(&mut w, &mut s, &mut pilots, SMALLEST_WINDOW));
+        (drawn, w)
     }
 
     /// The bottom edge of the drawn text that starts with `start`.
@@ -2010,7 +2293,7 @@ mod tests {
         let (one, _) = alliance_in_smallest_window(&bridge_lines(1, "UALX-3"), false);
         let (many, _) = alliance_in_smallest_window(&bridge_lines(100, "UALX-3"), false);
         assert_eq!(position(&one, "Import"), position(&many, "Import"), "the paste box keeps its height");
-        assert!(bottom(&many, "Import") <= SMALLEST_WINDOW.y - FRAME_ROOM, "Import is on the screen");
+        assert!(bottom(&many, "Import") <= page_area(SMALLEST_WINDOW).bottom(), "Import is on the screen");
     }
 
     #[test]
@@ -2018,10 +2301,82 @@ mod tests {
         // Each line has a name that is not a system, so each line gives one problem.
         let (drawn, w) = alliance_in_smallest_window(&bridge_lines(100, "Bad"), true);
         assert_eq!(w.edit.bridge_problems.len(), 100);
-        let limit = SMALLEST_WINDOW.y - FRAME_ROOM;
+        let limit = page_area(SMALLEST_WINDOW).bottom();
         assert!(bottom(&drawn, "Import") <= limit, "Import is on the screen");
         assert!(has(&drawn, "and 95 more."));
         assert!(bottom(&drawn, "and 95 more.") <= limit, "the count line is on the screen");
+    }
+
+    #[test]
+    fn the_wizard_takes_the_answer_of_the_map_fetch() {
+        let (s, _tmp) = session(true, true);
+        let mut w = Wizard::new(&s);
+        let map = |id: &str, name: &str| MapInfo { id: id.into(), name: name.into() };
+        // No answer yet: the fetch stays.
+        let (tx, rx) = mpsc::channel();
+        w.maps.rx = Some(rx);
+        w.poll_maps();
+        assert!(w.maps.rx.is_some(), "the fetch runs until the answer comes");
+        // The list comes.
+        tx.send(Ok(vec![map("m1", "Alpha")])).expect("the wizard holds the receiver");
+        w.poll_maps();
+        assert!(w.maps.rx.is_none());
+        assert_eq!(w.maps.list, [map("m1", "Alpha")]);
+        // An error shows its text.
+        let (tx, rx) = mpsc::channel();
+        w.maps.rx = Some(rx);
+        tx.send(Err(sources::FetchError::Offline("Nexum is down".into()))).expect("the wizard holds the receiver");
+        w.poll_maps();
+        assert!(w.maps.error.as_deref().is_some_and(|e| e.contains("Nexum is down")), "{:?}", w.maps.error);
+        // A thread that ends with no answer gives an error too.
+        let (tx, rx) = mpsc::channel::<Result<Vec<MapInfo>, sources::FetchError>>();
+        drop(tx);
+        w.maps.rx = Some(rx);
+        w.poll_maps();
+        assert_eq!(w.maps.error.as_deref(), Some("The map list did not arrive."));
+    }
+
+    #[test]
+    fn the_maps_card_draws_its_states() {
+        let (mut s, _tmp) = session(true, true);
+        let mut pilots = pilots_ui();
+        let mut w = Wizard::new(&s);
+        to_nexum(&mut w);
+        let map = |id: &str, name: &str| MapInfo { id: id.into(), name: name.into() };
+        let mut drawn = |w: &mut Wizard, s: &mut Session| drawn_texts(&page_frame(w, s, &mut pilots, SMALLEST_WINDOW));
+        // With no URL and no key, the card asks for them.
+        s.cfg.nexum.url = None;
+        s.cfg.nexum.key = None;
+        w.edit.nexum_url.clear();
+        assert!(has(&drawn(&mut w, &mut s), "Set the URL and the key to list the maps."));
+        // With both, it shows the button and the hint.
+        w.edit.nexum_url = "https://nexum.example".into();
+        w.edit.nexum_key = "nxm_key".into();
+        let shown = drawn(&mut w, &mut s);
+        assert!(has(&shown, "Load maps") && has(&shown, "Load the maps, then switch on the ones that the router reads."));
+        // After a fetch, it lists the maps. No map is on.
+        w.maps.list = vec![map("m1", "Alpha"), map("m2", "Beta")];
+        w.maps.tried = true;
+        let shown = drawn(&mut w, &mut s);
+        assert!(has(&shown, "Alpha") && has(&shown, "Beta") && has(&shown, "Reload maps"));
+        assert!(has(&shown, "No map is on: the router reads no Nexum data."));
+        // A map that is on removes the note. A map that is on but not in the list still shows.
+        w.edit.nexum_maps = vec!["m1".into(), "gone".into()];
+        let shown = drawn(&mut w, &mut s);
+        assert!(!has(&shown, "No map is on: the router reads no Nexum data."));
+        assert!(has(&shown, "Not in the list"));
+    }
+
+    #[test]
+    fn finish_writes_the_map_switches() {
+        let (mut s, _tmp) = session(true, true);
+        let mut w = Wizard::new(&s);
+        to_nexum(&mut w);
+        w.edit.nexum_maps = vec!["m1".into(), "m2".into()];
+        assert_eq!(w.next(), Flow::Open);
+        skip_all(&mut w);
+        w.finish(&mut s, &egui::Context::default());
+        assert_eq!(s.cfg.nexum.map_ids, ["m1", "m2"]);
     }
 
     /// Draw the steps row in a central panel of the full screen. Return the frame, with the wizard at page `at`.

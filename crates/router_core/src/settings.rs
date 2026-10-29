@@ -328,35 +328,45 @@ impl Settings {
     }
 }
 
-/// The three switches of the setup wizard. Each starts on, whatever the current stance.
+/// The switches of the setup wizard. Each starts on, whatever the current stance.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Features {
     /// Use filaments.
     pub filaments: bool,
-    /// Use the wormhole classes 1 to 6.
-    pub jspace: bool,
+    /// Use each wormhole class, in the order of the classes 1 to 6.
+    pub classes: [bool; 6],
     /// Use Pochven.
     pub pochven: bool,
+    /// Use Thera.
+    pub thera: bool,
+    /// Use Turnur.
+    pub turnur: bool,
 }
 
 impl Default for Features {
     fn default() -> Self {
-        Self { filaments: true, jspace: true, pochven: true }
+        Self { filaments: true, classes: [true; 6], pochven: true, thera: true, turnur: true }
     }
 }
 
 impl Features {
+    /// True when at least one wormhole class is on.
+    pub fn jspace(self) -> bool {
+        self.classes.contains(&true)
+    }
+
     /// Write the switches to the settings: a checked switch gives Allow, an unchecked one gives
-    /// Block. The Drifter stance, the hubs and the wormhole switch stay as they are.
+    /// Block. The Drifter stance and the wormhole switch stay as they are.
     pub fn apply(self, settings: &mut Settings) {
         let stance = |on: bool| if on { Stance::Allow } else { Stance::Block };
         settings.filaments = stance(self.filaments);
-        for group in Group::ALL {
-            if matches!(group, Group::Class(_)) {
-                settings.space.set(group, stance(self.jspace));
-            }
+        // The first six groups of `Group::ALL` are the classes 1 to 6.
+        for (group, on) in Group::ALL.into_iter().zip(self.classes) {
+            settings.space.set(group, stance(on));
         }
         settings.space.set(Group::Pochven, stance(self.pochven));
+        settings.hubs.thera = stance(self.thera);
+        settings.hubs.turnur = stance(self.turnur);
     }
 }
 
@@ -900,10 +910,34 @@ mod tests {
         let mut s = settings(&uni, None);
         s.filaments = Stance::Avoid;
         s.space.set(Group::Pochven, Stance::Avoid);
-        Features { filaments: true, jspace: true, pochven: true }.apply(&mut s);
+        Features::default().apply(&mut s);
         assert_eq!((s.filaments, s.space.pochven), (Stance::Allow, Stance::Allow));
-        Features { filaments: false, jspace: true, pochven: false }.apply(&mut s);
+        Features { filaments: false, pochven: false, ..Features::default() }.apply(&mut s);
         assert_eq!((s.filaments, s.space.pochven), (Stance::Block, Stance::Block));
+    }
+
+    #[test]
+    fn the_hub_switches_write_thera_and_turnur() {
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        s.hubs.thera = Stance::Avoid;
+        Features { thera: false, ..Features::default() }.apply(&mut s);
+        assert_eq!((s.hubs.thera, s.hubs.turnur), (Stance::Block, Stance::Allow));
+        Features { turnur: false, ..Features::default() }.apply(&mut s);
+        assert_eq!((s.hubs.thera, s.hubs.turnur), (Stance::Allow, Stance::Block));
+    }
+
+    #[test]
+    fn each_class_switch_writes_its_own_class() {
+        use crate::wormhole_space::{Group, WormholeClass};
+        let uni = overlay_universe();
+        let mut s = settings(&uni, None);
+        Features { classes: [true, false, true, false, true, false], ..Features::default() }.apply(&mut s);
+        let stance = |c| s.space.get(Group::Class(c));
+        assert_eq!(
+            [WormholeClass::C1, WormholeClass::C2, WormholeClass::C3, WormholeClass::C4, WormholeClass::C5, WormholeClass::C6].map(stance),
+            [Stance::Allow, Stance::Block, Stance::Allow, Stance::Block, Stance::Allow, Stance::Block]
+        );
     }
 
     #[test]
@@ -914,12 +948,11 @@ mod tests {
         let uni = overlay_universe();
         let mut s = settings(&uni, None);
         s.space.set(Group::Drifter, Stance::Avoid);
-        s.hubs.thera = Stance::Avoid;
-        Features { jspace: false, ..Features::default() }.apply(&mut s);
+        Features { classes: [false; 6], ..Features::default() }.apply(&mut s);
         for c in CLASSES {
             assert_eq!(s.space.get(Group::Class(c)), Stance::Block);
         }
-        assert_eq!((s.space.drifter, s.hubs.thera, s.wormholes), (Stance::Avoid, Stance::Avoid, true));
+        assert_eq!((s.space.drifter, s.wormholes), (Stance::Avoid, true));
         Features::default().apply(&mut s);
         // Every class is Allow again. The Drifter stance is still Avoid.
         for c in CLASSES {
@@ -930,6 +963,7 @@ mod tests {
 
     #[test]
     fn the_switches_start_on() {
-        assert_eq!(Features::default(), Features { filaments: true, jspace: true, pochven: true });
+        let on = Features::default();
+        assert!(on.filaments && on.pochven && on.thera && on.turnur && on.classes == [true; 6]);
     }
 }

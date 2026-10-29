@@ -1182,7 +1182,7 @@ pub(crate) struct RowLook {
 }
 
 /// The row height of a table of characters.
-const CHARACTER_ROW: f32 = 40.0;
+pub(crate) const CHARACTER_ROW: f32 = 40.0;
 
 /// The space between a long name and the next column of a table of characters.
 const NAME_GAP: f32 = 8.0;
@@ -1211,6 +1211,7 @@ pub(crate) fn character_table(
         table = table.column(*column);
     }
     table
+        .min_scrolled_height(0.0)
         .max_scroll_height(table_height)
         .auto_shrink([false, true])
         .header(22.0, |mut header| {

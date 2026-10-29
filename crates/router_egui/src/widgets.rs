@@ -108,6 +108,21 @@ impl Widget for AppButton {
 pub struct AppCheckbox<'a> {
     checked: &'a mut bool,
     text: WidgetText,
+    mixed: bool,
+}
+
+impl<'a> AppCheckbox<'a> {
+    pub fn new(checked: &'a mut bool, text: impl Into<WidgetText>) -> Self {
+        AppCheckbox { checked, text: text.into(), mixed: false }
+    }
+
+    /// The box stands for a group in which some items are on and some are off. It shows a dash.
+    /// A click flips `checked` as for any checkbox, so the caller passes `false` to make the click
+    /// switch the whole group on.
+    pub fn mixed(mut self, mixed: bool) -> Self {
+        self.mixed = mixed;
+        self
+    }
 }
 
 /// The side of the box of a checkbox.
@@ -124,6 +139,7 @@ impl Widget for AppCheckbox<'_> {
             response.mark_changed();
         }
         let checked = *self.checked;
+        let mixed = self.mixed && !checked;
         let enabled = ui.is_enabled();
         response.widget_info(|| WidgetInfo::selected(WidgetType::Checkbox, enabled, checked, galley.text()));
         if ui.is_rect_visible(rect) {
@@ -136,9 +152,13 @@ impl Widget for AppCheckbox<'_> {
             } else if hovered {
                 (if checked { theme::accent_mid(ui) } else { theme::accent_dark(ui) }, theme::accent_light(ui), Color32::WHITE)
             } else {
-                (if checked { theme::accent_dark(ui) } else { Color32::TRANSPARENT }, theme::accent_line(ui), theme::TEXT)
+                (if checked || mixed { theme::accent_dark(ui) } else { Color32::TRANSPARENT }, theme::accent_line(ui), theme::TEXT)
             };
             ui.painter().rect(boxed, 0.0, fill, Stroke::new(1.0, line), StrokeKind::Inside);
+            if mixed {
+                let dash = egui::Rect::from_center_size(boxed.center(), vec2(CHECK_BOX / 2.0, 2.0));
+                ui.painter().rect_filled(dash, 0.0, if enabled { accent } else { theme::TEXT_OFF });
+            }
             if checked {
                 let mark = RichText::new(icons::CHECK.as_str()).size(13.0).color(if enabled { accent } else { theme::TEXT_OFF });
                 let mark = WidgetText::from(mark).into_galley(ui, Some(TextWrapMode::Extend), f32::INFINITY, TextStyle::Body);
@@ -292,7 +312,7 @@ impl UiExt for Ui {
     }
 
     fn app_checkbox(&mut self, checked: &mut bool, text: impl Into<WidgetText>) -> Response {
-        self.add(AppCheckbox { checked, text: text.into() })
+        self.add(AppCheckbox::new(checked, text))
     }
 }
 

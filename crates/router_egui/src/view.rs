@@ -9,7 +9,9 @@ use crate::settings_window::{self, Page, Popup, SettingsForm};
 use crate::setup_wizard::{Flow, Wizard};
 use crate::strip;
 use crate::theme::{self, panel};
-use crate::welcome::{Answers, Preset, Step, Welcome, WelcomeFlow};
+#[cfg(test)]
+use crate::welcome::Step;
+use crate::welcome::{Answers, Preset, Welcome, WelcomeFlow};
 use crate::widgets::{self, AppButton, UiExt, icon_label};
 use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
@@ -81,7 +83,7 @@ fn route_list_height(routes: usize, spare: f32, compact: bool) -> f32 {
 /// pages of the wizard, in which the window ignores all clicks. The footers of the screens and of
 /// the pages are at the same place, so the second click of a double-click would hit a button of
 /// the new screen or page without this guard.
-const SWITCH_CLICK_GUARD: f64 = 0.4;
+const SWITCH_CLICK_GUARD: f64 = theme::CLICK_GUARD;
 
 /// How long the status bar shows a status text.
 const STATUS_TIME: Duration = Duration::from_secs(4);
@@ -271,12 +273,10 @@ impl View {
         self.pilots.poll_login(ui.ctx(), s);
         let Some(welcome) = &mut self.welcome else { return };
         setup_status_bar(ui, s);
-        // Only step 2 has a footer. The panel must come before the central panel.
-        let mut footer_flow = WelcomeFlow::Open;
-        if welcome.step() == Step::Travel {
-            let footer = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, 12));
-            footer_flow = egui::Panel::bottom("welcome-footer").frame(footer).show(ui, |ui| welcome.footer(ui)).inner;
-        }
+        // Both steps draw the footer panel, so the body has the same room. Step 1 draws it invisible.
+        // The panel must come before the central panel.
+        let footer = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, theme::FOOTER_MARGIN));
+        let footer_flow = egui::Panel::bottom("welcome-footer").frame(footer).show(ui, |ui| welcome.footer(ui)).inner;
         let central = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, WIZARD_MARGIN));
         let body_flow = egui::CentralPanel::default().frame(central).show(ui, |ui| welcome.body(ui, s)).inner;
         self.toaster.show(ui, &mut s.notices);
@@ -342,7 +342,7 @@ impl View {
         }
         let Some(wizard) = &mut self.wizard else { return };
         setup_status_bar(ui, s);
-        let footer = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, 12));
+        let footer = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, theme::FOOTER_MARGIN));
         let page = wizard.page();
         let flow = egui::Panel::bottom("wizard-footer").frame(footer).show(ui, |ui| wizard.footer(ui)).inner;
         // Next, Back and Skip of two pages are at the same place, so a page change starts the click guard too.
@@ -352,7 +352,7 @@ impl View {
         let central = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, WIZARD_MARGIN));
         egui::CentralPanel::default().frame(central).show(ui, |ui| {
             wizard.steps(ui);
-            ui.add_space(12.0);
+            ui.add_space(theme::STEPS_GAP);
             wizard.body(ui, s, &mut self.pilots);
         });
         self.pilots.characters_window(ui, s, false);
@@ -1422,9 +1422,9 @@ mod tests {
         let ctx = crate::test_ui::ctx();
         // The last texts of the body on each page.
         let pages = [
-            (WizardPage::Essentials, vec!["Pochven", "+ Add character"]),
+            (WizardPage::Essentials, vec!["Turnur", "+ Add character"]),
             (WizardPage::Alliance, vec!["Import"]),
-            (WizardPage::Nexum, vec!["Select the maps in Settings, on the Nexum page."]),
+            (WizardPage::Nexum, vec!["Skip connections with no known signatures"]),
             (WizardPage::EveMetro, vec!["Bo Berg"]),
         ];
         for (index, (page, last_texts)) in pages.iter().enumerate() {
@@ -1474,59 +1474,47 @@ mod tests {
         (last.expect("three frames ran"), footer)
     }
 
-    /// The cards of the Essentials page in a window of `size`: the Characters card, then the Updates, Theme and Features cards.
-    fn essentials_cards(output: &egui::FullOutput, size: egui::Vec2) -> (egui::Rect, Vec<egui::Rect>) {
+    /// The cards of the Essentials page, in the order of drawing: Characters, Updates, Theme and Features.
+    fn essentials_cards(output: &egui::FullOutput) -> [egui::Rect; 4] {
         let cards = crate::test_ui::card_rects(output);
-        assert_eq!(cards.len(), 4, "Characters, Updates, Theme and Features");
-        let (left, right): (Vec<_>, Vec<_>) = cards.into_iter().partition(|card| card.center().x < size.x / 2.0);
-        assert_eq!((left.len(), right.len()), (1, 3));
-        (left[0], right)
+        cards.try_into().unwrap_or_else(|cards: Vec<egui::Rect>| panic!("Characters, Updates, Theme and Features: {}", cards.len()))
     }
 
     #[test]
-    fn both_columns_of_the_first_page_end_at_the_same_bottom() {
+    fn the_first_page_is_one_centered_column() {
         use crate::setup_wizard::SMALLEST_WINDOW;
         let mut heights = Vec::new();
         for size in [SMALLEST_WINDOW, egui::vec2(SMALLEST_WINDOW.x, 1000.0)] {
             let (output, footer) = settled_wizard(size);
-            let (characters, right) = essentials_cards(&output, size);
-            let page_end = footer.top() - f32::from(WIZARD_MARGIN);
-            let features = right[2];
-            assert!(
-                (characters.bottom() - features.bottom()).abs() <= 1.0,
-                "the columns end at {} and {}",
-                characters.bottom(),
-                features.bottom()
-            );
-            assert!((features.bottom() - page_end).abs() <= 1.0, "the columns end at {}, the page ends at {page_end}", features.bottom());
+            let [characters, updates, theme, features] = essentials_cards(&output);
+            // The column is 800 points wide and centered. Characters and Features have its width.
+            for card in [characters, features] {
+                assert!((card.width() - 800.0).abs() <= 1.0, "a card is {} points wide", card.width());
+                assert!((card.center().x - size.x / 2.0).abs() <= 1.0, "the column is centered at {}", card.center().x);
+            }
+            // Updates and Theme share one row of the column, with a gap of 16 between them.
+            assert!((updates.left() - characters.left()).abs() <= 1.0 && (theme.right() - characters.right()).abs() <= 1.0);
+            assert!((theme.left() - updates.right() - 16.0).abs() <= 1.0, "the gap of the row is {}", theme.left() - updates.right());
+            assert!((updates.top() - theme.top()).abs() <= 1.0, "the two cards of the row start together");
+            assert!((updates.bottom() - theme.bottom()).abs() <= 1.0, "the two cards of the row end together");
+            // The cards of the column have the gap of 16, and the column ends above the footer.
+            assert!((updates.top() - characters.bottom() - 16.0).abs() <= 1.0);
+            assert!((features.top() - updates.bottom() - 16.0).abs() <= 1.0);
             assert!(features.bottom() < footer.top(), "the cards are above the footer");
-            // The cards of the column have the gap, and the top of the column is the top of the card at the left.
-            assert!((right[0].top() - characters.top()).abs() <= 1.0);
-            assert!((right[1].top() - right[0].bottom() - 16.0).abs() <= 1.0 && (right[2].top() - right[1].bottom() - 16.0).abs() <= 1.0);
-            heights.push((characters.height(), right[0].height(), right[1].height(), right[2].height()));
+            heights.push([characters.height(), updates.height(), features.height()]);
         }
-        // The taller window gives the new height to the Characters card, and in equal parts to Updates and Features. Theme keeps its height.
-        let (small, tall) = (heights[0], heights[1]);
-        let grown = 1000.0 - SMALLEST_WINDOW.y;
-        assert!((tall.0 - small.0 - grown).abs() <= 1.0, "the Characters card grew by {}", tall.0 - small.0);
-        assert!((tall.2 - small.2).abs() <= 1.0, "the Theme card keeps its height");
-        let (updates, features) = (tall.1 - small.1, tall.3 - small.3);
-        assert!(
-            (updates - features).abs() <= 1.0 && (updates + features - grown).abs() <= 1.0,
-            "Updates grew by {updates}, Features by {features}"
-        );
+        // A taller window gives no card more height: the cards keep their own size.
+        for (small, tall) in heights[0].iter().zip(heights[1]) {
+            assert!((small - tall).abs() <= 1.0, "a card changed its height from {small} to {tall}");
+        }
     }
 
     #[test]
-    fn the_first_page_has_a_margin_of_32_and_a_gap_of_20() {
+    fn the_footer_keeps_a_margin_of_32() {
         use crate::setup_wizard::SMALLEST_WINDOW;
         for size in [SMALLEST_WINDOW, egui::vec2(1500.0, 800.0)] {
             let (output, footer) = settled_wizard(size);
-            let (characters, right) = essentials_cards(&output, size);
-            assert!((characters.left() - 32.0).abs() <= 1.0, "the left edge is at {}", characters.left());
-            assert!(right.iter().all(|card| (card.right() - (size.x - 32.0)).abs() <= 1.0), "the right edge is not at {}", size.x - 32.0);
-            assert!(right.iter().all(|card| (card.left() - characters.right() - 20.0).abs() <= 1.0), "the gap is not 20");
-            // The footer buttons keep the same margin: Back at the left, the primary button at the right.
+            // The footer buttons keep the margin: Back at the left, the primary button at the right.
             let buttons: Vec<egui::Rect> = crate::test_ui::drawn_shapes(&output)
                 .into_iter()
                 .filter_map(|shape| if let egui::epaint::Shape::Rect(r) = shape { Some(r.rect) } else { None })
@@ -1743,11 +1731,11 @@ mod tests {
         let (mut s, _tmp) = wizard_session(true);
         let mut view = View::new(&s);
         let mut run = Run::new();
-        run.click(&mut view, &mut s, "I live in highsec.");
+        run.click(&mut view, &mut s, "I live in lowsec.");
         run.wait(0.5);
         run.click(&mut view, &mut s, "Continue");
-        assert_eq!(wizard_pages(&view), [Essentials]);
-        // Edit a value on Essentials: Filaments starts on, and the edit turns it off. The cards of
+        assert_eq!(wizard_pages(&view), [Essentials, Nexum]);
+        // Edit a value on Essentials: Filaments starts on in lowsec, and the edit turns it off. The cards of
         // the page need two frames to settle. The wait is for the click guard of the change.
         run.wait(0.5);
         run.settled(&mut view, &mut s);
@@ -1762,7 +1750,7 @@ mod tests {
         run.wait(0.5);
         run.click(&mut view, &mut s, "I live in nullsec.");
         run.wait(0.5);
-        run.click(&mut view, &mut s, "I do");
+        run.click_nth(&mut view, &mut s, "Yes", 2);
         run.click(&mut view, &mut s, "Continue");
         assert_eq!(wizard_pages(&view), [Essentials, Alliance, Nexum, EveMetro], "the pages follow the new answers");
         assert_eq!(view.wizard.as_ref().unwrap().features(), Preset::Nullsec.answers().features());
@@ -1778,7 +1766,7 @@ mod tests {
         run.wait(0.5);
         // Change the Wormholes answer from No to Yes.
         run.click_nth(&mut view, &mut s, "Yes", 0);
-        let changed = Answers { wormholes: true, ..Preset::Highsec.answers() };
+        let changed = Answers { wormholes: crate::welcome::Comfort::Yes, ..Preset::Highsec.answers() };
         assert_eq!(view.welcome.as_ref().unwrap().answers(), changed);
         run.click(&mut view, &mut s, "Continue");
         assert!(view.wizard.is_some());
@@ -2009,7 +1997,10 @@ mod tests {
         run.click(&mut view, &mut s, "I live in lowsec.");
         run.wait(0.5);
         let drawn = run.settled(&mut view, &mut s);
-        assert!(find(&drawn, "I do").is_none(), "the subscription question has no use without a client ID");
+        assert!(
+            find(&drawn, "Do you have an EVE Metro subscription?").is_none(),
+            "the subscription question has no use without a client ID"
+        );
         run.click(&mut view, &mut s, "Continue");
         assert_eq!(wizard_pages(&view), [Essentials, Nexum]);
         run.wait(0.5);
@@ -2073,6 +2064,7 @@ mod tests {
     #[test]
     fn the_welcome_fits_the_smallest_window() {
         use crate::setup_wizard::SMALLEST_WINDOW;
+        let mut title_tops = Vec::new();
         for step in [1, 2] {
             let (mut s, _tmp) = wizard_session(true);
             // The bar of a dry run is the only bar that can take room.
@@ -2086,7 +2078,9 @@ mod tests {
             let drawn = run.settled(&mut view, &mut s);
             let bar = run.panel("status-bar").expect("the dry-run bar is drawn");
             let footer = run.panel("welcome-footer");
-            assert_eq!(footer.is_some(), step == 2, "only step 2 has a footer");
+            // Both steps draw the footer panel, so the body has the same room and the title stays put.
+            assert!(footer.is_some(), "step {step} draws the footer panel");
+            title_tops.push(find(&drawn, "EVE Router").expect("the title is drawn").1.y);
             if step == 2 {
                 assert!(find(&drawn, "Do you have an EVE Metro subscription?").is_some(), "the subscription row is shown");
             }
@@ -2103,6 +2097,7 @@ mod tests {
                 }
             }
         }
+        assert!((title_tops[0] - title_tops[1]).abs() <= 0.5, "the title moves between the steps: {title_tops:?}");
     }
 
     /// Push F5, Ctrl+F and the down arrow, and assert that no shortcut of the route view runs: no
@@ -2148,7 +2143,7 @@ mod tests {
             run.click_nth(&mut view, &mut s, "No", 0);
             run.click_nth(&mut view, &mut s, "No", 1);
             run.click_nth(&mut view, &mut s, "Yes", 1);
-            run.click(&mut view, &mut s, "I do");
+            run.click_nth(&mut view, &mut s, "Yes", 2);
             empty(&tmp, "after the answers");
             // Back to step 1 and a second preset, then on to the wizard.
             run.click(&mut view, &mut s, "Back");
