@@ -9,6 +9,7 @@ use crate::settings_window::{self, Page, Popup, SettingsForm};
 use crate::setup_wizard::{Flow, Wizard};
 use crate::strip;
 use crate::theme::{self, panel};
+use crate::welcome::{Answers, Preset, Step, Welcome, WelcomeFlow};
 use crate::widgets::{self, AppButton, UiExt, icon_label};
 use egui::{Align, Button, Color32, Frame, Key, Label, Layout, Margin, Modifiers, RichText, ScrollArea, Sense, Stroke, Ui, vec2};
 use egui_extras::{Column, TableBuilder};
@@ -76,6 +77,12 @@ fn route_list_height(routes: usize, spare: f32, compact: bool) -> f32 {
     spare.clamp(full.min(pitch * 1.5 + chrome), full)
 }
 
+/// The time in seconds after a change between the welcome screen and the wizard, or between two
+/// pages of the wizard, in which the window ignores all clicks. The footers of the screens and of
+/// the pages are at the same place, so the second click of a double-click would hit a button of
+/// the new screen or page without this guard.
+const SWITCH_CLICK_GUARD: f64 = 0.4;
+
 /// How long the status bar shows a status text.
 const STATUS_TIME: Duration = Duration::from_secs(4);
 
@@ -131,8 +138,17 @@ pub struct View {
     waypoints_open: Option<bool>,
     /// The routing overlay. It lives here, because the settings window sets its position.
     pub overlay: crate::overlay::Overlay,
-    /// The setup wizard. While it is `Some`, the window shows the wizard in place of the route view.
+    /// The welcome screen. It is `Some` from the start of a setup until Finish. While the wizard is
+    /// `None`, the window shows it in place of the route view. It keeps its step while the wizard runs,
+    /// so Back on the first wizard page returns to that step.
+    pub welcome: Option<Welcome>,
+    /// The setup wizard. While it is `Some`, the window shows the wizard in place of the route view
+    /// and of the welcome screen.
     pub wizard: Option<Wizard>,
+    /// The egui time of the last change between the welcome screen and the wizard, or between two
+    /// pages of the wizard. Until `SWITCH_CLICK_GUARD` seconds after this time, the window ignores
+    /// all clicks.
+    switched_at: f64,
 }
 
 /// A change of the avoid list, or a closed wormhole, from the context menu of a route step.
@@ -151,10 +167,13 @@ enum Edit {
 }
 
 impl View {
-    /// The view at the start. The wizard shows first when the start asks for it (`Session::setup_due`).
+    /// The view at the start. The welcome screen shows first when the start asks for it
+    /// (`Session::setup_due`). The wizard starts when the pilot is done with the welcome screen.
     pub fn new(session: &Session) -> Self {
         View {
-            wizard: session.setup_due.then(|| Wizard::new(session)),
+            welcome: session.setup_due.then(Welcome::new),
+            wizard: None,
+            switched_at: f64::NEG_INFINITY,
             search: SearchBox::new("system-search").with_lists(),
             popup: None,
             settings: None,
@@ -172,6 +191,12 @@ impl View {
     pub fn show(&mut self, ui: &mut Ui, s: &mut Session) {
         if self.wizard.is_some() {
             self.show_wizard(ui, s);
+            self.switch_guard(ui);
+            return;
+        }
+        if self.welcome.is_some() {
+            self.show_welcome(ui, s);
+            self.switch_guard(ui);
             return;
         }
         self.poll_maps(s);
@@ -235,7 +260,70 @@ impl View {
         self.toaster.show(ui, &mut s.notices);
     }
 
-    /// The setup wizard in place of the route view: the status bar, the pinned footer, the steps
+    /// The welcome screen in place of the route view: the status note of a dry run, the pinned
+    /// footer of step 2 and the body. It shows no top bar, no sidebar and no Settings window, and it
+    /// runs no `apply_due`, so nothing is saved. A `Start` from the body or the footer builds the
+    /// wizard. The welcome screen stays in `self.welcome` until Finish.
+    fn show_welcome(&mut self, ui: &mut Ui, s: &mut Session) {
+        // The same rules as the wizard: no Settings window and no old Remove question.
+        self.settings = None;
+        self.pilots.clear_remove();
+        self.pilots.poll_login(ui.ctx(), s);
+        let Some(welcome) = &mut self.welcome else { return };
+        setup_status_bar(ui, s);
+        // Only step 2 has a footer. The panel must come before the central panel.
+        let mut footer_flow = WelcomeFlow::Open;
+        if welcome.step() == Step::Travel {
+            let footer = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, 12));
+            footer_flow = egui::Panel::bottom("welcome-footer").frame(footer).show(ui, |ui| welcome.footer(ui)).inner;
+        }
+        let central = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, WIZARD_MARGIN));
+        let body_flow = egui::CentralPanel::default().frame(central).show(ui, |ui| welcome.body(ui, s)).inner;
+        self.toaster.show(ui, &mut s.notices);
+        let flow = if footer_flow == WelcomeFlow::Open { body_flow } else { footer_flow };
+        if let WelcomeFlow::Start(preset, answers) = flow {
+            self.start_wizard(s, preset, answers, ui.input(|i| i.time));
+        }
+    }
+
+    /// Build the wizard from a preset and its answers. This drops any earlier wizard and its edits.
+    /// The welcome screen stays. `now` is the egui time of the change, and the click guard starts
+    /// at this time.
+    fn start_wizard(&mut self, s: &Session, preset: Preset, answers: Answers, now: f64) {
+        self.wizard = Some(Wizard::with_preset(s, preset, answers));
+        self.switched_at = now;
+    }
+
+    /// Draw the click guard after a change between the welcome screen and the wizard, or between
+    /// two pages of the wizard. Call it after all panels and windows of the frame.
+    ///
+    /// The guard is an invisible area on the foreground layer that covers the window. While the
+    /// guard time runs, the area takes all clicks, so the widgets below get none. Then it lets the
+    /// clicks go through. egui finds the widget under the pointer from the layers of the frame
+    /// before. Thus the area of the change frame takes the click of the next frame.
+    ///
+    /// The area shows on each frame of the setup, also while it lets the clicks go through. egui
+    /// sizes a new area in its first frame, and an area that sizes takes no click in the next frame.
+    /// Thus the area must exist before the first change.
+    fn switch_guard(&self, ui: &Ui) {
+        let ctx = ui.ctx();
+        let left = SWITCH_CLICK_GUARD - (ui.input(|i| i.time) - self.switched_at);
+        let on = left > 0.0;
+        let sense = if on { Sense::click_and_drag() } else { Sense::hover() };
+        let screen = ctx.content_rect();
+        egui::Area::new(egui::Id::new("switch-guard"))
+            .order(egui::Order::Foreground)
+            .fixed_pos(screen.min)
+            .interactable(on)
+            .sense(sense)
+            .fade_in(false)
+            .show(ctx, |ui| _ = ui.allocate_rect(screen, sense));
+        if on {
+            ctx.request_repaint_after(Duration::from_secs_f64(left));
+        }
+    }
+
+    /// The setup wizard in place of the route view: the dry-run note, the pinned footer, the steps
     /// and the page. It shows no top bar, no sidebar and no Settings window, and it runs no
     /// `apply_due`, so nothing is saved before Finish. The Characters window shows for the login,
     /// with no Remove.
@@ -245,18 +333,22 @@ impl View {
         // A "Remove <name>?" question from before the wizard must not come back after Finish.
         self.pilots.clear_remove();
         self.pilots.poll_login(ui.ctx(), s);
-        // The status clears after `STATUS_TIME`, as in the route view. The Refresh button of the bar sets it.
+        // The status clears after `STATUS_TIME`, as in the route view. The wizard shows no status,
+        // but a status that stays would show again for a full time after Finish.
         match self.status_timer.update(s.status, Instant::now()) {
             None => s.status = Status::Ready,
             Some(_) if s.status == Status::Ready => {}
             Some(left) => ui.ctx().request_repaint_after(left),
         }
         let Some(wizard) = &mut self.wizard else { return };
-        let bar =
-            Frame::new().fill(theme::bar_fill(ui)).inner_margin(Margin::symmetric(12, 6)).stroke(Stroke::new(1.0, theme::header_fill(ui)));
-        egui::Panel::bottom("status-bar").frame(bar).show(ui, |ui| status_bar(ui, s, &mut self.log_open));
+        setup_status_bar(ui, s);
         let footer = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, 12));
+        let page = wizard.page();
         let flow = egui::Panel::bottom("wizard-footer").frame(footer).show(ui, |ui| wizard.footer(ui)).inner;
+        // Next, Back and Skip of two pages are at the same place, so a page change starts the click guard too.
+        if flow == Flow::Open && wizard.page() != page {
+            self.switched_at = ui.input(|i| i.time);
+        }
         let central = Frame::new().fill(theme::BG).inner_margin(Margin::symmetric(WIZARD_SIDE, WIZARD_MARGIN));
         egui::CentralPanel::default().frame(central).show(ui, |ui| {
             wizard.steps(ui);
@@ -266,11 +358,22 @@ impl View {
         self.pilots.characters_window(ui, s, false);
         crate::log_window::show(ui.ctx(), &mut self.log_open, s);
         self.toaster.show(ui, &mut s.notices);
-        // The page of this frame is drawn. The next frame shows the route view.
-        if flow == Flow::Done
-            && let Some(wizard) = self.wizard.take()
-        {
-            wizard.finish(s, ui.ctx());
+        // The page of this frame is drawn. The next frame shows the welcome screen or the route view.
+        match flow {
+            Flow::Open => {}
+            // The welcome screen is still `Some`. It shows again at the step it had. The theme
+            // preview of the wizard goes back to the saved theme, as after Finish.
+            Flow::Welcome => {
+                self.wizard = None;
+                self.switched_at = ui.input(|i| i.time);
+                s.apply_theme(ui.ctx());
+            }
+            Flow::Done => {
+                if let Some(wizard) = self.wizard.take() {
+                    wizard.finish(s, ui.ctx());
+                }
+                self.welcome = None;
+            }
         }
     }
 
@@ -1019,6 +1122,20 @@ fn status_bar(ui: &mut Ui, s: &mut Session, log_open: &mut bool) {
     });
 }
 
+/// The status bar during the welcome screen and the wizard. It has no source dots, no Refresh button,
+/// no Log button and no status text, because they only confuse a new pilot. In a dry run it shows the
+/// dry-run note, so the pilot sees that nothing is saved. Else it draws no bar.
+fn setup_status_bar(ui: &mut Ui, s: &Session) {
+    if !s.is_dry_run() {
+        return;
+    }
+    let bar =
+        Frame::new().fill(theme::bar_fill(ui)).inner_margin(Margin::symmetric(12, 6)).stroke(Stroke::new(1.0, theme::header_fill(ui)));
+    egui::Panel::bottom("status-bar").frame(bar).show(ui, |ui| {
+        ui.add(Label::new(RichText::new(crate::app::DRY_RUN_NOTE).color(theme::WARN)).truncate());
+    });
+}
+
 /// The wormhole sources and the age of their data, for example "Nexum 2 min ago" after a dot.
 /// The dot is green for data from the last 15 minutes, else amber. A source with no data is gray.
 /// A rate limited source is amber.
@@ -1227,10 +1344,17 @@ mod tests {
         (s, tmp)
     }
 
-    /// The view of the session. The portraits of Alice and Bo need no download, so no test needs the network.
+    /// The view of the session, with the wizard started as the welcome screen starts it: the pilot
+    /// picks "I'll configure things myself, thanks." (`Preset::Custom`), and the wizard has all the
+    /// pages that the session allows. The portraits of Alice and Bo need no download, so no test needs the network.
+    /// The change has no time, so no click guard starts, and a test can click the wizard at once.
     fn wizard_view(s: &Session) -> View {
         let mut view = View::new(s);
         view.pilots.portraits = crate::pilots_view::Portraits::without_download(&[1, 2]);
+        let WelcomeFlow::Start(preset, answers) = view.welcome.as_mut().expect("the start asks for a setup").choose(Preset::Custom) else {
+            panic!("Custom starts the wizard at once");
+        };
+        view.start_wizard(s, preset, answers, f64::NEG_INFINITY);
         view
     }
 
@@ -1273,17 +1397,27 @@ mod tests {
     }
 
     #[test]
-    fn the_wizard_shows_only_when_the_start_asks_for_it() {
+    fn the_welcome_shows_first_when_the_start_asks_for_it() {
+        let (mut s, _tmp) = wizard_session(true);
+        let mut view = View::new(&s);
+        assert!(view.welcome.is_some() && view.wizard.is_none());
+        let mut run = Run::new();
+        let drawn = run.texts(&mut view, &mut s);
+        for text in ["EVE Router", "Where do you live?", "I live in highsec.", "I'll configure things myself, thanks."] {
+            assert!(find(&drawn, text).is_some(), "\"{text}\" is drawn");
+        }
+        assert!(find(&drawn, "Essentials").is_none(), "no wizard page");
         let (s, _tmp) = wizard_session(false);
-        assert!(View::new(&s).wizard.is_none());
-        let (s, _tmp) = wizard_session(true);
-        assert!(View::new(&s).wizard.is_some());
+        let view = View::new(&s);
+        assert!(view.welcome.is_none() && view.wizard.is_none());
     }
 
     #[test]
     fn the_wizard_fits_the_smallest_window() {
         use crate::setup_wizard::{FRAME_ROOM, SMALLEST_WINDOW, WizardPage};
         let (mut s, _tmp) = wizard_session(true);
+        // A dry run draws the status bar with the note. This is the worst case that FRAME_ROOM counts.
+        s.set_dry_run();
         let mut view = wizard_view(&s);
         let ctx = crate::test_ui::ctx();
         // The last texts of the body on each page.
@@ -1441,7 +1575,8 @@ mod tests {
             let mut view = wizard_view(&s);
             let drawn = show_frame(&crate::test_ui::ctx(), &mut view, &mut s, vec![]);
             assert_eq!(find(&drawn, crate::app::DRY_RUN_NOTE).is_some(), dry_run);
-            assert_eq!(find(&drawn, Status::Ready.text()).is_some(), !dry_run);
+            // The bar has no status text in any case. Outside a dry run, the bar is gone.
+            assert!(find(&drawn, Status::Ready.text()).is_none());
         }
     }
 
@@ -1485,10 +1620,569 @@ mod tests {
         assert!(!drawn.iter().any(|(t, ..)| t.starts_with("Remove")), "no Remove while the wizard runs");
         // After the wizard, the window offers Remove again, and the old question is gone.
         view.wizard.take().unwrap().finish(&mut s, &ctx);
+        view.welcome = None;
         show_frame(&ctx, &mut view, &mut s, vec![]);
         let drawn = show_frame(&ctx, &mut view, &mut s, vec![]);
         assert!(find(&drawn, "Remove").is_some(), "the Characters window offers Remove");
         assert!(!drawn.iter().any(|(t, ..)| t.starts_with("Remove Alice Ander?")));
+    }
+
+    /// A run of frames in the smallest window with a clock. Each frame moves the clock by 0.02 s,
+    /// so the guard time of the welcome screen (0.4 s) has a meaning. `wait` moves the clock more.
+    struct Run {
+        ctx: egui::Context,
+        time: f64,
+    }
+
+    impl Run {
+        /// A new context and a clock at zero.
+        fn new() -> Run {
+            Run { ctx: crate::test_ui::ctx(), time: 0.0 }
+        }
+
+        /// One frame of `view.show` with these input events.
+        fn output(&mut self, view: &mut View, s: &mut Session, events: Vec<egui::Event>) -> egui::FullOutput {
+            self.time += 0.02;
+            let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, crate::setup_wizard::SMALLEST_WINDOW);
+            let input = egui::RawInput { screen_rect: Some(screen), time: Some(self.time), events, ..Default::default() };
+            let mut output = self.ctx.run_ui(input, |ui| view.show(ui, s));
+            output.textures_delta.clear();
+            output
+        }
+
+        /// The texts of one frame without input.
+        fn texts(&mut self, view: &mut View, s: &mut Session) -> Texts {
+            crate::test_ui::drawn_texts(&self.output(view, s, vec![]))
+        }
+
+        /// Two frames without input. The second one shows the settled layout.
+        fn settled(&mut self, view: &mut View, s: &mut Session) -> Texts {
+            self.texts(view, s);
+            self.texts(view, s)
+        }
+
+        /// Let `secs` seconds pass.
+        fn wait(&mut self, secs: f64) {
+            self.time += secs;
+        }
+
+        /// Click the `nth` drawn text `text`, counted from the top and from the left: the pointer
+        /// moves, pushes the button and releases it in three frames.
+        fn click_nth(&mut self, view: &mut View, s: &mut Session, text: &str, nth: usize) {
+            let drawn = self.texts(view, s);
+            let mut found: Vec<_> = drawn.iter().filter(|(t, ..)| t == text).collect();
+            found.sort_by(|a, b| (a.1.y, a.1.x).partial_cmp(&(b.1.y, b.1.x)).unwrap());
+            let (_, pos, size) = **found.get(nth).unwrap_or_else(|| panic!("no \"{text}\" number {nth} is drawn"));
+            let at = pos + size / 2.0;
+            let button =
+                |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            self.output(view, s, vec![egui::Event::PointerMoved(at)]);
+            self.output(view, s, vec![button(true)]);
+            self.output(view, s, vec![button(false)]);
+        }
+
+        /// Click the first drawn text `text`.
+        fn click(&mut self, view: &mut View, s: &mut Session, text: &str) {
+            self.click_nth(view, s, text, 0);
+        }
+
+        /// The center of the first text `text` in a frame without input.
+        fn center(&mut self, view: &mut View, s: &mut Session, text: &str) -> egui::Pos2 {
+            let drawn = self.texts(view, s);
+            let (_, pos, size) = find(&drawn, text).unwrap_or_else(|| panic!("\"{text}\" is drawn"));
+            *pos + *size / 2.0
+        }
+
+        /// A click at `at` in two frames: the pointer moves there and pushes the button in the
+        /// first frame, and releases it in the second frame. Two calls make a double-click.
+        fn tap(&mut self, view: &mut View, s: &mut Session, at: egui::Pos2) {
+            let button =
+                |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Modifiers::NONE };
+            self.output(view, s, vec![egui::Event::PointerMoved(at), button(true)]);
+            self.output(view, s, vec![button(false)]);
+        }
+
+        /// The accent color of the window style.
+        fn accent(&self) -> Color32 {
+            self.ctx.global_style().visuals.hyperlink_color
+        }
+
+        /// The outer rect of the panel `id`, if a frame of this run drew it.
+        fn panel(&self, id: &str) -> Option<egui::Rect> {
+            egui::PanelState::load(&self.ctx, egui::Id::new(id)).map(|state| state.outer_rect)
+        }
+    }
+
+    /// The pages of the running wizard.
+    fn wizard_pages(view: &View) -> Vec<crate::setup_wizard::WizardPage> {
+        view.wizard.as_ref().expect("the wizard runs").pages().to_vec()
+    }
+
+    #[test]
+    fn a_preset_click_starts_the_wizard_with_its_pages() {
+        use crate::setup_wizard::WizardPage;
+        let (mut s, _tmp) = wizard_session(true);
+        let mut view = View::new(&s);
+        let mut run = Run::new();
+        run.click(&mut view, &mut s, "I live in highsec.");
+        assert!(view.wizard.is_none(), "the preset click only moves to step 2");
+        assert_eq!(view.welcome.as_ref().unwrap().step(), Step::Travel);
+        // Wait past the guard time of the welcome screen.
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Continue");
+        assert_eq!(wizard_pages(&view), [WizardPage::Essentials]);
+        assert_eq!(view.wizard.as_ref().unwrap().features(), Preset::Highsec.answers().features());
+        let drawn = run.settled(&mut view, &mut s);
+        assert!(find(&drawn, "Pochven").is_some() && find(&drawn, "Where do you live?").is_none(), "the wizard page shows");
+        assert!(view.welcome.is_some(), "the welcome screen waits behind the wizard");
+    }
+
+    #[test]
+    fn a_new_continue_builds_the_wizard_again() {
+        use crate::setup_wizard::WizardPage::{Alliance, Essentials, EveMetro, Nexum};
+        let (mut s, _tmp) = wizard_session(true);
+        let mut view = View::new(&s);
+        let mut run = Run::new();
+        run.click(&mut view, &mut s, "I live in highsec.");
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Continue");
+        assert_eq!(wizard_pages(&view), [Essentials]);
+        // Edit a value on Essentials: Filaments starts on, and the edit turns it off. The cards of
+        // the page need two frames to settle. The wait is for the click guard of the change.
+        run.wait(0.5);
+        run.settled(&mut view, &mut s);
+        run.click(&mut view, &mut s, "Filaments");
+        assert!(!view.wizard.as_ref().unwrap().features().filaments, "the edit is made");
+        // Back to the welcome screen, back to step 1 and the nullsec preset.
+        run.click(&mut view, &mut s, "Back");
+        assert!(view.wizard.is_none());
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Back");
+        assert_eq!(view.welcome.as_ref().unwrap().step(), Step::Preset);
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "I live in nullsec.");
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "I do");
+        run.click(&mut view, &mut s, "Continue");
+        assert_eq!(wizard_pages(&view), [Essentials, Alliance, Nexum, EveMetro], "the pages follow the new answers");
+        assert_eq!(view.wizard.as_ref().unwrap().features(), Preset::Nullsec.answers().features());
+        assert!(view.wizard.as_ref().unwrap().features().filaments, "the old edit is gone");
+    }
+
+    #[test]
+    fn back_from_essentials_returns_to_the_right_welcome_step() {
+        let (mut s, _tmp) = wizard_session(true);
+        let mut view = View::new(&s);
+        let mut run = Run::new();
+        run.click(&mut view, &mut s, "I live in highsec.");
+        run.wait(0.5);
+        // Change the Wormholes answer from No to Yes.
+        run.click_nth(&mut view, &mut s, "Yes", 0);
+        let changed = Answers { wormholes: true, ..Preset::Highsec.answers() };
+        assert_eq!(view.welcome.as_ref().unwrap().answers(), changed);
+        run.click(&mut view, &mut s, "Continue");
+        assert!(view.wizard.is_some());
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Back");
+        assert!(view.wizard.is_none(), "Back on Essentials ends the wizard");
+        let welcome = view.welcome.as_ref().unwrap();
+        assert_eq!((welcome.step(), welcome.answers(), welcome.preset()), (Step::Travel, changed, Preset::Highsec));
+        let drawn = run.settled(&mut view, &mut s);
+        assert!(find(&drawn, "Are you comfortable travelling through Pochven?").is_some(), "step 2 shows again");
+        // After "configure myself", there is no step 2 to return to.
+        let (mut s, _tmp) = wizard_session(true);
+        let mut view = View::new(&s);
+        let mut run = Run::new();
+        run.click(&mut view, &mut s, "I'll configure things myself, thanks.");
+        assert!(view.wizard.is_some());
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Back");
+        assert!(view.wizard.is_none());
+        assert_eq!(view.welcome.as_ref().unwrap().step(), Step::Preset);
+        let drawn = run.settled(&mut view, &mut s);
+        assert!(find(&drawn, "Where do you live?").is_some(), "step 1 shows again");
+    }
+
+    #[test]
+    fn finish_ends_both_screens() {
+        let (mut s, tmp) = wizard_session(true);
+        let mut view = View::new(&s);
+        let mut run = Run::new();
+        run.click(&mut view, &mut s, "I'll configure things myself, thanks.");
+        assert!(view.wizard.is_some() && view.welcome.is_some());
+        for _ in 0..3 {
+            view.wizard.as_mut().unwrap().next();
+        }
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Finish");
+        assert!(view.wizard.is_none() && view.welcome.is_none(), "Finish ends the wizard and the welcome screen");
+        assert!(tmp.path().join("eve-router.json").exists(), "Finish writes the config");
+    }
+
+    /// Review focus: the footers of the welcome screen and the wizard are at the same place. On the
+    /// highsec preset the wizard has one page, so the button under Continue ends the setup.
+    #[test]
+    fn a_double_click_on_continue_does_not_end_the_setup() {
+        use crate::setup_wizard::WizardPage;
+        let (mut s, tmp) = wizard_session(true);
+        let mut view = View::new(&s);
+        let mut run = Run::new();
+        run.click(&mut view, &mut s, "I live in highsec.");
+        run.wait(0.5);
+        let at = run.center(&mut view, &mut s, "Continue");
+        run.tap(&mut view, &mut s, at);
+        assert_eq!(wizard_pages(&view), [WizardPage::Essentials], "Continue starts the wizard");
+        // The frame of the change puts the guard on top, so the click of the next frame hits it.
+        assert_eq!(run.ctx.layer_id_at(at).map(|layer| layer.order), Some(egui::Order::Foreground), "the guard is on top");
+        // The second click of the double-click, in the next frame and again 0.1 s later.
+        run.tap(&mut view, &mut s, at);
+        run.wait(0.1);
+        run.tap(&mut view, &mut s, at);
+        run.settled(&mut view, &mut s);
+        assert!(view.welcome.is_some(), "the setup did not end");
+        assert_eq!(view.wizard.as_ref().map(|w| w.page()), Some(WizardPage::Essentials), "the wizard stays on its first page");
+        assert!(tmp.path().read_dir().unwrap().next().is_none(), "no file on the disk");
+        // After the guard time, a click at the same place counts. The guard asks for a frame at
+        // the end of its time, and this frame lifts it.
+        run.wait(0.6);
+        run.texts(&mut view, &mut s);
+        run.tap(&mut view, &mut s, at);
+        assert!(view.wizard.is_none() && view.welcome.is_none(), "the click ends the setup");
+        assert!(tmp.path().join("eve-router.json").exists(), "Finish writes the config");
+    }
+
+    /// The view of a lowsec setup without the subscription answer, on the Essentials page, after
+    /// the guard time of the change. The wizard has two pages: Essentials and Nexum.
+    fn lowsec_on_essentials(run: &mut Run, s: &mut Session) -> View {
+        use crate::setup_wizard::WizardPage::{Essentials, Nexum};
+        let mut view = View::new(s);
+        run.click(&mut view, s, "I live in lowsec.");
+        run.wait(0.5);
+        run.click(&mut view, s, "Continue");
+        assert_eq!(wizard_pages(&view), [Essentials, Nexum], "the Metro gates are off");
+        run.wait(0.5);
+        run.settled(&mut view, s);
+        view
+    }
+
+    /// Review focus: Next and Finish are at the same place. A double-click on `button` on Essentials
+    /// must not press Finish on the Nexum page. After the guard time, a click there finishes.
+    fn assert_a_double_click_stays_on_nexum(button: &str) {
+        use crate::setup_wizard::WizardPage;
+        let (mut s, tmp) = wizard_session(true);
+        // No EVE Metro key, so the lowsec wizard has no EVE Metro page.
+        s.cfg.eve_metro.key = None;
+        let mut run = Run::new();
+        let mut view = lowsec_on_essentials(&mut run, &mut s);
+        let at = run.center(&mut view, &mut s, button);
+        run.tap(&mut view, &mut s, at);
+        assert_eq!(view.wizard.as_ref().map(|w| w.page()), Some(WizardPage::Nexum), "{button} moves to the Nexum page");
+        // The second click of the double-click, in the next frame and again 0.1 s later.
+        run.tap(&mut view, &mut s, at);
+        run.wait(0.1);
+        run.tap(&mut view, &mut s, at);
+        run.settled(&mut view, &mut s);
+        assert_eq!(view.wizard.as_ref().map(|w| w.page()), Some(WizardPage::Nexum), "{button}: the wizard stays on the Nexum page");
+        assert!(tmp.path().read_dir().unwrap().next().is_none(), "{button}: no file on the disk");
+        // After the guard time and the frame that the guard asks for, Finish at the same place counts.
+        run.wait(0.6);
+        let finish = run.center(&mut view, &mut s, "Finish");
+        run.tap(&mut view, &mut s, finish);
+        assert!(view.wizard.is_none() && view.welcome.is_none(), "{button}: Finish ends the setup");
+        assert!(tmp.path().join("eve-router.json").exists(), "{button}: Finish writes the config");
+    }
+
+    #[test]
+    fn a_double_click_on_next_does_not_end_the_setup() {
+        assert_a_double_click_stays_on_nexum("Next");
+    }
+
+    #[test]
+    fn a_double_click_on_skip_does_not_end_the_setup() {
+        assert_a_double_click_stays_on_nexum("Skip");
+    }
+
+    /// Review focus: Back is at the same place on each page. A double-click on Back on page 2
+    /// goes to page 1 only and does not reach the welcome screen.
+    #[test]
+    fn a_double_click_on_back_on_page_2_stays_in_the_wizard() {
+        use crate::setup_wizard::WizardPage;
+        let (mut s, _tmp) = wizard_session(true);
+        s.cfg.eve_metro.key = None;
+        let mut run = Run::new();
+        let mut view = lowsec_on_essentials(&mut run, &mut s);
+        run.click(&mut view, &mut s, "Next");
+        run.wait(0.5);
+        let at = run.center(&mut view, &mut s, "Back");
+        run.tap(&mut view, &mut s, at);
+        assert_eq!(view.wizard.as_ref().map(|w| w.page()), Some(WizardPage::Essentials), "Back moves to page 1");
+        run.tap(&mut view, &mut s, at);
+        run.wait(0.1);
+        run.tap(&mut view, &mut s, at);
+        run.settled(&mut view, &mut s);
+        assert_eq!(view.wizard.as_ref().map(|w| w.page()), Some(WizardPage::Essentials), "the wizard stays on page 1");
+    }
+
+    /// Review focus: without a client ID the Essentials page is one column in the middle, below the
+    /// Custom button.
+    #[test]
+    fn a_double_click_on_custom_changes_no_feature() {
+        let (mut s, tmp) = wizard_session(true);
+        s.pilots = router_core::esi::pilots::Pilots::offline(tmp.path().join("active-route.json"));
+        let mut view = View::new(&s);
+        let mut run = Run::new();
+        let at = run.center(&mut view, &mut s, "I'll configure things myself, thanks.");
+        run.tap(&mut view, &mut s, at);
+        let start = view.wizard.as_ref().expect("Custom starts the wizard").features();
+        run.settled(&mut view, &mut s);
+        run.wait(0.04);
+        run.tap(&mut view, &mut s, at);
+        // The guard took the second click. In the smallest window no switch is at this point, so
+        // the check of the switches alone cannot see a click that goes through.
+        assert_eq!(run.ctx.layer_id_at(at).map(|layer| layer.order), Some(egui::Order::Foreground), "the guard is on top");
+        run.settled(&mut view, &mut s);
+        assert_eq!(view.wizard.as_ref().expect("the wizard runs").features(), start, "no switch changed");
+    }
+
+    /// Review focus: the Back buttons of the wizard and of the welcome screen are at the same place.
+    #[test]
+    fn a_double_click_on_the_wizard_back_stays_on_step_2() {
+        let (mut s, _tmp) = wizard_session(true);
+        let mut view = View::new(&s);
+        let mut run = Run::new();
+        run.click(&mut view, &mut s, "I live in highsec.");
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Continue");
+        run.wait(0.5);
+        let at = run.center(&mut view, &mut s, "Back");
+        run.tap(&mut view, &mut s, at);
+        assert!(view.wizard.is_none(), "Back on Essentials ends the wizard");
+        // A frame between the two clicks, as a pointer move makes in the app. Thus egui finds the
+        // welcome Back under the pointer.
+        run.texts(&mut view, &mut s);
+        run.wait(0.04);
+        run.tap(&mut view, &mut s, at);
+        assert_eq!(view.welcome.as_ref().unwrap().step(), Step::Travel, "the second click does nothing");
+        // After the guard time and the frame that the guard asks for, Back on step 2 goes to step 1.
+        run.wait(0.5);
+        run.texts(&mut view, &mut s);
+        run.tap(&mut view, &mut s, at);
+        assert_eq!(view.welcome.as_ref().unwrap().step(), Step::Preset);
+    }
+
+    /// Review focus: Back to the welcome screen drops the theme preview, as Finish does.
+    #[test]
+    fn back_to_the_welcome_screen_drops_the_theme_preview() {
+        use crate::theme::{FactionColors, FactionTheme};
+        let (mut s, _tmp) = wizard_session(true);
+        let saved = s.faction_theme().accent();
+        assert_ne!(saved, FactionTheme::Gallente.accent());
+        let mut view = View::new(&s);
+        let mut run = Run::new();
+        run.click(&mut view, &mut s, "I live in highsec.");
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Continue");
+        run.wait(0.5);
+        run.settled(&mut view, &mut s);
+        run.click(&mut view, &mut s, "Gallente");
+        run.settled(&mut view, &mut s);
+        assert_eq!(run.accent(), FactionTheme::Gallente.accent(), "the wizard shows the preview");
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Back");
+        assert!(view.wizard.is_none());
+        run.settled(&mut view, &mut s);
+        assert_eq!(run.accent(), saved, "the welcome screen shows the saved theme");
+        // A new wizard starts from the saved theme, and the window shows it.
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Continue");
+        run.settled(&mut view, &mut s);
+        assert_eq!(run.accent(), saved, "the new wizard shows the saved theme");
+    }
+
+    #[test]
+    fn without_a_client_id_the_pages_skip_eve_metro_after_a_preset() {
+        use crate::setup_wizard::WizardPage::{Alliance, Essentials, Nexum};
+        let (mut s, tmp) = wizard_session(true);
+        s.pilots = router_core::esi::pilots::Pilots::offline(tmp.path().join("active-route.json"));
+        let mut view = View::new(&s);
+        let mut run = Run::new();
+        run.click(&mut view, &mut s, "I live in lowsec.");
+        run.wait(0.5);
+        let drawn = run.settled(&mut view, &mut s);
+        assert!(find(&drawn, "I do").is_none(), "the subscription question has no use without a client ID");
+        run.click(&mut view, &mut s, "Continue");
+        assert_eq!(wizard_pages(&view), [Essentials, Nexum]);
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Back");
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "Back");
+        run.wait(0.5);
+        run.click(&mut view, &mut s, "I'll configure things myself, thanks.");
+        assert_eq!(wizard_pages(&view), [Essentials, Alliance, Nexum]);
+    }
+
+    /// Assert that a settled frame of the setup shows no status dots. In a dry run the bar shows
+    /// the note and nothing else. Else no bar is drawn. `welcome` is true on the welcome screen,
+    /// where "Nexum" is not the name of a wizard page either.
+    fn assert_no_status_dots(run: &mut Run, view: &mut View, s: &mut Session, welcome: bool, what: &str) {
+        let drawn = run.settled(view, s);
+        let mut absent = vec!["Refresh", "Log", "EVE-Scout", Status::Ready.text()];
+        if welcome {
+            absent.push("Nexum");
+        }
+        for text in absent {
+            assert!(find(&drawn, text).is_none(), "{what}: \"{text}\" is drawn");
+        }
+        let bar = run.panel("status-bar");
+        assert_eq!(bar.is_some(), s.is_dry_run(), "{what}: the bar shows in a dry run only");
+        assert_eq!(find(&drawn, crate::app::DRY_RUN_NOTE).is_some(), s.is_dry_run(), "{what}: the note");
+        if let Some(bar) = bar {
+            assert!(bar.height() <= 37.0, "{what}: the bar is {} high, FRAME_ROOM counts 37", bar.height());
+            let in_bar: Vec<&str> = drawn.iter().filter(|(_, pos, _)| pos.y >= bar.top()).map(|(t, ..)| t.as_str()).collect();
+            assert_eq!(in_bar, [crate::app::DRY_RUN_NOTE], "{what}: only the note is in the bar");
+        }
+    }
+
+    #[test]
+    fn setup_shows_no_status_dots() {
+        for dry_run in [false, true] {
+            let (mut s, _tmp) = wizard_session(true);
+            if dry_run {
+                s.set_dry_run();
+            }
+            let mut view = View::new(&s);
+            let mut run = Run::new();
+            assert_no_status_dots(&mut run, &mut view, &mut s, true, "step 1");
+            // Lowsec shows the subscription question too.
+            run.click(&mut view, &mut s, "I live in lowsec.");
+            run.wait(0.5);
+            assert_no_status_dots(&mut run, &mut view, &mut s, true, "step 2");
+            let (mut s, _tmp) = wizard_session(true);
+            if dry_run {
+                s.set_dry_run();
+            }
+            let mut view = wizard_view(&s);
+            let mut run = Run::new();
+            for page in 0..4 {
+                assert_no_status_dots(&mut run, &mut view, &mut s, false, &format!("wizard page {page}"));
+                view.wizard.as_mut().unwrap().next();
+            }
+        }
+    }
+
+    #[test]
+    fn the_welcome_fits_the_smallest_window() {
+        use crate::setup_wizard::SMALLEST_WINDOW;
+        for step in [1, 2] {
+            let (mut s, _tmp) = wizard_session(true);
+            // The bar of a dry run is the only bar that can take room.
+            s.set_dry_run();
+            let mut view = View::new(&s);
+            let mut run = Run::new();
+            if step == 2 {
+                run.click(&mut view, &mut s, "I live in lowsec.");
+                run.wait(0.5);
+            }
+            let drawn = run.settled(&mut view, &mut s);
+            let bar = run.panel("status-bar").expect("the dry-run bar is drawn");
+            let footer = run.panel("welcome-footer");
+            assert_eq!(footer.is_some(), step == 2, "only step 2 has a footer");
+            if step == 2 {
+                assert!(find(&drawn, "Do you have an EVE Metro subscription?").is_some(), "the subscription row is shown");
+            }
+            let body_end = footer.map_or(bar.top(), |footer| footer.top());
+            for (text, pos, size) in &drawn {
+                let bottom = pos.y + size.y;
+                assert!(bottom <= SMALLEST_WINDOW.y, "step {step}: \"{text}\" ends at {bottom}");
+                if text == crate::app::DRY_RUN_NOTE {
+                    assert!(pos.y >= bar.top(), "the note is in the bar");
+                } else if let Some(footer) = footer.filter(|_| text == "Back" || text == "Continue") {
+                    assert!(pos.y >= footer.top() && bottom <= bar.top(), "step {step}: \"{text}\" is in the footer");
+                } else {
+                    assert!(bottom <= body_end, "step {step}: \"{text}\" ends at {bottom}, above {body_end}");
+                }
+            }
+        }
+    }
+
+    /// Push F5, Ctrl+F and the down arrow, and assert that no shortcut of the route view runs: no
+    /// refresh (the test session has no refresh worker, so F5 would show a notice), no focus.
+    fn assert_no_shortcut(run: &mut Run, view: &mut View, s: &mut Session, what: &str) {
+        let keys = [(Key::F5, Modifiers::NONE), (Key::F, Modifiers::COMMAND), (Key::ArrowDown, Modifiers::NONE)];
+        let events = keys
+            .iter()
+            .map(|&(key, modifiers)| egui::Event::Key { key, physical_key: None, pressed: true, repeat: false, modifiers })
+            .collect();
+        run.output(view, s, events);
+        let drawn = run.settled(view, s);
+        assert_eq!(s.status, Status::Ready, "{what}: the status");
+        assert!(find(&drawn, crate::app::REFRESH_STOPPED).is_none() && s.notices.is_empty(), "{what}: F5 ran a refresh");
+        assert!(run.ctx.memory(|m| m.focused()).is_none(), "{what}: a widget has the focus");
+    }
+
+    #[test]
+    fn welcome_frames_write_no_file() {
+        for dry_run in [false, true] {
+            let (mut s, tmp) = wizard_session(true);
+            if dry_run {
+                s.set_dry_run();
+            }
+            let mut view = View::new(&s);
+            let mut run = Run::new();
+            let empty = |tmp: &tempfile::TempDir, what: &str| {
+                assert!(tmp.path().read_dir().unwrap().next().is_none(), "dry run {dry_run}: a file exists {what}");
+            };
+            for _ in 0..5 {
+                run.texts(&mut view, &mut s);
+            }
+            assert_no_shortcut(&mut run, &mut view, &mut s, "step 1");
+            empty(&tmp, "after step 1");
+            run.click(&mut view, &mut s, "I live in lowsec.");
+            run.wait(0.5);
+            for _ in 0..5 {
+                run.texts(&mut view, &mut s);
+            }
+            assert_no_shortcut(&mut run, &mut view, &mut s, "step 2");
+            empty(&tmp, "after step 2");
+            // Change the three answers.
+            run.click_nth(&mut view, &mut s, "No", 0);
+            run.click_nth(&mut view, &mut s, "No", 1);
+            run.click_nth(&mut view, &mut s, "Yes", 1);
+            run.click(&mut view, &mut s, "I do");
+            empty(&tmp, "after the answers");
+            // Back to step 1 and a second preset, then on to the wizard.
+            run.click(&mut view, &mut s, "Back");
+            run.wait(0.5);
+            run.click(&mut view, &mut s, "I live in highsec.");
+            run.wait(0.5);
+            run.click(&mut view, &mut s, "Continue");
+            assert!(view.wizard.is_some());
+            for _ in 0..5 {
+                run.texts(&mut view, &mut s);
+            }
+            assert_no_shortcut(&mut run, &mut view, &mut s, "wizard");
+            empty(&tmp, "after Continue");
+            // Back on Essentials, Back on step 2, and the last preset.
+            run.wait(0.5);
+            run.click(&mut view, &mut s, "Back");
+            assert!(view.wizard.is_none());
+            for _ in 0..5 {
+                run.texts(&mut view, &mut s);
+            }
+            run.wait(0.5);
+            run.click(&mut view, &mut s, "Back");
+            run.wait(0.5);
+            run.click(&mut view, &mut s, "I'll configure things myself, thanks.");
+            assert!(view.wizard.is_some());
+            empty(&tmp, "before Finish");
+            for _ in 0..3 {
+                view.wizard.as_mut().unwrap().next();
+            }
+            run.wait(0.5);
+            run.click(&mut view, &mut s, "Finish");
+            assert!(view.wizard.is_none() && view.welcome.is_none());
+            assert_eq!(tmp.path().join("eve-router.json").exists(), !dry_run, "Finish writes the config, but not in a dry run");
+        }
     }
 
     #[test]

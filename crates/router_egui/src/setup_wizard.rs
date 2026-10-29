@@ -5,8 +5,11 @@
 use crate::app::Session;
 use crate::pilots_view::{PilotsUi, Portraits, pilot_portrait};
 use crate::search::SearchBox;
-use crate::settings_window::{FIELD, RowLook, character_table, eve_metro_available, group, keyring_warning, pilot_status};
+use crate::settings_window::{
+    FIELD, METRO_NEEDS_CHARACTER, RowLook, character_table, eve_metro_available, group, keyring_warning, pilot_status,
+};
 use crate::theme::{self, FactionTheme};
+use crate::welcome::{Answers, Preset, pages_for};
 use crate::widgets::{AppButton, UiExt};
 use egui::{Align, Color32, Label, Layout, RichText, ScrollArea, TextEdit, Ui, vec2};
 use petgraph::graph::NodeIndex;
@@ -38,16 +41,6 @@ impl WizardPage {
     }
 }
 
-/// The pages that the wizard shows, in order. The EVE Metro page needs both gates: an EVE client
-/// ID (`client_id`) and an EVE Metro key (`metro`).
-pub fn pages(client_id: bool, metro: bool) -> Vec<WizardPage> {
-    let mut pages = vec![WizardPage::Essentials, WizardPage::Alliance, WizardPage::Nexum];
-    if client_id && metro {
-        pages.push(WizardPage::EveMetro);
-    }
-    pages
-}
-
 /// What the wizard does after a button.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Flow {
@@ -55,6 +48,8 @@ pub enum Flow {
     Open,
     /// The last page is done. The caller calls `Wizard::finish`.
     Done,
+    /// The pilot asked to go back to the welcome screen.
+    Welcome,
 }
 
 /// The values that the pages edit. A page edits a copy, so nothing reaches the session before Finish.
@@ -136,14 +131,36 @@ pub struct Wizard {
     /// The natural height of the Updates, Theme and Features cards, as the last frame drew them.
     /// A value of 0 means that no frame drew the card yet.
     natural: [f32; 3],
+    /// The value of the EVE Metro Enable box in the session. Skip on the EVE Metro page restores it.
+    metro_session: bool,
 }
 
 impl Wizard {
-    /// Start at the first page, with the values of the session.
+    /// Start at the first page, with the values of the session and no preset. The pages and the
+    /// starting values are those of `Preset::Custom`. Only the tests use it. The app builds the
+    /// wizard with `with_preset`.
+    #[cfg(test)]
     pub fn new(s: &Session) -> Wizard {
-        let draft = Draft::from_session(s);
+        Wizard::with_preset(s, Preset::Custom, Preset::Custom.answers())
+    }
+
+    /// Start at the first page, with the values of the session. The preset and its answers give
+    /// the pages and the starting switches of the Essentials page. Finish writes no switch until
+    /// the pilot passes the Essentials page. The EVE Metro Enable pre-check is different: `kept`
+    /// holds it from the start, so Next on the EVE Metro page keeps it. Skip on the EVE Metro page
+    /// restores the session value of Enable.
+    pub fn with_preset(s: &Session, preset: Preset, answers: Answers) -> Wizard {
+        let pages = pages_for(preset, answers, s.pilots.shows_characters(), eve_metro_available(s));
+        let mut draft = Draft::from_session(s);
+        let metro_session = draft.metro_enabled;
+        draft.features = answers.features();
+        // The answer "I do" turns EVE Metro on, but only when the page shows and a character is
+        // linked. A hidden page must not change a setting.
+        if preset.asks_travel() && pages.contains(&WizardPage::EveMetro) && !s.pilots.characters().is_empty() {
+            draft.metro_enabled = true;
+        }
         Wizard {
-            pages: pages(s.pilots.shows_characters(), eve_metro_available(s)),
+            pages,
             at: 0,
             applied: draft.theme,
             kept: draft.clone(),
@@ -151,12 +168,25 @@ impl Wizard {
             error: None,
             capital: capital_box(),
             natural: [0.0; 3],
+            metro_session,
         }
     }
 
     /// The current page.
     pub fn page(&self) -> WizardPage {
         self.pages[self.at]
+    }
+
+    /// The pages of this run, in order.
+    #[cfg(test)]
+    pub(crate) fn pages(&self) -> &[WizardPage] {
+        &self.pages
+    }
+
+    /// The feature switches that the Essentials page shows now.
+    #[cfg(test)]
+    pub(crate) fn features(&self) -> Features {
+        self.edit.features
     }
 
     /// Check the page, then keep the edits. Return false if the page has an error. Then nothing is kept.
@@ -210,10 +240,20 @@ impl Wizard {
         self.at -= 1;
     }
 
-    /// Drop the edits of the page and move on. On the last page, return `Flow::Done`.
+    /// Drop the edits of the page and move on. On the last page, return `Flow::Done`. The
+    /// Essentials page is the exception: Skip accepts its starting values, as Next does.
     pub fn skip(&mut self) -> Flow {
-        self.edit = self.kept.clone();
-        self.error = None;
+        if self.page() == WizardPage::Essentials {
+            // This page has no error, so the edits are always kept.
+            self.keep_edits();
+        } else {
+            if self.page() == WizardPage::EveMetro {
+                // `kept` holds the Enable pre-check of the preset. A skipped page changes no setting.
+                self.kept.metro_enabled = self.metro_session;
+            }
+            self.edit = self.kept.clone();
+            self.error = None;
+        }
         // The text that the pilot typed in the search box goes too.
         self.capital = capital_box();
         self.advance()
@@ -343,8 +383,11 @@ pub(crate) const SMALLEST_WINDOW: egui::Vec2 = egui::vec2(1280.0, 716.0);
 
 /// The room that the wizard frame takes above and below the page, in the smallest window: 64
 /// above (the margin, the steps row with its strip, and the gap) and 102 below (the margin of
-/// the page, the footer of 49 and the status bar of 37). The page tests use it. The view test
-/// `the_wizard_fits_the_smallest_window` measures the real room and keeps it at most this value.
+/// the page, the footer of 49 and the status bar of 37). This is the worst case: it counts the bar
+/// of a dry run, which shows only the dry-run note and is not taller than 37. Outside a dry run the
+/// wizard draws no bar, so the real room is smaller. The page tests use it. The view test
+/// `the_wizard_fits_the_smallest_window` measures the real room in a dry run and keeps it at most
+/// this value.
 #[cfg(test)]
 pub(crate) const FRAME_ROOM: f32 = 166.0;
 
@@ -419,13 +462,18 @@ impl Wizard {
     }
 
     /// The buttons of the footer: Back at the left, Skip and Next at the right. Next reads "Finish"
-    /// on the last page. Return what the wizard does after the button that the pilot pushed.
+    /// on the last page. Back is on every page. On the first page, it asks for the welcome screen
+    /// and changes nothing. Return what the wizard does after the button that the pilot pushed.
     pub fn footer(&mut self, ui: &mut Ui) -> Flow {
         let mut flow = Flow::Open;
         let last = self.at + 1 == self.pages.len();
         ui.horizontal(|ui| {
-            if ui.add_enabled(self.at > 0, AppButton::new("Back")).clicked() {
-                self.back();
+            if ui.add(AppButton::new("Back")).clicked() {
+                if self.at == 0 {
+                    flow = Flow::Welcome;
+                } else {
+                    self.back();
+                }
             }
             ui.with_layout(Layout::right_to_left(Align::Center), |ui| {
                 if ui.add(AppButton::new(if last { "Finish" } else { "Next" }).primary()).clicked() {
@@ -694,13 +742,18 @@ fn nexum_page(ui: &mut Ui, w: &mut Wizard, s: &Session) {
 }
 
 /// The EVE Metro page: one card with the Enable switch and a table of the linked characters. A
-/// "Use" button picks the character that identifies the pilot to EVE Metro.
+/// "Use" button picks the character that identifies the pilot to EVE Metro. While Enable is on and
+/// no character is picked, the page shows the warning of the Settings page.
 fn eve_metro_page(ui: &mut Ui, w: &mut Wizard, s: &Session, portraits: &mut Portraits) {
     theme::panel(ui, "EVE Metro", "", true, |ui| {
         ui.label(dim("Third-party map of Pochven wormholes. A subscription is required."));
         ui.app_checkbox(&mut w.edit.metro_enabled, "Enable");
         ui.add_space(GROUP_GAP);
         group(ui, "Character");
+        // Finish saves Enable with no character, but EVE Metro stays off until a character is picked.
+        if w.edit.metro_enabled && w.edit.metro_character.is_none() {
+            ui.label(RichText::new(METRO_NEEDS_CHARACTER).color(theme::WARN));
+        }
         let characters = s.pilots.characters();
         if characters.is_empty() {
             ui.label(dim("No linked character. Add one on the Essentials page."));
@@ -796,16 +849,17 @@ mod tests {
     #[test]
     fn the_steps_follow_the_gates() {
         use WizardPage::*;
-        assert_eq!(pages(true, true), [Essentials, Alliance, Nexum, EveMetro]);
-        assert_eq!(pages(true, false), [Essentials, Alliance, Nexum]);
-        assert_eq!(pages(false, true), [Essentials, Alliance, Nexum]);
-        assert_eq!(pages(false, false), [Essentials, Alliance, Nexum]);
+        let custom = |client_id, metro| pages_for(Preset::Custom, Preset::Custom.answers(), client_id, metro);
+        assert_eq!(custom(true, true), [Essentials, Alliance, Nexum, EveMetro]);
+        assert_eq!(custom(true, false), [Essentials, Alliance, Nexum]);
+        assert_eq!(custom(false, true), [Essentials, Alliance, Nexum]);
+        assert_eq!(custom(false, false), [Essentials, Alliance, Nexum]);
         // Wizard::new reads the gates from the session. Without a client ID, a key is not enough.
         let page_list = |client_id, metro_key| Wizard::new(&session(client_id, metro_key).0).pages;
         assert_eq!(page_list(true, true), [Essentials, Alliance, Nexum, EveMetro]);
         assert_eq!(page_list(true, false), [Essentials, Alliance, Nexum]);
         assert_eq!(page_list(false, true), [Essentials, Alliance, Nexum]);
-        let labels: Vec<_> = pages(true, true).into_iter().map(WizardPage::label).collect();
+        let labels: Vec<_> = custom(true, true).into_iter().map(WizardPage::label).collect();
         assert_eq!(labels, ["Essentials", "Alliance", "Nexum", "EVE Metro"]);
     }
 
@@ -814,14 +868,16 @@ mod tests {
         let (s, _tmp) = session(true, true);
         let mut w = Wizard::new(&s);
         w.edit.theme = FactionTheme::Amarr;
-        assert_eq!(w.skip(), Flow::Open);
-        assert_eq!(w.page(), WizardPage::Alliance);
-        assert_eq!(w.theme(), s.faction_theme(), "skip drops the theme and its preview");
-        assert!(!w.kept.features_kept);
-        w.back();
-        w.edit.theme = FactionTheme::Amarr;
         assert_eq!(w.next(), Flow::Open);
         assert_eq!((w.kept.theme, w.kept.features_kept), (FactionTheme::Amarr, true));
+        // Skip drops the edits of a page that is not the Essentials page.
+        assert_eq!(w.page(), WizardPage::Alliance);
+        w.edit.capital = s.uni.exact("UALX-3");
+        assert!(w.edit.capital.is_some());
+        assert_eq!(w.skip(), Flow::Open);
+        assert_eq!(w.page(), WizardPage::Nexum);
+        assert_eq!(w.edit.capital, s.settings.rules.capital, "skip drops the capital");
+        assert_eq!(w.kept.capital, s.settings.rules.capital);
     }
 
     #[test]
@@ -933,17 +989,13 @@ mod tests {
     }
 
     #[test]
-    fn a_skipped_essentials_page_keeps_the_stances() {
+    fn finish_writes_no_stance_before_the_essentials_page_is_passed() {
         let (mut s, tmp) = session(true, true);
         s.settings.filaments = Stance::Avoid;
         s.settings.space.pochven = Stance::Block;
         let mut w = Wizard::new(&s);
         w.edit.features = Features { filaments: false, jspace: false, pochven: false };
-        assert_eq!(w.skip(), Flow::Open);
         assert!(!w.kept.features_kept);
-        for _ in 0..3 {
-            w.skip();
-        }
         w.finish(&mut s, &egui::Context::default());
         assert_eq!((s.settings.filaments, s.settings.space.pochven), (Stance::Avoid, Stance::Block));
         assert_eq!(s.settings.space.c1, Stance::Allow, "the J-space switch did not run");
@@ -1430,14 +1482,278 @@ mod tests {
         }
     }
 
+    /// Draw the footer in a frame that has the pointer on the button `label`, press and release
+    /// the primary button there, and return what the footer gives. A first frame lays the footer out.
+    fn click_footer(w: &mut Wizard, label: &str) -> Flow {
+        let ctx = test_ui::ctx();
+        let screen = egui::Rect::from_min_size(egui::Pos2::ZERO, vec2(800.0, 600.0));
+        let mut run = |events: Vec<egui::Event>, time: f64| {
+            let input = egui::RawInput { time: Some(time), screen_rect: Some(screen), events, ..Default::default() };
+            let mut flow = Flow::Open;
+            let mut output = ctx.run_ui(input, |ui| flow = w.footer(ui));
+            output.textures_delta.clear();
+            (flow, drawn_texts(&output))
+        };
+        let (_, laid_out) = run(Vec::new(), 0.0);
+        let (_, pos, size) = laid_out.iter().find(|(t, ..)| t == label).unwrap_or_else(|| panic!("no {label} button")).clone();
+        let at = pos + size / 2.0;
+        let button =
+            |pressed| egui::Event::PointerButton { pos: at, button: egui::PointerButton::Primary, pressed, modifiers: Default::default() };
+        run(vec![egui::Event::PointerMoved(at)], 0.1);
+        run(vec![button(true)], 0.2);
+        run(vec![button(false)], 0.3).0
+    }
+
     #[test]
-    fn the_footer_reads_finish_on_the_last_page_and_back_is_off_on_the_first() {
+    fn back_on_the_first_page_asks_for_the_welcome_screen() {
+        let (s, _tmp) = session(true, true);
+        let mut w = Wizard::new(&s);
+        w.edit.theme = FactionTheme::Amarr;
+        w.edit.check_for_updates = false;
+        w.error = Some("old".into());
+        w.capital.set_query("UAL");
+        let (kept, edit) = (w.kept.clone(), w.edit.clone());
+        assert_eq!(click_footer(&mut w, "Back"), Flow::Welcome);
+        assert_eq!((w.page(), &w.kept, &w.edit), (WizardPage::Essentials, &kept, &edit), "the footer changes no state");
+        assert_eq!((w.error.as_deref(), w.capital.query()), (Some("old"), "UAL"), "the footer changes no state");
+        // The model rule stays: Back on the first page does nothing.
+        w.back();
+        assert_eq!((w.page(), &w.kept, &w.edit), (WizardPage::Essentials, &kept, &edit));
+        assert_eq!((w.error.as_deref(), w.capital.query()), (Some("old"), "UAL"));
+        // The helper reaches the other buttons, so the click above is a real click.
+        assert_eq!(click_footer(&mut w, "Next"), Flow::Open);
+        assert_eq!(w.page(), WizardPage::Alliance);
+        // Back on a later page moves back and keeps the wizard open.
+        assert_eq!(click_footer(&mut w, "Back"), Flow::Open);
+        assert_eq!(w.page(), WizardPage::Essentials);
+    }
+
+    #[test]
+    fn with_preset_builds_the_pages_and_the_toggles() {
+        let (s, _tmp) = session(true, true);
+        for preset in Preset::ALL {
+            let answers = preset.answers();
+            let w = Wizard::with_preset(&s, preset, answers);
+            let expected = pages_for(preset, answers, s.pilots.shows_characters(), eve_metro_available(&s));
+            assert_eq!(w.pages, expected, "{preset:?}");
+            assert_eq!(w.edit.features, answers.features(), "{preset:?}");
+            assert_eq!(w.kept, w.edit, "{preset:?}");
+            assert!(!w.edit.features_kept && !w.kept.features_kept, "{preset:?}");
+            assert_eq!(w.page(), WizardPage::Essentials);
+        }
+        // A spot check of the table through the wizard.
+        let highsec = Wizard::with_preset(&s, Preset::Highsec, Preset::Highsec.answers());
+        assert_eq!(highsec.pages, [WizardPage::Essentials]);
+        assert_eq!(highsec.edit.features, Features { filaments: true, jspace: false, pochven: false });
+        // Wizard::new is the Custom preset.
+        let custom = Wizard::with_preset(&s, Preset::Custom, Preset::Custom.answers());
+        let new = Wizard::new(&s);
+        assert_eq!((new.pages, new.edit), (custom.pages, custom.edit));
+    }
+
+    #[test]
+    fn a_subscription_answer_checks_enable_when_a_character_is_linked() {
+        let subscribed = Answers { subscription: true, ..Preset::Lowsec.answers() };
+        // A character is linked (Alice and Bo).
+        let (s, _tmp) = session(true, true);
+        assert!(!s.cfg.eve_metro.enabled);
+        assert!(Wizard::with_preset(&s, Preset::Lowsec, subscribed).edit.metro_enabled);
+        assert!(!Wizard::with_preset(&s, Preset::Lowsec, Preset::Lowsec.answers()).edit.metro_enabled, "no subscription answer");
+        // No character: the box starts unchecked.
+        let (s, _tmp) = session(false, true);
+        assert!(s.pilots.characters().is_empty());
+        assert!(!Wizard::with_preset(&s, Preset::Lowsec, subscribed).edit.metro_enabled);
+        // The page is hidden without the key. A hidden page changes nothing.
+        let (s, _tmp) = session(true, false);
+        assert!(!Wizard::with_preset(&s, Preset::Lowsec, subscribed).edit.metro_enabled);
+        // Custom never changes the value of the session.
+        for enabled in [false, true] {
+            let (mut s, _tmp) = session(true, true);
+            s.cfg.eve_metro.enabled = enabled;
+            let w = Wizard::with_preset(&s, Preset::Custom, Preset::Custom.answers());
+            assert_eq!((w.edit.metro_enabled, w.kept.metro_enabled), (enabled, enabled));
+        }
+    }
+
+    /// A Lowsec wizard with the subscription answer, on the EVE Metro page. A character is linked
+    /// and the session has a Metro key, so the Enable box starts checked.
+    fn on_the_metro_page(s: &Session) -> Wizard {
+        let subscribed = Answers { subscription: true, ..Preset::Lowsec.answers() };
+        let mut w = Wizard::with_preset(s, Preset::Lowsec, subscribed);
+        assert!(w.edit.metro_enabled, "the pre-check");
+        while w.page() != WizardPage::EveMetro {
+            assert_eq!(w.next(), Flow::Open);
+        }
+        w
+    }
+
+    #[test]
+    fn the_metro_page_warns_while_enable_is_on_and_no_character_is_picked() {
+        let (mut s, _tmp) = session(true, true);
+        let mut pilots = pilots_ui();
+        let mut w = on_the_metro_page(&s);
+        assert_eq!(w.edit.metro_character, None, "the pre-check picks no character");
+        let ctx = test_ui::ctx();
+        let mut frame = |w: &mut Wizard, events: Vec<egui::Event>| {
+            let input = egui::RawInput { events, ..Default::default() };
+            let mut output = ctx.run_ui(input, |ui| w.body(ui, &mut s, &mut pilots));
+            output.textures_delta.clear();
+            drawn_texts(&output)
+        };
+        frame(&mut w, vec![]);
+        let drawn = frame(&mut w, vec![]);
+        assert!(has(&drawn, METRO_NEEDS_CHARACTER), "Enable is on and no character is picked");
+        // A real click on the "Use" button of Bo, the lower of the two.
+        let mut uses: Vec<_> = drawn.iter().filter(|(t, ..)| t == "Use").collect();
+        uses.sort_by(|a, b| a.1.y.partial_cmp(&b.1.y).unwrap());
+        let (_, pos, size) = uses.get(1).expect("two \"Use\" buttons");
+        let at = *pos + *size / 2.0;
+        let button = |pressed| egui::Event::PointerButton {
+            pos: at,
+            button: egui::PointerButton::Primary,
+            pressed,
+            modifiers: egui::Modifiers::NONE,
+        };
+        frame(&mut w, vec![egui::Event::PointerMoved(at)]);
+        frame(&mut w, vec![button(true)]);
+        frame(&mut w, vec![button(false)]);
+        assert_eq!(w.edit.metro_character, Some(2), "the click picks Bo");
+        assert!(!has(&frame(&mut w, vec![]), METRO_NEEDS_CHARACTER), "a character is picked");
+        // With Enable off and no character, the page shows no warning.
+        w.edit.metro_enabled = false;
+        w.edit.metro_character = None;
+        assert!(!has(&frame(&mut w, vec![]), METRO_NEEDS_CHARACTER), "Enable is off");
+    }
+
+    #[test]
+    fn skip_on_the_metro_page_keeps_the_session_value_of_enable() {
+        let (mut s, _tmp) = session(true, true);
+        assert!(!s.cfg.eve_metro.enabled);
+        let mut w = on_the_metro_page(&s);
+        assert!(w.kept.metro_enabled, "Next on the earlier pages copies the pre-check into kept");
+        assert_eq!(w.skip(), Flow::Done);
+        assert!(!w.kept.metro_enabled && !w.edit.metro_enabled);
+        w.finish(&mut s, &egui::Context::default());
+        assert!(!s.cfg.eve_metro.enabled, "a skipped page changes no setting");
+
+        // The session value is true: Skip keeps it.
+        let (mut s, _tmp) = session(true, true);
+        s.cfg.eve_metro.enabled = true;
+        let mut w = on_the_metro_page(&s);
+        w.edit.metro_enabled = false;
+        assert_eq!(w.skip(), Flow::Done);
+        w.finish(&mut s, &egui::Context::default());
+        assert!(s.cfg.eve_metro.enabled);
+    }
+
+    #[test]
+    fn next_on_the_metro_page_keeps_the_box_as_the_pilot_left_it() {
+        // The pilot accepts the pre-check.
+        let (mut s, _tmp) = session(true, true);
+        let mut w = on_the_metro_page(&s);
+        assert_eq!(w.next(), Flow::Done);
+        w.finish(&mut s, &egui::Context::default());
+        assert!(s.cfg.eve_metro.enabled, "Finish writes the pre-check");
+
+        // The pilot clears the box.
+        let (mut s, _tmp) = session(true, true);
+        let mut w = on_the_metro_page(&s);
+        w.edit.metro_enabled = false;
+        assert_eq!(w.next(), Flow::Done);
+        w.finish(&mut s, &egui::Context::default());
+        assert!(!s.cfg.eve_metro.enabled, "Finish writes the cleared box");
+    }
+
+    /// Skip on every page that is left. The last Skip gives `Flow::Done`.
+    fn skip_all(w: &mut Wizard) {
+        while w.skip() == Flow::Open {}
+    }
+
+    #[test]
+    fn skip_on_essentials_accepts_the_starting_values() {
+        let (mut s, tmp) = session(true, true);
+        s.settings.space.drifter = Stance::Avoid;
+        let mut w = Wizard::with_preset(&s, Preset::Highsec, Preset::Highsec.answers());
+        assert!(!w.kept.features_kept);
+        assert_eq!(w.skip(), Flow::Done, "the highsec wizard has one page");
+        assert!(w.kept.features_kept);
+        w.finish(&mut s, &egui::Context::default());
+        let space = s.settings.space;
+        assert_eq!(space.pochven, Stance::Block);
+        assert_eq!([space.c1, space.c2, space.c3, space.c4, space.c5, space.c6], [Stance::Block; 6]);
+        assert_eq!(space.drifter, Stance::Avoid, "Drifter is not a switch of the page");
+        assert_eq!(s.settings.filaments, Stance::Allow);
+        assert!(tmp.path().join("eve-router.json").exists());
+
+        // A wizard with more pages: Skip on page 1 keeps the toggles.
+        let (mut s, _tmp) = session(true, true);
+        s.settings.space.pochven = Stance::Block;
+        let mut w = Wizard::with_preset(&s, Preset::Lowsec, Preset::Lowsec.answers());
+        assert_eq!(w.skip(), Flow::Open);
+        assert!(w.kept.features_kept);
+        assert_eq!(w.page(), WizardPage::Nexum);
+        skip_all(&mut w);
+        w.finish(&mut s, &egui::Context::default());
+        assert_eq!((s.settings.space.pochven, s.settings.space.c1), (Stance::Allow, Stance::Allow));
+
+        // Custom: Skip then Finish writes Allow over an Avoid stance, as Next does.
+        let (mut s, _tmp) = session(true, true);
+        s.settings.filaments = Stance::Avoid;
+        let mut w = Wizard::new(&s);
+        assert_eq!(w.skip(), Flow::Open);
+        skip_all(&mut w);
+        w.finish(&mut s, &egui::Context::default());
+        assert_eq!(s.settings.filaments, Stance::Allow);
+    }
+
+    #[test]
+    fn skip_on_essentials_keeps_all_the_edits_of_the_page() {
+        let (s, _tmp) = session(true, true);
+        let mut w = Wizard::with_preset(&s, Preset::Highsec, Preset::Highsec.answers());
+        w.edit.theme = FactionTheme::Amarr;
+        w.edit.check_for_updates = false;
+        w.capital.set_query("UAL");
+        w.error = Some("old".into());
+        w.skip();
+        assert_eq!((w.kept.theme, w.kept.check_for_updates), (FactionTheme::Amarr, false));
+        assert_eq!(w.edit, w.kept);
+        assert!(w.error.is_none());
+        assert_eq!(w.capital.query(), "", "the capital search box resets");
+    }
+
+    #[test]
+    fn hidden_pages_leave_their_settings_alone() {
+        let (mut s, _tmp) = session(true, true);
+        let capital = s.uni.exact("UALX-3");
+        s.set_capital(capital);
+        s.import_bridges("UALX-3 --> IL-YTR", false);
+        s.cfg.nexum.url = Some("https://nexum.example".into());
+        s.cfg.eve_metro.enabled = true;
+        s.cfg.eve_metro.character = Some(2);
+        let values = |s: &Session| (s.settings.rules.capital, s.bridges.len(), s.cfg.nexum.url.clone(), s.cfg.eve_metro.clone());
+        let before = values(&s);
+        assert!(capital.is_some() && before.1 == 1, "the setup of the test took");
+        // Highsec shows the Essentials page only.
+        let mut w = Wizard::with_preset(&s, Preset::Highsec, Preset::Highsec.answers());
+        assert_eq!(w.skip(), Flow::Done);
+        w.finish(&mut s, &egui::Context::default());
+        assert_eq!(values(&s), before);
+        // Lowsec hides the Alliance page and, with no subscription, the EVE Metro page. The Nexum
+        // page shows, so this part also tests Skip on the Nexum page.
+        let mut w = Wizard::with_preset(&s, Preset::Lowsec, Preset::Lowsec.answers());
+        skip_all(&mut w);
+        w.finish(&mut s, &egui::Context::default());
+        assert_eq!(values(&s), before);
+    }
+
+    #[test]
+    fn the_footer_reads_finish_on_the_last_page_and_back_shows_on_every_page() {
         let (s, _tmp) = session(true, true);
         let mut w = Wizard::new(&s);
         let first = texts(|ui| _ = w.footer(ui));
         assert!(has(&first, "Back") && has(&first, "Skip") && has(&first, "Next"));
         assert!(!has(&first, "Finish"));
-        // Back does nothing on the first page.
+        // The model rule: Back does nothing on the first page.
         w.back();
         assert_eq!(w.page(), WizardPage::Essentials);
         while w.page() != WizardPage::EveMetro {

@@ -19,6 +19,7 @@ mod strip;
 mod test_ui;
 mod theme;
 mod view;
+mod welcome;
 mod widgets;
 #[cfg(windows)]
 mod win32;

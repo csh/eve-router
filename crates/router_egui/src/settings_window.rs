@@ -1253,6 +1253,9 @@ pub(crate) fn character_table(
         });
 }
 
+/// The warning when EVE Metro has no character. The Settings page and the setup wizard show it.
+pub(crate) const METRO_NEEDS_CHARACTER: &str = "Select a character. EVE Metro stays off until you do.";
+
 /// The EVE Metro page: the wormhole map of Pochven, the EVE Metro switch and a table of the linked
 /// characters with their portraits. The service checks the picked character, its corporation and
 /// its alliance. Like the Ansiblex page, the page itself stays still and the table scrolls. The
@@ -1294,7 +1297,7 @@ fn eve_metro_page(ui: &mut Ui, s: &mut Session, locked: bool, portraits: &mut Po
     }
     let picked = s.cfg.eve_metro.character;
     if picked.is_none() {
-        ui.label(RichText::new("Select a character. EVE Metro stays off until you do.").color(theme::WARN));
+        ui.label(RichText::new(METRO_NEEDS_CHARACTER).color(theme::WARN));
     } else if !pilots.iter().any(|p| Some(p.id) == picked) {
         ui.label(RichText::new("The selected character is no longer linked. Select another one.").color(theme::WARN));
     }
@@ -1793,6 +1796,26 @@ mod tests {
         // Drawing changes no setting.
         assert_eq!(s.cfg.eve_metro.character, Some(99));
         assert_eq!(s.settings.filaments, Stance::Block);
+    }
+
+    #[test]
+    fn the_eve_metro_page_warns_while_no_character_is_picked() {
+        let (mut s, _tmp) = session_with_pilots();
+        s.cfg.eve_metro.key = Some(ApiKey("metro_test_key".into()));
+        let mut portraits = Portraits::without_download(&[1, 2]);
+        let ctx = egui::Context::default();
+        theme::apply_default(&ctx);
+        theme::set_font(&ctx);
+        let mut warns = |s: &mut Session| {
+            let mut output = ctx.run_ui(Default::default(), |ui| eve_metro_page(ui, s, false, &mut portraits));
+            output.textures_delta.clear();
+            drawn_texts(&output).iter().any(|(text, ..)| text == METRO_NEEDS_CHARACTER)
+        };
+        // The setup wizard shows the same text, so the two pages share the const.
+        s.cfg.eve_metro.character = None;
+        assert!(warns(&mut s), "no character is picked");
+        s.cfg.eve_metro.character = Some(2);
+        assert!(!warns(&mut s), "Bo is picked");
     }
 
     #[test]
