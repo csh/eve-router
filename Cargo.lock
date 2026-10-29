@@ -3922,7 +3922,7 @@ dependencies = [
 
 [[package]]
 name = "router_core"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "base64 0.23.1",
  "chrono",
@@ -3947,7 +3947,7 @@ dependencies = [
 
 [[package]]
 name = "router_egui"
-version = "0.4.1"
+version = "0.4.2"
 dependencies = [
  "eframe",
  "egui",
